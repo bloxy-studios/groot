@@ -85,6 +85,31 @@ export function validateManifest(value: unknown, path: string): Manifest {
         path,
       );
     }
+    // generator and port are required by the schema: string-or-null, and a
+    // valid TCP port or null. Hand-edited drift here would corrupt doctor
+    // output and get re-saved by `groot add`.
+    if (
+      !("generator" in scaffold) ||
+      (scaffold.generator !== null && typeof scaffold.generator !== "string")
+    ) {
+      throw invalid(
+        `scaffold "${scaffold.path}" has a malformed generator (expected a string or null)`,
+        path,
+      );
+    }
+    if (
+      !("port" in scaffold) ||
+      (scaffold.port !== null &&
+        (typeof scaffold.port !== "number" ||
+          !Number.isInteger(scaffold.port) ||
+          scaffold.port < 1 ||
+          scaffold.port > 65535))
+    ) {
+      throw invalid(
+        `scaffold "${scaffold.path}" has a malformed port (expected an integer 1-65535 or null)`,
+        path,
+      );
+    }
   }
   return value as Manifest;
 }

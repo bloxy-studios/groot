@@ -63,6 +63,37 @@ describe("validateManifest", () => {
     };
     expect(() => validateManifest(broken, "groot.json")).toThrow(GrootError);
   });
+
+  test("rejects malformed generator and port fields (schema parity)", () => {
+    const scaffold = (overrides: Record<string, unknown>) => ({
+      ...structuredClone(VALID),
+      scaffolds: [
+        {
+          slot: "web",
+          framework: "next",
+          path: "apps/web",
+          generator: "create-next-app@16",
+          port: 3000,
+          ...overrides,
+        },
+      ],
+    });
+    for (const broken of [
+      scaffold({ port: "3000" }), // string port
+      scaffold({ port: 3.5 }), // non-integer
+      scaffold({ port: 0 }), // out of range
+      scaffold({ port: 70000 }), // out of range
+      scaffold({ port: undefined }), // missing
+      scaffold({ generator: 16 }), // non-string, non-null
+      scaffold({ generator: undefined }), // missing
+    ]) {
+      expect(() => validateManifest(broken, "groot.json")).toThrow(GrootError);
+    }
+    // null is valid for both (direct-write scaffolds, portless backends).
+    expect(() =>
+      validateManifest(scaffold({ generator: null, port: null }), "groot.json"),
+    ).not.toThrow();
+  });
 });
 
 describe("workspace discovery", () => {
