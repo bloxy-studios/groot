@@ -3,6 +3,7 @@ import { defineCommand, runMain } from "citty";
 import pc from "picocolors";
 import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
+import { normalizeArgv } from "./cli-compat.ts";
 import { init } from "./commands/init.ts";
 
 const SPEC_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/cli-spec.md";
@@ -62,4 +63,5 @@ const main = defineCommand({
   },
 });
 
-runMain(main);
+// `bun create groot my-app` passes a bare destination — route it to `init`.
+runMain(main, { rawArgs: normalizeArgv(process.argv.slice(2)) });

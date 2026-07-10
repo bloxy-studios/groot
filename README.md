@@ -15,7 +15,7 @@
 
 ---
 
-> 🚧 **Pre-release.** groot's repository, docs, and release pipeline are production-ready; the scaffolding engine itself lands in **v0.2.0**. Follow the [roadmap](./docs/roadmap.md) and watch [releases](https://github.com/bloxy-studios/groot/releases) — the tree is growing fast.
+> 🌳 **v0.2 — `groot init` is live.** One command plants a complete, installed, git-initialized workspace. Pre-1.0: `groot add` and `groot doctor` land in **v0.3** — follow the [roadmap](./docs/roadmap.md) and watch [releases](https://github.com/bloxy-studios/groot/releases).
 
 ## What is groot?
 
@@ -31,8 +31,6 @@ groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) mo
 Everything runs on **Bun** — the workspace groot creates uses `bun install`, `bun run`, and Turborepo tasks end to end.
 
 ## Quick start
-
-> The commands below describe the UX we are building toward v0.2.0. They are the contract, not vaporware — see the [CLI spec](./docs/cli-spec.md).
 
 ```sh
 # with bun (recommended)
@@ -55,21 +53,23 @@ powershell -c "irm https://raw.githubusercontent.com/bloxy-studios/groot/main/in
 Then answer a few prompts:
 
 ```text
-┌  🌱 groot — let's grow a monorepo
-│
-◆  Web app?        › Next.js
-◆  Mobile app?     › Expo
-◆  API?            › Elysia
-◆  Backend?        › Convex
-│
-◇  Planting turborepo…        done
-◇  Growing apps/web…          done
-◇  Growing apps/mobile…       done
-◇  Growing apps/api…          done
-◇  Growing packages/backend…  done
-◇  Stitching workspace…       done
-│
-└  🌳 I am groot. `cd my-app && bun dev`
+🌱 groot v0.2.0 — plant a bun-first Turborepo and grow it.
+
+◆  Web app?      › Next.js
+◆  Mobile app?   › Expo
+◆  API?          › Elysia
+◆  Backend?      › Convex
+
+◇  Planting turborepo trunk…
+◇  Growing apps/web (Next.js)…
+◇  Growing apps/mobile (Expo)…
+◇  Writing apps/api (elysia)…
+◇  Writing packages/backend (convex)…
+◇  Stitching workspace…
+◇  Installing workspace (bun install)…
+◇  Initializing git repository…
+
+🌳 I am groot — your workspace is planted.
 ```
 
 Fully non-interactive for CI and agents:
@@ -95,7 +95,7 @@ Read the full design in [docs/architecture.md](./docs/architecture.md) and each 
 
 - [x] **Phase 0** — production-grade OSS repository: CI, CodeQL, OpenSSF Scorecard, release automation, signed provenance, this documentation.
 - [x] **v0.1** — `create-groot` published to npm (OIDC provenance), 5-platform binaries + checksum-verified installers live.
-- [ ] **v0.2** — `groot init` with the full scaffold matrix.
+- [x] **v0.2** — `groot init` with the full scaffold matrix: the resolve → preflight → generate → stitch → verify pipeline, interactive + fully non-interactive, `--dry-run --json`, real-generator E2E in CI.
 - [ ] **v0.3** — `groot add` and `groot doctor`.
 - [ ] **v1.0** — stability contract.
 
