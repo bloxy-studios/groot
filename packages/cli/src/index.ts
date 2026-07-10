@@ -4,15 +4,16 @@ import pc from "picocolors";
 import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
 import { normalizeArgv } from "./cli-compat.ts";
+import { doctor } from "./commands/doctor.ts";
 import { init } from "./commands/init.ts";
 
 const SPEC_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/cli-spec.md";
 const ROADMAP_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/roadmap.md";
 
 /**
- * `add` and `doctor` are specified in docs/cli-spec.md and land in v0.3
- * (see docs/roadmap.md). The stubs exist so early adopters get a helpful
- * pointer instead of an unknown-command error.
+ * `add` is specified in docs/cli-spec.md and lands with the next PR of the v0.3
+ * series. The stub exists so early adopters get a helpful pointer instead of an
+ * unknown-command error.
  */
 function comingSoon(command: string, version: string): never {
   console.log(banner(pkg.version));
@@ -32,16 +33,6 @@ const add = defineCommand({
   },
   run() {
     comingSoon("add", "v0.3");
-  },
-});
-
-const doctor = defineCommand({
-  meta: {
-    name: "doctor",
-    description: "Check the health of a groot workspace (arrives in v0.3)",
-  },
-  run() {
-    comingSoon("doctor", "v0.3");
   },
 });
 

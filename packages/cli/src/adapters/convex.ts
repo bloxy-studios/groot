@@ -9,7 +9,16 @@
  * as the user's next step, never run by groot — regenerates them against the
  * live deployment.
  */
-import type { AdapterContext, FileSpec, ScaffoldAdapter } from "../engine/adapter.ts";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type {
+  AdapterContext,
+  DoctorCheck,
+  DoctorContext,
+  FileSpec,
+  ScaffoldAdapter,
+} from "../engine/adapter.ts";
 import {
   API_D_TS,
   API_JS,
@@ -130,5 +139,59 @@ export const convexAdapter: ScaffoldAdapter = {
       { path: `${base}/.env.example`, contents: CONVEX_ENV_EXAMPLE },
       { path: `${base}/README.md`, contents: convexReadme(packageName) },
     ];
+  },
+  async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
+    const base = join(ctx.workspaceRoot, ctx.scaffold.path);
+    const checks: DoctorCheck[] = [];
+
+    const generatedOk = existsSync(join(base, "convex/_generated/api.d.ts"));
+    checks.push({
+      name: `${ctx.scaffold.path} generated api`,
+      status: generatedOk ? "pass" : "fail",
+      detail: generatedOk ? "convex/_generated present" : "convex/_generated/api.d.ts missing",
+      ...(generatedOk
+        ? {}
+        : { fix: "Run `bunx convex dev` in the backend package to regenerate convex/_generated." }),
+    });
+
+    // The vendored convex/tsconfig.json references node types — the field bug of
+    // v0.2.0. Keep this invariant alive forever.
+    try {
+      const tsconfig = await readFile(join(base, "convex/tsconfig.json"), "utf8");
+      if (tsconfig.includes('"node"')) {
+        const pkg = JSON.parse(await readFile(join(base, "package.json"), "utf8")) as {
+          devDependencies?: Record<string, string>;
+        };
+        const hasTypesNode = pkg.devDependencies?.["@types/node"] !== undefined;
+        checks.push({
+          name: `${ctx.scaffold.path} node types`,
+          status: hasTypesNode ? "pass" : "fail",
+          detail: hasTypesNode
+            ? "@types/node present for convex/tsconfig.json"
+            : "convex/tsconfig.json references node types but @types/node is not a devDependency",
+          ...(hasTypesNode
+            ? {}
+            : {
+                fix: "Run `bun add -d @types/node` in the backend package (convex dev's typecheck fails without it).",
+              }),
+        });
+      }
+    } catch {
+      // tsconfig/package unreadable — the structural checks already report that.
+    }
+
+    const envLocal = existsSync(join(base, ".env.local"));
+    checks.push({
+      name: `${ctx.scaffold.path} deployment`,
+      status: envLocal ? "pass" : "warn",
+      detail: envLocal
+        ? ".env.local present (deployment configured)"
+        : "no .env.local — first login pending",
+      ...(envLocal
+        ? {}
+        : { fix: "Run `bun run setup` in the backend package (interactive Convex login)." }),
+    });
+
+    return checks;
   },
 };

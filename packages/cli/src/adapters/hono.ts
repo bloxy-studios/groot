@@ -9,7 +9,14 @@
  * removed first). Bun serves the template's default-export app on port 3000;
  * the stitch stage rewrites it to the plan's port.
  */
-import type { AdapterContext, GeneratorCommand, ScaffoldAdapter } from "../engine/adapter.ts";
+import type {
+  AdapterContext,
+  DoctorCheck,
+  DoctorContext,
+  GeneratorCommand,
+  ScaffoldAdapter,
+} from "../engine/adapter.ts";
+import { apiPortCheck } from "./elysia.ts";
 
 export const honoAdapter: ScaffoldAdapter = {
   id: "hono",
@@ -21,5 +28,8 @@ export const honoAdapter: ScaffoldAdapter = {
       label: `Growing ${ctx.scaffold.path} (Hono)`,
       stdin: "n\n", // "Do you want to install project dependencies?" → no (groot installs at verify)
     };
+  },
+  async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
+    return [await apiPortCheck(ctx, `port: ${ctx.scaffold.port}`)];
   },
 };
