@@ -5,8 +5,10 @@
 #   3. binaries job                → compiles the standalone `groot` binary for 5 platforms,
 #      generates SHA256SUMS.txt, and attaches everything to that release.
 #
-# npm auth: trusted publishing (no token) — configured at npmjs.com for this repo + this
-# workflow filename. Requires npm ≥ 11.5.1, hence the Node 24 setup. See docs/maintainers.md.
+# npm auth: NPM_TOKEN secret today; switches to Trusted Publishing (OIDC, tokenless) once
+# configured at npmjs.com for this repo + workflow filename — at that point the secret can
+# simply be deleted, no workflow change needed. Requires npm ≥ 11.5.1, hence the Node 24
+# setup. See docs/maintainers.md.
 name: Release
 
 on:
@@ -60,6 +62,10 @@ jobs:
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Token-based publish until npm Trusted Publishing (OIDC) is configured; provenance
+          # stays on either way (id-token: write is already granted above).
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
 
   binaries:
     name: Build & attach binaries

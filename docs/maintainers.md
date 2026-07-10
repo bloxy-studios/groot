@@ -24,20 +24,14 @@ Do this **early** — unclaimed names can be squatted.
 
 > **The Bun-only exception.** groot's Bun-only rule governs *development* workflows. npm **registry administration** — the one-time first publish and token management below — legitimately uses the npm CLI, because it is the registry's own tooling (2FA login sessions, trusted-publisher bootstrap). Day-to-day publishing never happens on a laptop: CI runs `changeset publish` via the release workflow.
 
-1. **First publish (manual, one time).** npm's trusted publishing is configured on an *existing* package, so bootstrap with:
-   ```sh
-   cd packages/cli
-   npm login            # 2FA session (npm's 2025+ auth model)
-   npm publish --access public
-   ```
-   Publishing `0.0.x` of the skeleton is exactly what v0.1 is for.
-2. **Configure Trusted Publishing (OIDC)** at npmjs.com → `create-groot` → Settings → Trusted Publisher → GitHub Actions:
+1. **Bootstrap auth (configured).** A granular `NPM_TOKEN` (write access; 90-day max lifetime — classic tokens no longer exist) lives in this repo's **Actions secrets**. The release workflow publishes with it, and provenance stays enabled via `NPM_CONFIG_PROVENANCE`. Granular tokens expire — note the rotation date.
+2. **Upgrade to Trusted Publishing (OIDC)** once the package exists on npm, at npmjs.com → `create-groot` → Settings → Trusted Publisher → GitHub Actions:
    - Organization or user: `bloxy-studios`
    - Repository: `groot`
    - Workflow filename: `release.yml`
    - Environment: *(leave empty)*
-   After this, CI publishes **without any npm token**, and provenance is automatic.
-3. **Fallback only if OIDC is unavailable**: create a *granular* access token (write, 90-day max — classic tokens no longer exist), save as the `NPM_TOKEN` repository secret, and note the rotation date. Prefer OIDC; delete the token once OIDC works.
+   After verifying one OIDC publish, **delete the `NPM_TOKEN` secret** — the workflow needs no changes (npm auto-detects the OIDC environment), and provenance remains automatic.
+3. **Manual publish (disaster recovery only):** `cd packages/cli && npm login && npm publish --access public` — covered by the Bun-only exception above.
 
 ## Release flow (fully automated after setup)
 
