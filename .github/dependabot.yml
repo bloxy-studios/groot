@@ -1,0 +1,28 @@
+# Automated dependency updates.
+# - bun ecosystem: reads the root bun.lock (covers the whole workspace). Version updates only —
+#   Dependabot does not yet ship *security* updates for bun; the dependency-review workflow and
+#   CodeQL cover PR-time vulnerability gating.
+# - github-actions: keeps SHA-pinned `uses:` lines updated (Dependabot maintains the version comment).
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 10
+    labels: ["type: dependencies"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: ["type: dependencies", "type: ci"]

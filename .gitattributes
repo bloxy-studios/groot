@@ -1,0 +1,6 @@
+# Normalize line endings: LF everywhere except PowerShell.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+
+# Treat the lockfile as generated in diffs.
+bun.lock linguist-generated=true
