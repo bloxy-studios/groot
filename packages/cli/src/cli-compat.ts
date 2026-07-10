@@ -1,7 +1,8 @@
 /**
  * bun-create compatibility: `bun create groot my-app` executes this package's bin
- * with a bare destination argument — no `init` subcommand — exactly like
- * `npx create-next-app my-app` conventions. Route those invocations to `init`.
+ * with a bare destination argument — no `init` subcommand — following the
+ * ecosystem's create-* convention (create-next-app, create-hono, …) of treating
+ * the first bare word as the target directory. Route those invocations to `init`.
  */
 
 const KNOWN_COMMANDS = new Set(["init", "add", "doctor"]);
