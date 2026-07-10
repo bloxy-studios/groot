@@ -1,0 +1,12 @@
+# Code owners are automatically requested for review on every pull request
+# that touches matching paths. Order matters: the last matching pattern wins.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: the maintainer owns everything.
+*                   @bloxy-studios
+
+# Security-critical paths (explicit for clarity).
+/.github/workflows/ @bloxy-studios
+/install.sh         @bloxy-studios
+/install.ps1        @bloxy-studios
+/scripts/           @bloxy-studios

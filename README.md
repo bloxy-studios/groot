@@ -1,15 +1,114 @@
-# groot
+<div align="center">
 
-To install dependencies:
+# 🌱 groot
 
-```bash
-bun install
+**Plant a bun-first Turborepo. Grow the apps you actually want.**
+
+[![CI](https://github.com/bloxy-studios/groot/actions/workflows/ci.yml/badge.svg)](https://github.com/bloxy-studios/groot/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/bloxy-studios/groot/actions/workflows/codeql.yml/badge.svg)](https://github.com/bloxy-studios/groot/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](./LICENSE)
+[![Runtime: Bun](https://img.shields.io/badge/Runtime-Bun%20%E2%89%A5%201.2-f9f1e1)](https://bun.sh)
+
+</div>
+
+---
+
+> 🚧 **Pre-release.** groot's repository, docs, and release pipeline are production-ready; the scaffolding engine itself lands in **v0.2.0**. Follow the [roadmap](./docs/roadmap.md) and watch [releases](https://github.com/bloxy-studios/groot/releases) — the tree is growing fast.
+
+## What is groot?
+
+groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) monorepo and grows it with the apps you pick** — a web app, a mobile app, an API, and a backend — in one command. Instead of shipping its own frozen templates, groot **orchestrates each framework's official generator** (`create-next-app`, `sv create`, `create-expo-app`, `create-hono`, …) and then **stitches the results into one coherent bun workspace**: shared config packages, workspace protocol dependencies, non-conflicting dev ports, a clean root `turbo.json`, and a single lockfile.
+
+| Slot        | Options at v0.2                          | Where it lands        |
+| ----------- | ---------------------------------------- | --------------------- |
+| 🌐 Web      | **Next.js** · SvelteKit                  | `apps/web`            |
+| 📱 Mobile   | **Expo**                                 | `apps/mobile`         |
+| ⚡ API      | **Elysia** · Hono                        | `apps/api`            |
+| 🗄️ Backend | **Convex** (default)                     | `packages/backend`    |
+
+Everything runs on **Bun** — the workspace groot creates uses `bun install`, `bun run`, and Turborepo tasks end to end.
+
+## Quick start
+
+> The commands below describe the UX we are building toward v0.2.0. They are the contract, not vaporware — see the [CLI spec](./docs/cli-spec.md).
+
+```sh
+# with bun (recommended)
+bun create groot my-app
+
+# or explicitly
+bunx create-groot@latest init my-app
 ```
 
-To run:
+Or install the standalone `groot` binary (no Bun required to run it):
 
-```bash
-bun run index.ts
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/bloxy-studios/groot/main/install.sh | bash
+
+# Windows (PowerShell)
+powershell -c "irm https://raw.githubusercontent.com/bloxy-studios/groot/main/install.ps1 | iex"
 ```
 
-This project was created using `bun init` in bun v1.4.0. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Then answer a few prompts:
+
+```text
+┌  🌱 groot — let's grow a monorepo
+│
+◆  Web app?        › Next.js
+◆  Mobile app?     › Expo
+◆  API?            › Elysia
+◆  Backend?        › Convex
+│
+◇  Planting turborepo…        done
+◇  Growing apps/web…          done
+◇  Growing apps/mobile…       done
+◇  Growing apps/api…          done
+◇  Growing packages/backend…  done
+◇  Stitching workspace…       done
+│
+└  🌳 I am groot. `cd my-app && bun dev`
+```
+
+Fully non-interactive for CI and agents:
+
+```sh
+bunx create-groot@latest init my-app \
+  --web next --mobile expo --api elysia --backend convex --yes
+```
+
+## How it works
+
+1. **Generate** — groot runs each framework's *official* generator with pinned, non-interactive flags. No vendored templates, so scaffolds never rot behind upstream.
+2. **Stitch** — groot patches the output into monorepo shape: workspace globs, `@repo/*` package names, shared TypeScript config, deterministic dev ports, merged `.gitignore`, one root lockfile.
+3. **Verify** — a post-flight check (`groot doctor`) confirms the workspace installs, typechecks, and boots.
+
+Read the full design in [docs/architecture.md](./docs/architecture.md) and each generator's verified flags in [docs/scaffold-flows.md](./docs/scaffold-flows.md).
+
+## Why not just create-turbo?
+
+`create-turbo` plants an excellent tree — two Next.js apps and shared packages. groot is for when your monorepo needs to look like *your product* on day one: Next.js **and** Expo **and** an Elysia API **and** a Convex backend, already wired together, with the boilerplate decisions (ports, package names, shared configs) made consistently. groot uses `create-turbo` under the hood for the trunk, then grows the branches.
+
+## Project status
+
+- [x] **Phase 0** — production-grade OSS repository: CI, CodeQL, OpenSSF Scorecard, release automation, signed provenance, this documentation.
+- [ ] **v0.1** — `create-groot` skeleton published to npm, binary pipeline proven.
+- [ ] **v0.2** — `groot init` with the full scaffold matrix.
+- [ ] **v0.3** — `groot add` and `groot doctor`.
+- [ ] **v1.0** — stability contract.
+
+Details in [docs/roadmap.md](./docs/roadmap.md).
+
+## Contributing
+
+PRs are very welcome — especially [scaffold adapters](https://github.com/bloxy-studios/groot/issues/new?template=scaffold_request.yml) for new frameworks. Start with [CONTRIBUTING.md](./CONTRIBUTING.md). Every PR is reviewed by CI **and** by [Greptile](https://greptile.com); merges require a 5/5 review score.
+
+This project follows the [Contributor Covenant Code of Conduct](./CODE_OF_CONDUCT.md). Security issues? See [SECURITY.md](./SECURITY.md) — never open a public issue for a vulnerability.
+
+## License
+
+[MIT](./LICENSE) © 2026 Bloxy Studios
+
+---
+
+<div align="center"><sub><em>"I am groot."</em> — every monorepo, eventually</sub></div>

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & ideas
+    url: https://github.com/bloxy-studios/groot/discussions
+    about: Ask questions and discuss ideas in Discussions — issues are for actionable bugs and requests.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/bloxy-studios/groot/security/advisories/new
+    about: Please never report security issues in public issues. Use private vulnerability reporting.
