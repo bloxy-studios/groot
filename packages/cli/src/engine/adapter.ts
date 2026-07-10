@@ -34,10 +34,22 @@ export interface AdapterContext {
   readonly scaffold: PlannedScaffold;
 }
 
-/**
- * One scaffold adapter. `patches()` — the stitch-stage transforms — joins this
- * contract in the next PR of the engine series (see docs/roadmap.md v0.2).
- */
+/** One health-check result reported by `groot doctor`. */
+export interface DoctorCheck {
+  readonly name: string;
+  readonly status: "pass" | "warn" | "fail";
+  readonly detail: string;
+  /** Suggested fix — required for fail, encouraged for warn. */
+  readonly fix?: string;
+}
+
+/** Context handed to adapter doctor checks. */
+export interface DoctorContext {
+  readonly workspaceRoot: string;
+  readonly scaffold: PlannedScaffold;
+}
+
+/** One scaffold adapter (docs/architecture.md#adapter-contract). */
 export interface ScaffoldAdapter {
   readonly id: FrameworkId;
   readonly slot: Slot;
@@ -47,4 +59,6 @@ export interface ScaffoldAdapter {
   writeFiles?(ctx: AdapterContext): FileSpec[];
   /** Commands run after this scaffold's files exist (e.g. `convex codegen --init`). */
   postCommands?(ctx: AdapterContext): GeneratorCommand[];
+  /** Scaffold-specific health checks for `groot doctor`. */
+  doctor?(ctx: DoctorContext): Promise<DoctorCheck[]>;
 }

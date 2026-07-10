@@ -6,7 +6,15 @@
  * own documented setup (it lacks the dev script). The files below follow the
  * official manual-setup docs, with the dev port applied from the plan.
  */
-import type { AdapterContext, FileSpec, ScaffoldAdapter } from "../engine/adapter.ts";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type {
+  AdapterContext,
+  DoctorCheck,
+  DoctorContext,
+  FileSpec,
+  ScaffoldAdapter,
+} from "../engine/adapter.ts";
 
 export function elysiaIndexTs(port: number): string {
   return `import { Elysia } from "elysia";
@@ -95,4 +103,36 @@ export const elysiaAdapter: ScaffoldAdapter = {
       { path: `${base}/README.md`, contents: elysiaReadme(port) },
     ];
   },
+  async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
+    return [await apiPortCheck(ctx, `.listen(${ctx.scaffold.port})`)];
+  },
 };
+
+/** Shared port-drift check for API scaffolds: warn (not fail) — drift may be intentional. */
+export async function apiPortCheck(ctx: DoctorContext, marker: string): Promise<DoctorCheck> {
+  const name = `${ctx.scaffold.path} dev port`;
+  try {
+    const source = await readFile(
+      join(ctx.workspaceRoot, ctx.scaffold.path, "src/index.ts"),
+      "utf8",
+    );
+    const matches = source.includes(marker);
+    return {
+      name,
+      status: matches ? "pass" : "warn",
+      detail: matches
+        ? `src/index.ts serves on :${ctx.scaffold.port}`
+        : `src/index.ts no longer matches groot.json's port :${ctx.scaffold.port}`,
+      ...(matches
+        ? {}
+        : { fix: "If the change is intentional, update the port in groot.json to match." }),
+    };
+  } catch {
+    return {
+      name,
+      status: "fail",
+      detail: "src/index.ts missing",
+      fix: `Restore ${ctx.scaffold.path}/src/index.ts or remove the scaffold from groot.json.`,
+    };
+  }
+}
