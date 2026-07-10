@@ -1,12 +1,11 @@
 import pc from "picocolors";
+import { MATRIX, SLOT_ORDER } from "./engine/matrix.ts";
 
-/** Scaffold slots groot will grow, in display order. Shared by banner and (soon) prompts. */
-export const SCAFFOLD_SLOTS = [
-  { slot: "web", options: ["Next.js", "SvelteKit"] },
-  { slot: "mobile", options: ["Expo"] },
-  { slot: "api", options: ["Elysia", "Hono"] },
-  { slot: "backend", options: ["Convex"] },
-] as const;
+/** Display view of the scaffold matrix, derived from the engine's source of truth. */
+export const SCAFFOLD_SLOTS = SLOT_ORDER.map((slot) => ({
+  slot,
+  options: MATRIX[slot].choices.map((choice) => choice.label),
+}));
 
 /** Plain-text banner (no colors) — used by tests and non-TTY output. */
 export function bannerText(version: string): string {

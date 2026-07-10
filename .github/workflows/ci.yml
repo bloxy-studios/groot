@@ -66,4 +66,5 @@ jobs:
       - name: Smoke test the binary
         run: |
           ./packages/cli/dist/groot --version
-          ./packages/cli/dist/groot init
+          ./packages/cli/dist/groot init /tmp/groot-smoke --dry-run --yes
+          ./packages/cli/dist/groot init /tmp/groot-smoke --dry-run --yes --json
