@@ -150,16 +150,30 @@ export async function runDoctor(loaded: LoadedManifest): Promise<DoctorCheck[]> 
       : { fix: "Change the dev port of one scaffold (and update groot.json to match)." }),
   });
 
-  // turbo.json parses and defines tasks.
+  // turbo.json parses and defines the core tasks every groot workspace ships with.
   const turbo = await readJsonSafe(join(workspaceRoot, "turbo.json"));
-  const turboOk = turbo !== null && typeof turbo.tasks === "object" && turbo.tasks !== null;
+  const tasks =
+    turbo !== null &&
+    typeof turbo.tasks === "object" &&
+    turbo.tasks !== null &&
+    !Array.isArray(turbo.tasks)
+      ? (turbo.tasks as Record<string, unknown>)
+      : null;
+  const REQUIRED_TASKS = ["build", "dev"];
+  const missingTasks =
+    tasks === null ? REQUIRED_TASKS : REQUIRED_TASKS.filter((task) => !(task in tasks));
   checks.push({
     name: "turbo config",
-    status: turboOk ? "pass" : "fail",
-    detail: turboOk
-      ? `${Object.keys(turbo.tasks as object).length} tasks`
-      : "turbo.json missing, unparseable, or has no tasks",
-    ...(turboOk ? {} : { fix: "Restore turbo.json with a v2 `tasks` map." }),
+    status: tasks !== null && missingTasks.length === 0 ? "pass" : "fail",
+    detail:
+      tasks === null
+        ? "turbo.json missing, unparseable, or tasks is not a map"
+        : missingTasks.length === 0
+          ? `${Object.keys(tasks).length} tasks (${Object.keys(tasks).join(", ")})`
+          : `tasks map is missing ${missingTasks.join(" and ")}`,
+    ...(tasks !== null && missingTasks.length === 0
+      ? {}
+      : { fix: "Restore turbo.json with a v2 `tasks` map including at least `build` and `dev`." }),
   });
 
   // Per-scaffold adapter checks.

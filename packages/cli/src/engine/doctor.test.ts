@@ -149,6 +149,22 @@ describe("doctor (docs/cli-spec.md#groot-doctor-v03)", () => {
     expect(check?.fix).toContain("groot.json");
   });
 
+  test("turbo tasks must be a map containing the core build and dev tasks", async () => {
+    const root = await healthyWorkspace();
+    for (const broken of [
+      { tasks: [] }, // array is not a task map
+      { tasks: {} }, // empty
+      { tasks: { build: {} } }, // dev missing
+    ]) {
+      await writeFile(join(root, "turbo.json"), JSON.stringify(broken));
+      const checks = await runDoctor(await loadManifest(root));
+      expect(byName(checks, "turbo config")?.status).toBe("fail");
+    }
+    await writeFile(join(root, "turbo.json"), JSON.stringify({ tasks: { build: {}, dev: {} } }));
+    const healthy = await runDoctor(await loadManifest(root));
+    expect(byName(healthy, "turbo config")?.status).toBe("pass");
+  });
+
   test("broken turbo.json and missing workspace globs fail", async () => {
     const root = await healthyWorkspace();
     await writeFile(join(root, "turbo.json"), "not json");
