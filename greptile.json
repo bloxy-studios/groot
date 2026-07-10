@@ -1,7 +1,7 @@
 {
   "strictness": 2,
   "commentTypes": ["logic", "syntax"],
-  "triggerOnUpdates": false,
+  "triggerOnUpdates": true,
   "triggerOnDrafts": false,
   "instructions": "groot is a Bun-only TypeScript monorepo: bun/bunx only — flag any use of npm, npx, yarn, or pnpm in code, scripts, or docs. Treat .github/workflows/*, install.sh, install.ps1, and scripts/* as security-critical: flag unpinned GitHub Actions (must be full 40-char commit SHAs with version comments), overly broad workflow permissions, shell or PowerShell injection risks, downloads without checksum verification, and any secret exposure. The CLI implementation is intentionally a minimal skeleton while docs define the contract for later phases — do not penalize docs describing commands that are not implemented yet when they are clearly marked as planned."
 }

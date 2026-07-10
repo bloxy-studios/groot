@@ -6,11 +6,12 @@ groot is a **Bun-only** TypeScript CLI (npm package: `create-groot`) that scaffo
 
 1. **Bun only. Never use npm, npx, yarn, or pnpm in this repo.**
    - install: `bun install` · run scripts: `bun run <script>` · exec tools: `bunx <tool>` · tests: `bun test`
+   - Sole exception: npm **registry administration** (one-time first publish, token management) per docs/maintainers.md.
 2. **Biome, not ESLint/Prettier.** Format & lint with `bun run format` (fix) / `bun run lint` (check). Don't hand-format against Biome.
 3. **Changesets are mandatory** for changes affecting the published package or installers: `bunx changeset`. Docs/CI/test-only changes skip it.
 4. **GitHub Actions must stay SHA-pinned** (full 40-char commit SHA + `# vX.Y.Z` comment) with least-privilege `permissions:`. Never interpolate `${{ github.event.* }}` into `run:` — route through `env:`.
 5. **Conventional Commits** for commits and PR titles (squash merge): `feat(cli): …`, `fix(installer): …`, `docs: …`, `ci: …`.
-6. **Every PR must reach a 5/5 Greptile score.** After pushing fixes, comment `@greptileai` to trigger re-review. Fix or explicitly rebut every review comment.
+6. **Every PR must reach a 5/5 Greptile score.** Greptile reviews on open and re-reviews on every push. Fix or explicitly rebut every review comment.
 
 ## Commands
 

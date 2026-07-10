@@ -31,4 +31,4 @@
 ## Greptile
 
 Every PR must reach a **5/5** Greptile confidence score before merge.
-Address every review comment (fix it or reply with reasoning), push, then comment `@greptileai` to trigger a re-review.
+Greptile re-reviews automatically when you push — address every comment (fix it or reply with reasoning) until 5/5.

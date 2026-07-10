@@ -20,7 +20,9 @@ It configures: repo description/topics, merge hygiene (squash-only, delete branc
 
 ## npm: claiming and securing `create-groot`
 
-Do this **early** — unclaimed names can be squatted:
+Do this **early** — unclaimed names can be squatted.
+
+> **The Bun-only exception.** groot's Bun-only rule governs *development* workflows. npm **registry administration** — the one-time first publish and token management below — legitimately uses the npm CLI, because it is the registry's own tooling (2FA login sessions, trusted-publisher bootstrap). Day-to-day publishing never happens on a laptop: CI runs `changeset publish` via the release workflow.
 
 1. **First publish (manual, one time).** npm's trusted publishing is configured on an *existing* package, so bootstrap with:
    ```sh
@@ -42,12 +44,12 @@ Do this **early** — unclaimed names can be squatted:
 1. PRs with changesets merge into `main`.
 2. The **Release** workflow maintains a `chore: version packages` PR (changelog + version bumps).
 3. Merging that PR triggers: `changeset publish` → npm publish (provenance) → git tag `create-groot@X.Y.Z` → GitHub Release → the `binaries` job compiles `groot` for linux-x64/arm64, darwin-x64/arm64, windows-x64, generates `SHA256SUMS.txt`, and uploads everything to the release.
-4. Verify: release page shows 6 assets (5 binaries + checksums); `npm view create-groot version` matches; run the installer end-to-end on one platform.
+4. Verify: release page shows 6 assets (5 binaries + checksums); `bun info create-groot version` matches; run the installer end-to-end on one platform.
 
 ## Greptile review loop (policy)
 
-- Every PR gets an automatic Greptile review on open (config: [`greptile.json`](../greptile.json)).
-- Greptile does **not** re-review on push — after fixes, comment `@greptileai` on the PR.
+- Every PR gets an automatic Greptile review on open **and a re-review on every push** (config: [`greptile.json`](../greptile.json), `triggerOnUpdates: true`).
+- Want an extra pass without pushing? Comment `@greptileai` on the PR.
 - Merge bar: **5/5 confidence score**. Override only with a written justification comment; overrides should be rare and boring.
 
 ## Security response

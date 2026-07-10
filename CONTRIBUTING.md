@@ -9,14 +9,16 @@ groot is a **Bun-only** project. You need:
 - [Bun](https://bun.sh) **≥ 1.2** (`curl -fsSL https://bun.sh/install | bash`)
 - Git
 
-That's it — no Node toolchain required for development. If you're used to npm, the translation table:
+That's it — no Node toolchain required for development. **This repo is strictly Bun-only: npm, npx, yarn, and pnpm are never used here.** If you're coming from npm, these are the Bun equivalents to reach for instead:
 
-| Instead of…            | Use               |
-| ---------------------- | ----------------- |
-| `npm install`          | `bun install`     |
-| `npm run <script>`     | `bun run <script>`|
-| `npx <tool>`           | `bunx <tool>`     |
-| `npm test`             | `bun test`        |
+| Coming from npm? Don't run… | Run this instead   |
+| --------------------------- | ------------------ |
+| `npm install`               | `bun install`      |
+| `npm run <script>`          | `bun run <script>` |
+| `npx <tool>`                | `bunx <tool>`      |
+| `npm test`                  | `bun test`         |
+
+The one sanctioned exception is npm **registry administration** (the one-time first publish and token management), which uses the registry's own tooling — see [docs/maintainers.md](./docs/maintainers.md). Day-to-day publishing happens in CI, never on a laptop.
 
 ## Getting set up
 
@@ -102,9 +104,9 @@ If you touch `.github/workflows/`, `install.sh`, `install.ps1`, or `scripts/`:
 
 1. Fill in the PR template — including how you tested.
 2. **CI must be green**: lint, typecheck, tests, compile smoke, CodeQL, dependency review.
-3. **Greptile must score the PR 5/5.** Every PR is automatically reviewed by [Greptile](https://greptile.com) when opened. The review includes a confidence score out of 5:
+3. **Greptile must score the PR 5/5.** Every PR is automatically reviewed by [Greptile](https://greptile.com) when opened, and re-reviewed on every push. The review includes a confidence score out of 5:
    - Read every comment. For each one, either **fix it** or **reply explaining why it's intentional**.
-   - Push your fixes, then comment **`@greptileai`** on the PR to trigger a re-review (Greptile does not automatically re-review new commits).
+   - Push your fixes — Greptile re-reviews automatically. (Comment **`@greptileai`** any time you want an extra manual pass.)
    - Repeat until the score is **5/5**. A maintainer may override a sub-5 score only with a written justification in the PR.
 4. A maintainer reviews and squash-merges. `main` is protected: PRs only, required status checks, no force pushes.
 
