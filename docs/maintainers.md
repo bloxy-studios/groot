@@ -43,6 +43,7 @@ Do this **early** — unclaimed names can be squatted.
 
 1. PRs with changesets merge into `main`.
 2. The **Release** workflow maintains a `chore: version packages` PR (changelog + version bumps).
+   > **Nudge required:** GitHub intentionally does not run `pull_request` workflows on PRs created by a workflow's own `GITHUB_TOKEN`, so the version PR arrives with no CI checks. Close and reopen it (or push an empty commit to `changeset-release/main`) to fire the required checks, and comment `@greptileai` if the review didn't start automatically.
 3. Merging that PR triggers: `changeset publish` → npm publish (provenance) → git tag `create-groot@X.Y.Z` → GitHub Release → the `binaries` job compiles `groot` for linux-x64/arm64, darwin-x64/arm64, windows-x64, generates `SHA256SUMS.txt`, and uploads everything to the release.
 4. Verify: release page shows 6 assets (5 binaries + checksums); `bun info create-groot version` matches; run the installer end-to-end on one platform.
 
