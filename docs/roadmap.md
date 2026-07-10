@@ -19,16 +19,16 @@ The repository itself, done right before feature code:
 - [x] `groot --version`, `--help`, stub subcommands pointing at the spec.
 - [x] npm Trusted Publishing (OIDC) configured after first publish — releases are tokenless with automatic provenance.
 
-## v0.2 — `groot init` 🌳
+## v0.2 — `groot init` 🌳 ✅ (2026-07-10)
 
 The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](./architecture.md):
 
-- [ ] Resolve → preflight → generate → stitch → verify pipeline.
-- [ ] Full matrix: Next.js / SvelteKit (web), Expo (mobile), Elysia / Hono (api), Convex (backend, default).
-- [ ] Interactive prompts (clack) + fully non-interactive flag mode.
-- [ ] `--dry-run` (+ `--json` plan output), `--dir-conflict` policies.
-- [ ] `groot.json` manifest + published JSON schema.
-- [ ] E2E scaffold tests in CI (matrix of representative combinations).
+- [x] Resolve → preflight → generate → stitch → verify pipeline.
+- [x] Full matrix: Next.js / SvelteKit (web), Expo (mobile), Elysia / Hono (api), Convex (backend, default).
+- [x] Interactive prompts (clack) + fully non-interactive flag mode (`bun create groot my-app` bare-destination form included).
+- [x] `--dry-run` (+ `--json` plan output), `--dir-conflict` policies.
+- [x] `groot.json` manifest + published JSON schema.
+- [x] E2E scaffold tests in CI running the real generators (also on a weekly cron as upstream drift detection — an early slice of v0.4).
 
 ## v0.3 — Grow and tend 🌿
 

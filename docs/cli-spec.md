@@ -1,12 +1,12 @@
 # groot CLI specification
 
-> Status: **normative contract** for v0.2 (`init`) and v0.3 (`add`, `doctor`). The published skeleton (v0.1) implements `--version`, `--help`, and stubbed subcommands that point here. Changes to this document are semver-relevant.
+> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` land in v0.3 (stubs point here until then). Changes to this document are semver-relevant.
 
 ## Invocation forms
 
 | Form | Notes |
 | --- | --- |
-| `bun create groot [dir] [flags]` | bun resolves to the `create-groot` package; equivalent to `init` |
+| `bun create groot [dir] [flags]` | bun resolves to the `create-groot` package; a leading bare destination (no subcommand) is routed to `init` |
 | `bunx create-groot@latest init [dir] [flags]` | explicit |
 | `groot init [dir] [flags]` | standalone compiled binary (curl/PowerShell install) |
 
