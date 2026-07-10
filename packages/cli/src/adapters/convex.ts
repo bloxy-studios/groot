@@ -34,6 +34,10 @@ export function convexPackageJson(packageName: string): string {
         convex: "^1.42.1",
       },
       devDependencies: {
+        // Required by the vendored convex/tsconfig.json ("types": ["node"]) —
+        // convex dev's built-in typecheck fails without it. Pin tracks the
+        // upstream template (get-convex/templates).
+        "@types/node": "^24.12.2",
         typescript: "^5.9.3",
       },
     },

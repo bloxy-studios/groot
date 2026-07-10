@@ -232,6 +232,21 @@ describe("convex (direct-write + offline codegen — scaffold-flows.md#7)", () =
     expect(packageJson.dependencies.convex).toBeDefined();
   });
 
+  test("devDependencies satisfy the vendored tsconfig (types: [node] needs @types/node)", () => {
+    // Regression guard for the v0.2.0 field bug: convex dev's typecheck failed
+    // with TS2688 because the vendored tsconfig references node types but the
+    // generated package.json omitted @types/node.
+    const files = convexAdapter.writeFiles?.(ctx) ?? [];
+    const tsconfig = files.find((f) => f.path.endsWith("convex/tsconfig.json"));
+    const packageJson = JSON.parse(
+      files.find((f) => f.path.endsWith("package.json"))?.contents ?? "{}",
+    );
+    if (tsconfig?.contents.includes('"node"')) {
+      expect(packageJson.devDependencies["@types/node"]).toBeDefined();
+    }
+    expect(packageJson.devDependencies.typescript).toBeDefined();
+  });
+
   test("writes schema, starter functions, env example, and defers login to the user", () => {
     const files = convexAdapter.writeFiles?.(ctx) ?? [];
     const paths = files.map((f) => f.path);
