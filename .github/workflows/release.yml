@@ -92,6 +92,9 @@ jobs:
             bun build --compile --minify --sourcemap src/index.ts \
               --target="bun-${target}" --outfile "dist/release/groot-${target}"
           done
+          # --sourcemap embeds the map inside each binary; drop the stray external
+          # bundler artifact so it never ships as a release asset.
+          rm -f dist/release/*.map
           ls -l dist/release
 
       - name: Generate checksums
