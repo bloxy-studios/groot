@@ -16,6 +16,7 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
+      contents: read # checkout (job-level permissions replace workflow-level, so this must be explicit)
       security-events: write # upload SARIF to code scanning
       id-token: write # required by scorecard to publish results
 
