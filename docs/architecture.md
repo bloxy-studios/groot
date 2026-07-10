@@ -22,7 +22,7 @@ groot chooses live generators and mitigates the moving-target problem three ways
 Two deliberate exceptions where groot writes files directly instead of shelling out:
 
 - **Elysia** — `bun create elysia` resolves to a community-owned package whose template diverges from Elysia's own documented setup (no `dev` script). groot writes the four files from Elysia's official manual-setup docs instead.
-- **Convex** — there is no offline official generator; groot writes the `packages/backend` package (schema, config, scripts) and runs `bunx convex codegen --init` to materialize `convex/_generated` **without requiring login**. The interactive `convex dev --until-success` (login + deployment provisioning) is deferred to the user's first run, surfaced as a clearly printed next step.
+- **Convex** — there is no offline official generator, and `convex codegen` requires a configured deployment in current releases. groot writes the `packages/backend` package (schema, starter functions, scripts) and **ships the standard `convex/_generated` stubs** — the same strategy Convex's own templates use — so the backend typechecks before any login. The interactive `convex dev --until-success` (login + deployment provisioning) is deferred to the user's first run, surfaced as a clearly printed next step, and regenerates `_generated` against the live deployment.
 
 ## Pipeline
 
