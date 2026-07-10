@@ -257,4 +257,13 @@ describe("convex (direct-write + offline codegen — scaffold-flows.md#7)", () =
     expect(apiDts?.contents).toContain('import type * as messages from "../messages.js"');
     expect(apiDts?.contents).not.toContain("myFunctions");
   });
+
+  test("every written file carries bun-first guidance (no npm/npx/yarn/pnpm)", () => {
+    // Guard for stub refreshes: upstream headers say `npx convex dev`; groot's
+    // vendoring adapts them to `bunx` for its bun-first workspaces.
+    const files = convexAdapter.writeFiles?.(ctx) ?? [];
+    for (const file of files) {
+      expect(file.contents).not.toMatch(/\b(npx|npm |yarn |pnpm )/);
+    }
+  });
 });
