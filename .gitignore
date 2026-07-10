@@ -1,34 +1,26 @@
-# dependencies (bun install)
-node_modules
+# dependencies
+node_modules/
 
-# output
-out
-dist
-*.tgz
+# build outputs
+dist/
+.turbo/
 
-# code coverage
-coverage
-*.lcov
+# test coverage
+coverage/
 
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
+# environment — never commit secrets
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+.env.*
+!.env.example
 
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
+# logs & debug
+*.log
+bun-debug.log*
 
-# IntelliJ based IDEs
-.idea
-
-# Finder (MacOS) folder config
+# OS cruft
 .DS_Store
+Thumbs.db
+
+# editor state (keep shared settings in .vscode/extensions.json)
+.idea/
+*.swp
