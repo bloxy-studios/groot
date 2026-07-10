@@ -14,7 +14,7 @@
     },
     "packages/cli": {
       "name": "create-groot",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": {
         "create-groot": "./bin/groot.mjs",
         "groot": "./bin/groot.mjs",
