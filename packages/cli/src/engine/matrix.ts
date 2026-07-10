@@ -51,7 +51,8 @@ export const MATRIX: Record<Slot, SlotSpec> = {
   backend: {
     title: "Backend",
     choices: [
-      // Convex files are written directly + `bunx convex codegen --init` (offline).
+      // Convex files are written directly, including vendored _generated stubs
+      // (codegen requires a configured deployment — see docs/scaffold-flows.md#7).
       { id: "convex", label: "Convex", path: "packages/backend", port: null, generator: null },
     ],
   },

@@ -1,0 +1,269 @@
+import { describe, expect, test } from "bun:test";
+import type { AdapterContext } from "../engine/adapter.ts";
+import { buildPlan } from "../engine/plan.ts";
+import type { Plan, PlannedScaffold } from "../engine/types.ts";
+import { convexAdapter } from "./convex.ts";
+import { elysiaAdapter } from "./elysia.ts";
+import { expoAdapter } from "./expo.ts";
+import { honoAdapter } from "./hono.ts";
+import { ADAPTERS } from "./index.ts";
+import { nextAdapter } from "./next.ts";
+import { sveltekitAdapter } from "./sveltekit.ts";
+import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "./trunk.ts";
+
+const PLAN: Plan = buildPlan({
+  name: "demo",
+  targetDir: "/work/demo",
+  cliVersion: "0.2.0",
+  selections: { web: "next", mobile: "expo", api: "elysia", backend: "convex" },
+  options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+});
+
+function ctxFor(
+  framework: PlannedScaffold["framework"],
+  fallback: PlannedScaffold,
+): AdapterContext {
+  const scaffold = PLAN.scaffolds.find((s) => s.framework === framework) ?? fallback;
+  return { plan: PLAN, scaffold };
+}
+
+describe("registry", () => {
+  test("covers every framework id and agrees on slot", () => {
+    expect(Object.keys(ADAPTERS).sort()).toEqual([
+      "convex",
+      "elysia",
+      "expo",
+      "hono",
+      "next",
+      "sveltekit",
+    ]);
+    for (const [id, adapter] of Object.entries(ADAPTERS)) {
+      expect(adapter.id).toBe(id as keyof typeof ADAPTERS);
+    }
+  });
+});
+
+describe("trunk (create-turbo — scaffold-flows.md#1)", () => {
+  test("uses -m bun with install and git suppressed, and never --skip-transforms", () => {
+    const cmd = trunkCommand("/work/.tmp", "/work");
+    expect(cmd.argv).toEqual([
+      "bunx",
+      "create-turbo@2",
+      "/work/.tmp",
+      "-m",
+      "bun",
+      "--skip-install",
+      "--no-git",
+    ]);
+    expect(cmd.argv).not.toContain("--skip-transforms"); // conflicts with -m bun
+    expect(cmd.cwd).toBe("/work");
+  });
+
+  test("example cleanup keeps packages/typescript-config", () => {
+    expect(TRUNK_EXAMPLE_PATHS).toContain("apps/web");
+    expect(TRUNK_EXAMPLE_PATHS).toContain("apps/docs");
+    expect(TRUNK_EXAMPLE_PATHS).toContain("packages/ui");
+    expect(TRUNK_EXAMPLE_PATHS).toContain("packages/eslint-config");
+    expect(TRUNK_EXAMPLE_PATHS).not.toContain("packages/typescript-config");
+  });
+});
+
+describe("next (scaffold-flows.md#2)", () => {
+  test("passes the complete explicit flag set (no saved-preferences surprises)", () => {
+    const cmd = nextAdapter.command(
+      ctxFor("next", {
+        slot: "web",
+        framework: "next",
+        path: "apps/web",
+        generator: "create-next-app@16",
+        port: 3000,
+      }),
+    );
+    expect(cmd).not.toBeNull();
+    expect(cmd?.argv.slice(0, 3)).toEqual(["bunx", "create-next-app@16", "apps/web"]);
+    for (const flag of [
+      "--ts",
+      "--tailwind",
+      "--eslint",
+      "--app",
+      "--src-dir",
+      "--turbopack",
+      "--use-bun",
+      "--skip-install",
+      "--disable-git",
+      "--yes",
+    ]) {
+      expect(cmd?.argv).toContain(flag);
+    }
+    expect(cmd?.cwd).toBe("/work/demo");
+  });
+});
+
+describe("sveltekit (scaffold-flows.md#3)", () => {
+  test("uses sv create with ts minimal template and all gates bypassed", () => {
+    const cmd = sveltekitAdapter.command({
+      plan: PLAN,
+      scaffold: {
+        slot: "web",
+        framework: "sveltekit",
+        path: "apps/web",
+        generator: "sv@0.16",
+        port: 5173,
+      },
+    });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "sv@0.16",
+      "create",
+      "apps/web",
+      "--template",
+      "minimal",
+      "--types",
+      "ts",
+      "--no-add-ons",
+      "--no-install",
+      "--no-dir-check",
+    ]);
+  });
+});
+
+describe("expo (scaffold-flows.md#4)", () => {
+  test("pins the SDK template tag explicitly (SDK 57 transition gotcha)", () => {
+    const cmd = expoAdapter.command(
+      ctxFor("expo", {
+        slot: "mobile",
+        framework: "expo",
+        path: "apps/mobile",
+        generator: "create-expo-app@4",
+        port: 8081,
+      }),
+    );
+    expect(cmd?.argv).toContain("--template");
+    expect(cmd?.argv).toContain("default@sdk-57");
+    expect(cmd?.argv).toContain("--no-install");
+    expect(cmd?.argv).toContain("--yes");
+  });
+});
+
+describe("hono (scaffold-flows.md#6)", () => {
+  test("selects the bun template without opting into install", () => {
+    const cmd = honoAdapter.command({
+      plan: PLAN,
+      scaffold: {
+        slot: "api",
+        framework: "hono",
+        path: "apps/api",
+        generator: "create-hono@0.19",
+        port: 3001,
+      },
+    });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "create-hono@0.19",
+      "apps/api",
+      "--template",
+      "bun",
+      "--pm",
+      "bun",
+    ]);
+    expect(cmd?.argv).not.toContain("-i"); // install is opt-in; groot installs at verify
+    // The install confirmation has no negative flag and aborts the scaffold when
+    // unanswered — groot pre-answers it via stdin (verified on create-hono 0.19.4).
+    expect(cmd?.stdin).toBe("n\n");
+  });
+});
+
+describe("elysia (direct-write — scaffold-flows.md#5)", () => {
+  const ctx = ctxFor("elysia", {
+    slot: "api",
+    framework: "elysia",
+    path: "apps/api",
+    generator: null,
+    port: 3001,
+  });
+
+  test("has no generator command", () => {
+    expect(elysiaAdapter.command(ctx)).toBeNull();
+  });
+
+  test("writes the four documented files with the plan's port applied", () => {
+    const files = elysiaAdapter.writeFiles?.(ctx) ?? [];
+    expect(files.map((f) => f.path).sort()).toEqual([
+      "apps/api/README.md",
+      "apps/api/package.json",
+      "apps/api/src/index.ts",
+      "apps/api/tsconfig.json",
+    ]);
+    const indexTs = files.find((f) => f.path.endsWith("src/index.ts"));
+    expect(indexTs?.contents).toContain(".listen(3001)");
+    const packageJson = JSON.parse(
+      files.find((f) => f.path.endsWith("package.json"))?.contents ?? "{}",
+    );
+    expect(packageJson.scripts.dev).toBe("bun --watch src/index.ts");
+    expect(packageJson.scripts.build).toContain("--target bun");
+    expect(packageJson.dependencies.elysia).toBeDefined();
+    const tsconfig = JSON.parse(
+      files.find((f) => f.path.endsWith("tsconfig.json"))?.contents ?? "{}",
+    );
+    expect(tsconfig.compilerOptions.strict).toBe(true);
+  });
+});
+
+describe("convex (direct-write + offline codegen — scaffold-flows.md#7)", () => {
+  const ctx = ctxFor("convex", {
+    slot: "backend",
+    framework: "convex",
+    path: "packages/backend",
+    generator: null,
+    port: null,
+  });
+
+  test("has no generator command", () => {
+    expect(convexAdapter.command(ctx)).toBeNull();
+  });
+
+  test("names the package from the plan's namespace convention", () => {
+    const files = convexAdapter.writeFiles?.(ctx) ?? [];
+    const packageJson = JSON.parse(
+      files.find((f) => f.path.endsWith("package.json"))?.contents ?? "{}",
+    );
+    expect(packageJson.name).toBe("@repo/backend");
+    expect(packageJson.scripts.setup).toBe("convex dev --until-success");
+    expect(packageJson.dependencies.convex).toBeDefined();
+  });
+
+  test("writes schema, starter functions, env example, and defers login to the user", () => {
+    const files = convexAdapter.writeFiles?.(ctx) ?? [];
+    const paths = files.map((f) => f.path);
+    expect(paths).toContain("packages/backend/convex/schema.ts");
+    expect(paths).toContain("packages/backend/convex/messages.ts");
+    expect(paths).toContain("packages/backend/convex/tsconfig.json");
+    expect(paths).toContain("packages/backend/.env.example");
+    const readme = files.find((f) => f.path.endsWith("README.md"));
+    expect(readme?.contents).toContain("convex/_generated/api");
+    expect(readme?.contents).toContain("convex dev --until-success");
+  });
+
+  test("ships the vendored _generated stubs wired to the starter module (no codegen command)", () => {
+    // convex codegen ≥ 1.42 requires a configured deployment, so groot vendors
+    // the standard stubs exactly like the official Convex templates do.
+    expect(convexAdapter.postCommands).toBeUndefined();
+    const files = convexAdapter.writeFiles?.(ctx) ?? [];
+    const paths = files.map((f) => f.path);
+    for (const stub of ["api.d.ts", "api.js", "dataModel.d.ts", "server.d.ts", "server.js"]) {
+      expect(paths).toContain(`packages/backend/convex/_generated/${stub}`);
+    }
+    const apiDts = files.find((f) => f.path.endsWith("_generated/api.d.ts"));
+    expect(apiDts?.contents).toContain('import type * as messages from "../messages.js"');
+    expect(apiDts?.contents).not.toContain("myFunctions");
+  });
+
+  test("every written file carries bun-first guidance (no npm/npx/yarn/pnpm)", () => {
+    // Guard for stub refreshes: upstream headers say `npx convex dev`; groot's
+    // vendoring adapts them to `bunx` for its bun-first workspaces.
+    const files = convexAdapter.writeFiles?.(ctx) ?? [];
+    for (const file of files) {
+      expect(file.contents).not.toMatch(/\b(npx|npm |yarn |pnpm )/);
+    }
+  });
+});
