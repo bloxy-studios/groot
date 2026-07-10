@@ -13,11 +13,11 @@ The repository itself, done right before feature code:
 - Installers: `install.sh` / `install.ps1` with checksum verification.
 - Review policy: every PR requires CI green + Greptile 5/5.
 
-## v0.1 — Claim the soil 🌱
+## v0.1 — Claim the soil 🌱 ✅ (2026-07-10)
 
-- [ ] Publish the `create-groot` skeleton to npm (claims the name, proves the release pipeline end-to-end: provenance, binaries, checksums, installers).
-- [ ] `groot --version`, `--help`, stub subcommands pointing at the spec.
-- [ ] npm Trusted Publishing (OIDC) configured after first publish.
+- [x] Publish the `create-groot` skeleton to npm (claims the name, proves the release pipeline end-to-end: provenance, binaries, checksums, installers).
+- [x] `groot --version`, `--help`, stub subcommands pointing at the spec.
+- [x] npm Trusted Publishing (OIDC) configured after first publish — releases are tokenless with automatic provenance.
 
 ## v0.2 — `groot init` 🌳
 

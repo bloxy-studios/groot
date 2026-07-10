@@ -4,8 +4,10 @@
 
 **Plant a bun-first Turborepo. Grow the apps you actually want.**
 
+[![npm](https://img.shields.io/npm/v/create-groot?logo=npm&color=cb0000)](https://www.npmjs.com/package/create-groot)
 [![CI](https://github.com/bloxy-studios/groot/actions/workflows/ci.yml/badge.svg)](https://github.com/bloxy-studios/groot/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/bloxy-studios/groot/actions/workflows/codeql.yml/badge.svg)](https://github.com/bloxy-studios/groot/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bloxy-studios/groot/badge)](https://scorecard.dev/viewer/?uri=github.com/bloxy-studios/groot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](./LICENSE)
 [![Runtime: Bun](https://img.shields.io/badge/Runtime-Bun%20%E2%89%A5%201.2-f9f1e1)](https://bun.sh)
 
@@ -92,7 +94,7 @@ Read the full design in [docs/architecture.md](./docs/architecture.md) and each 
 ## Project status
 
 - [x] **Phase 0** — production-grade OSS repository: CI, CodeQL, OpenSSF Scorecard, release automation, signed provenance, this documentation.
-- [ ] **v0.1** — `create-groot` skeleton published to npm, binary pipeline proven.
+- [x] **v0.1** — `create-groot` published to npm (OIDC provenance), 5-platform binaries + checksum-verified installers live.
 - [ ] **v0.2** — `groot init` with the full scaffold matrix.
 - [ ] **v0.3** — `groot add` and `groot doctor`.
 - [ ] **v1.0** — stability contract.

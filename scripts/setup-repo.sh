@@ -62,10 +62,14 @@ label "status: blocked"        "b60205" "Blocked on something else"
 label "good first issue"       "7057ff" "Good for newcomers"
 label "help wanted"            "008672" "Maintainers would welcome a PR"
 
-echo "--> Actions: default workflow token read-only"
+echo "--> Actions: default workflow token read-only (PR creation stays on for changesets)"
+# can_approve_pull_request_reviews=true is REQUIRED: the release workflow's
+# changesets action opens the "chore: version packages" PR with GITHUB_TOKEN,
+# which GitHub blocks when this is false. Merge safety comes from the
+# protect-main ruleset (required checks incl. Greptile), not from this toggle.
 gh api -X PUT "repos/${REPO}/actions/permissions/workflow" \
   -f default_workflow_permissions=read \
-  -F can_approve_pull_request_reviews=false
+  -F can_approve_pull_request_reviews=true
 
 echo "--> security features"
 # Dependabot alerts
