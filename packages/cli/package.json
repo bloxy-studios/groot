@@ -27,10 +27,11 @@
   "author": "Bloxy Studios (https://github.com/bloxy-studios)",
   "type": "module",
   "bin": {
-    "create-groot": "./src/index.ts",
-    "groot": "./src/index.ts"
+    "create-groot": "./bin/groot.mjs",
+    "groot": "./bin/groot.mjs"
   },
   "files": [
+    "bin",
     "src",
     "!src/**/*.test.ts"
   ],
