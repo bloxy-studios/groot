@@ -1,0 +1,41 @@
+name: "✨ Feature request"
+description: "Suggest an improvement to groot"
+title: "feat: "
+labels: ["type: feature", "status: needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! 🌱
+        **Requesting support for a new framework/generator?** Use the dedicated
+        [scaffold request form](https://github.com/bloxy-studios/groot/issues/new?template=scaffold_request.yml) instead — it captures what we need.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the pain point. "As a user scaffolding X, I can't…"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should groot do? Include CLI flags/prompt sketches if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, and why they're worse.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, prior art in other CLIs, screenshots.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to open a PR for this.

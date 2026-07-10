@@ -1,0 +1,83 @@
+name: "🐛 Bug report"
+description: "Something in groot is broken"
+title: "bug: "
+labels: ["type: bug", "status: needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Complete reports get fixed much faster.
+        Before submitting, please search [existing issues](https://github.com/bloxy-studios/groot/issues?q=is%3Aissue) — your problem may already be tracked.
+  - type: input
+    id: version
+    attributes:
+      label: groot version
+      description: "Output of `bunx create-groot@latest --version` or `groot --version`"
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Install channel
+      options:
+        - bun create groot / bunx create-groot
+        - curl installer (install.sh)
+        - PowerShell installer (install.ps1)
+        - Downloaded binary from GitHub Releases
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system / architecture
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux x64 (glibc)
+        - Linux arm64 (glibc)
+        - Linux (musl / Alpine)
+        - Windows x64
+        - Windows (WSL)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: bun-version
+    attributes:
+      label: Bun version
+      description: "Output of `bun --version` (leave empty if using the standalone binary)"
+      placeholder: "1.3.14"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect to happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands and answers to prompts, so we can reproduce it.
+      placeholder: |
+        1. Run `bunx create-groot@latest init my-app --web next --backend convex --yes`
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste any error output. This is automatically formatted as code.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I can reproduce this on the latest release.
+          required: false

@@ -1,0 +1,15 @@
+---
+description: groot repository conventions — Bun-only, Biome, changesets, SHA-pinned actions, Greptile 5/5
+alwaysApply: true
+---
+
+# groot conventions
+
+- **Bun only.** `bun install` / `bun run` / `bunx` / `bun test`. Never npm, npx, yarn, or pnpm — not in code, scripts, docs, or suggestions.
+- **Biome** is the only formatter/linter: `bun run format` to fix, `bun run lint` to check. No ESLint/Prettier.
+- **TypeScript strict, ESM only.** The CLI (`packages/cli`) targets the Bun runtime — Bun APIs are allowed; Node-only assumptions are not.
+- **Changesets required** for user-facing changes to the published `create-groot` package or installers: `bunx changeset`.
+- **Conventional Commits** for commit messages and PR titles (`feat(cli): …`, `fix(installer): …`); PRs are squash-merged.
+- **Workflows are security-critical**: actions pinned to full commit SHAs with `# vX.Y.Z` comments, least-privilege `permissions:`, no `${{ github.event.* }}` interpolation into `run:` blocks (use `env:`), installers always verify SHA256 checksums.
+- **Docs are normative**: `docs/cli-spec.md` defines the CLI contract; `docs/scaffold-flows.md` records verified upstream generator flags (update it with sources + date when generators change).
+- **PR quality bar**: CI green + Greptile review score 5/5 (comment `@greptileai` after pushing fixes to re-trigger review).

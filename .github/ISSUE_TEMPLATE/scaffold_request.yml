@@ -1,0 +1,68 @@
+name: "🌿 Scaffold request"
+description: "Ask groot to support a new framework, generator, or backend"
+title: "scaffold: "
+labels: ["type: scaffold-request", "status: needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        groot grows by orchestrating **official generators** and stitching their output into the workspace.
+        This form captures exactly what a new adapter needs — see the
+        [adapter contract](https://github.com/bloxy-studios/groot/blob/main/docs/architecture.md) and
+        [scaffold flows](https://github.com/bloxy-studios/groot/blob/main/docs/scaffold-flows.md) for how existing ones are documented.
+  - type: input
+    id: framework
+    attributes:
+      label: Framework / tool
+      description: Name + link to the project.
+      placeholder: "TanStack Start — https://tanstack.com/start"
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Which slot does it fill?
+      options:
+        - Web app (apps/web)
+        - Mobile app (apps/mobile)
+        - API (apps/api)
+        - Backend (packages/backend)
+        - Tooling / add-on (packages/*)
+    validations:
+      required: true
+  - type: input
+    id: generator
+    attributes:
+      label: Official generator command
+      description: The upstream scaffolding command, if one exists.
+      placeholder: "bunx create-tsrouter-app@latest"
+    validations:
+      required: true
+  - type: textarea
+    id: flags
+    attributes:
+      label: Non-interactive flags
+      description: How do you run the generator silently (no prompts)? Flags for skipping git init, skipping install, choosing bun, TypeScript, etc. Links to docs appreciated.
+      placeholder: |
+        --template default --no-git --no-install --package-manager bun
+    validations:
+      required: true
+  - type: textarea
+    id: monorepo
+    attributes:
+      label: Monorepo caveats
+      description: Anything that breaks inside a workspace? (writes its own lockfile, refuses non-empty dirs, hardcoded ports, metro/vite config needs, env files…)
+  - type: textarea
+    id: why
+    attributes:
+      label: Why should groot support it?
+      description: Popularity, bun affinity, what it unlocks in combination with the existing matrix.
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to implement the adapter (guided by the docs).
+        - label: I can help test pre-release builds on this framework.
