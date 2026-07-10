@@ -42,6 +42,8 @@ describe("validateManifest", () => {
         ],
       },
       { ...structuredClone(VALID), conventions: {} },
+      { ...structuredClone(VALID), scaffolds: [null] }, // non-object entry must be a usage error, not a TypeError
+      { ...structuredClone(VALID), scaffolds: ["apps/web"] },
       "not an object",
     ]) {
       try {

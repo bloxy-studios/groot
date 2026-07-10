@@ -69,6 +69,9 @@ export function validateManifest(value: unknown, path: string): Manifest {
     throw invalid("scaffolds must be an array", path);
   }
   for (const entry of record.scaffolds) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw invalid(`malformed scaffold entry: ${JSON.stringify(entry)}`, path);
+    }
     const scaffold = entry as Partial<PlannedScaffold>;
     if (
       scaffold.slot === undefined ||
