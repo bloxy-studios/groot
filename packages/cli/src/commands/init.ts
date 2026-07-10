@@ -1,17 +1,19 @@
 /**
- * `groot init [dir]` — resolve and validate a workspace plan.
+ * `groot init [dir]` — plant a new bun-first Turborepo workspace.
  *
- * Implements the resolve + preflight stages of the pipeline plus `--dry-run`
- * (docs/cli-spec.md#groot-init-dir). The generate → stitch → verify stages land
- * with v0.2.0; until then a validated non-dry run reports the plan and exits 0.
+ * The full pipeline per docs/architecture.md: resolve (flags + prompts) →
+ * preflight → generate (official generators / direct writes) → stitch
+ * (workspace coherence patches) → verify (structure + install + git), with
+ * `--dry-run` stopping after preflight (docs/cli-spec.md#groot-init-dir).
  */
-import { basename, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { defineCommand } from "citty";
 import pc from "picocolors";
 import pkg from "../../package.json";
 import { bannerText } from "../banner.ts";
 import { EXIT, GrootError } from "../engine/errors.ts";
+import { generate } from "../engine/generate.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
 import {
   applyYesDefaults,
@@ -23,7 +25,9 @@ import {
   validateSelections,
 } from "../engine/plan.ts";
 import { resolveDirConflict, runPreflight } from "../engine/preflight.ts";
+import { stitch } from "../engine/stitch.ts";
 import type { DirConflictPolicy, Plan, PreflightCheck, Slot } from "../engine/types.ts";
+import { verify } from "../engine/verify.ts";
 
 const DIR_CONFLICT_POLICIES: readonly DirConflictPolicy[] = ["error", "merge", "increment"];
 
@@ -183,20 +187,45 @@ async function runInit(args: {
       p.cancel("Cancelled — nothing was written.");
       process.exit(EXIT.CANCELLED);
     }
-    p.outro("Plan confirmed.");
+    p.outro("Planting…");
   } else {
     console.log();
     console.log(describePlan(plan));
     console.log();
   }
 
-  // v0.2.0 wires the generate → stitch → verify stages here (docs/architecture.md#pipeline).
-  console.log(
-    `${pc.yellow("●")} Your plan is valid — the generate → stitch → verify stages land with ${pc.bold("v0.2.0")}.`,
-  );
-  console.log(
-    `  Track progress: ${pc.cyan("https://github.com/bloxy-studios/groot/blob/main/docs/roadmap.md")}`,
-  );
+  // The pipeline: generate → stitch → verify (docs/architecture.md#pipeline).
+  const step = (label: string): void => {
+    console.log(`${pc.green("◇")} ${label}…`);
+  };
+  await generate(plan, { verbose: args.verbose, onStep: step });
+  await stitch(plan, { onStep: step });
+  const verifyNotes = await verify(plan, { verbose: args.verbose, onStep: step });
+
+  printNextSteps(plan, verifyNotes);
+}
+
+function printNextSteps(plan: Plan, verifyNotes: string[]): void {
+  const rel = relative(process.cwd(), plan.targetDir) || ".";
+  console.log();
+  console.log(pc.green(pc.bold("🌳 I am groot — your workspace is planted.")));
+  const gitNote = verifyNotes.find((note) => note.includes("commit skipped"));
+  if (gitNote !== undefined) console.log(`${pc.yellow("●")} ${gitNote}`);
+  console.log();
+  console.log("Next steps:");
+  const steps: string[] = [`cd ${rel}`];
+  if (!plan.options.install) steps.push("bun install");
+  if (plan.scaffolds.some((scaffold) => scaffold.framework === "convex")) {
+    steps.push(
+      "bun run --cwd packages/backend setup   # Convex login + dev deployment (interactive)",
+    );
+  }
+  steps.push("bun dev");
+  steps.forEach((text, index) => {
+    console.log(`  ${index + 1}. ${pc.cyan(text)}`);
+  });
+  console.log();
+  console.log(`Docs: ${pc.cyan("https://github.com/bloxy-studios/groot")}`);
 }
 
 export const init = defineCommand({
