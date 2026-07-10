@@ -13,9 +13,8 @@ if (typeof Bun === "undefined") {
       "",
       "  bun create groot my-app",
       "",
-      "Or install the standalone binary (no Bun needed to run it):",
-      "  curl -fsSL https://raw.githubusercontent.com/bloxy-studios/groot/main/install.sh | bash",
-      '  powershell -c "irm https://raw.githubusercontent.com/bloxy-studios/groot/main/install.ps1 | iex"',
+      "Or install the standalone groot binary (checksum-verified installers):",
+      "  https://github.com/bloxy-studios/groot#quick-start",
     ].join("\n"),
   );
   process.exit(1);
