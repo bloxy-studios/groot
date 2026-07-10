@@ -3,14 +3,15 @@ import { defineCommand, runMain } from "citty";
 import pc from "picocolors";
 import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
+import { init } from "./commands/init.ts";
 
 const SPEC_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/cli-spec.md";
 const ROADMAP_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/roadmap.md";
 
 /**
- * v0.1 skeleton: `init`, `add`, and `doctor` are specified in docs/cli-spec.md and
- * land in v0.2/v0.3 (see docs/roadmap.md). The stubs exist so early adopters get a
- * helpful pointer instead of an unknown-command error.
+ * `add` and `doctor` are specified in docs/cli-spec.md and land in v0.3
+ * (see docs/roadmap.md). The stubs exist so early adopters get a helpful
+ * pointer instead of an unknown-command error.
  */
 function comingSoon(command: string, version: string): never {
   console.log(banner(pkg.version));
@@ -22,16 +23,6 @@ function comingSoon(command: string, version: string): never {
   console.log(`  Roadmap: ${pc.cyan(ROADMAP_URL)}`);
   process.exit(0);
 }
-
-const init = defineCommand({
-  meta: {
-    name: "init",
-    description: "Plant a new bun-first Turborepo workspace (arrives in v0.2)",
-  },
-  run() {
-    comingSoon("init", "v0.2");
-  },
-});
 
 const add = defineCommand({
   meta: {

@@ -1,6 +1,6 @@
 {
   "name": "create-groot",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "🌱 Plant a bun-first Turborepo and grow it: web, mobile, API and Convex backend from one command.",
   "keywords": [
     "bun",
@@ -42,6 +42,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@clack/prompts": "^1.7.0",
     "citty": "^0.2.2",
     "picocolors": "^1.1.1"
   },
