@@ -103,6 +103,22 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship: next + elysi
       // Bun links workspace deps inside the depending app's node_modules.
       expect(existsSync(join(root, "apps/web/node_modules/@repo/backend"))).toBe(true);
 
+      // The scaffolded packages must TYPECHECK, not just install — `convex dev`
+      // runs tsc before pushing functions (caught live: missing @types/node).
+      for (const pkgDir of ["packages/backend", "apps/api"]) {
+        const proc = Bun.spawn(["bun", "run", "typecheck"], {
+          cwd: join(root, pkgDir),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [out, err, code] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ]);
+        expect(code, `${pkgDir} typecheck failed:\n${out}\n${err}`).toBe(0);
+      }
+
       expect(steps.length).toBeGreaterThanOrEqual(6);
     },
     TIMEOUT_MS,
