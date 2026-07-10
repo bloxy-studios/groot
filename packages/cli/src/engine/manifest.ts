@@ -57,11 +57,12 @@ export function validateManifest(value: unknown, path: string): Manifest {
   if (typeof record.createdWith !== "string" || !record.createdWith.startsWith("create-groot@")) {
     throw invalid("missing or malformed createdWith", path);
   }
-  const conventions = record.conventions as Record<string, unknown> | undefined;
+  const conventions = record.conventions;
   if (
-    conventions === undefined ||
     typeof conventions !== "object" ||
-    typeof conventions.packagesNamespace !== "string"
+    conventions === null ||
+    Array.isArray(conventions) ||
+    typeof (conventions as Record<string, unknown>).packagesNamespace !== "string"
   ) {
     throw invalid("missing conventions.packagesNamespace", path);
   }
