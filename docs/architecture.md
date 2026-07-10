@@ -62,16 +62,16 @@ Stitch operations (each implemented as a pure, unit-tested transform):
 | Workspace globs | Root `package.json` gets `"workspaces": ["apps/*", "packages/*"]`, `"packageManager": "bun@<pinned>"` |
 | Package naming | Apps keep bare names (`web`, `mobile`, `api`); shared packages use `@repo/*` (`@repo/backend`, `@repo/typescript-config`) |
 | Lockfile hygiene | Delete any per-app lockfiles generators left behind; exactly one root `bun.lock` |
-| Git hygiene | Merge per-app `.gitignore`s into coherent ignores; single `git init` + initial commit at the end (unless `--no-git`) |
+| Git hygiene | Per-app `.gitignore`s stay in place (native git semantics); the root `.gitignore` is topped up to cover workspace basics; single `git init` + initial commit at the end (unless `--no-git`) |
 | Port allocation | Deterministic dev ports written into each app (flag or source, per adapter) — see table below |
 | turbo.json | Root tasks (`dev`, `build`, `lint`, `check-types`) with correct `outputs` per framework |
-| Shared TS config | `packages/typescript-config` with per-framework extends, apps' `tsconfig.json` rewired to extend it |
+| Shared TS config | `packages/typescript-config` kept from the trunk. In v0.2 apps keep their generated standalone tsconfigs (they work as-is); rewiring them to shared extends arrives with `groot add`/`doctor` (v0.3), where breakage can be detected and fixed |
 | Env plumbing | `.env.example` entries per scaffold (e.g. `NEXT_PUBLIC_CONVEX_URL`, `EXPO_PUBLIC_CONVEX_URL`) |
 | groot.json | Manifest recording what was scaffolded, by which generator version — the contract for `groot add`/`doctor` |
 
 ### 5. Verify
 
-`bun install` at the root (unless `--no-install`), then `tsc --noEmit`-level checks per package via turbo, then a summary report with next steps (including the deferred `convex dev` login step when Convex was selected). This stage is also exposed standalone as `groot doctor`.
+Structural workspace checks (every `package.json` parses, package names are unique), then `bun install` at the root (unless `--no-install`), then `git init` + initial commit (unless `--no-git`; a missing git identity downgrades the commit to a printed hint, never a failure), then a summary report with next steps — including the deferred `convex dev` login step when Convex was selected. Deeper per-package checks (`tsc --noEmit`-level via turbo, boot probes) arrive with `groot doctor` (v0.3), which also exposes this stage standalone.
 
 ## Port allocation
 
