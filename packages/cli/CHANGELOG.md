@@ -1,5 +1,11 @@
 # create-groot
 
+## 0.5.0
+
+### Minor Changes
+
+- [#22](https://github.com/bloxy-studios/groot/pull/22) [`6c17c1e`](https://github.com/bloxy-studios/groot/commit/6c17c1e9143982d8db46f5fbfdf98bf8dca5fecd) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - `groot add --dry-run --json` — the manifest as `groot.json` would read after the add, on pure stdout: the same versioned schema `init --dry-run --json` emits, with the new scaffold as the final entry. Diagnostics and port-collision warnings route to stderr, so agents and CI can parse stdout directly. Machine-readable output now covers every command: `init`, `add`, and `doctor`.
+
 ## 0.4.0
 
 ### Minor Changes
