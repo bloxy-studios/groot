@@ -91,26 +91,34 @@ export async function stitchLockfileHygiene(plan: Plan): Promise<string[]> {
 
 /**
  * Hono's bun template exports the app directly, which Bun serves on port 3000 —
- * colliding with Next.js. Rewrite to the plan's assigned port. (Elysia's port is
- * written correctly at generation time; Next/Vite/Metro keep their defaults.)
+ * colliding with Next.js. Rewrite each hono scaffold to its assigned port —
+ * `groot add --path` can grow a second one. (Elysia's port is written correctly
+ * at generation time; Next/Vite/Metro keep their defaults.)
  */
-export async function stitchHonoPort(plan: Plan): Promise<string | null> {
-  const hono = plan.scaffolds.find((s) => s.framework === "hono");
-  if (hono === undefined || hono.port === null) return null;
-  const path = join(plan.targetDir, hono.path, "src/index.ts");
-  if (!existsSync(path)) return null;
-  const source = await readFile(path, "utf8");
-  const marker = "export default app";
-  if (!source.includes(marker)) {
-    // Upstream template changed shape — leave it working on its default rather than corrupting it.
-    return `${hono.path}/src/index.ts: default-export marker not found; port left at template default`;
+export async function stitchHonoPort(plan: Plan): Promise<string[]> {
+  const notes: string[] = [];
+  for (const hono of plan.scaffolds) {
+    if (hono.framework !== "hono" || hono.port === null) continue;
+    const path = join(plan.targetDir, hono.path, "src/index.ts");
+    if (!existsSync(path)) continue;
+    const source = await readFile(path, "utf8");
+    const marker = "export default app";
+    if (!source.includes(marker)) {
+      // Upstream template changed shape — or a previous stitch already rewrote
+      // this file. Leave it alone rather than corrupting it.
+      notes.push(
+        `${hono.path}/src/index.ts: default-export marker not found; port rewrite skipped`,
+      );
+      continue;
+    }
+    const rewritten = source.replace(
+      marker,
+      `export default {\n  port: ${hono.port},\n  fetch: app.fetch,\n}`,
+    );
+    await writeFile(path, rewritten, "utf8");
+    notes.push(`${hono.path}/src/index.ts → dev port ${hono.port}`);
   }
-  const rewritten = source.replace(
-    marker,
-    `export default {\n  port: ${hono.port},\n  fetch: app.fetch,\n}`,
-  );
-  await writeFile(path, rewritten, "utf8");
-  return `${hono.path}/src/index.ts → dev port ${hono.port}`;
+  return notes;
 }
 
 /**

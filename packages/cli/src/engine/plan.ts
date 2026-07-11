@@ -103,6 +103,14 @@ export function planToManifest(plan: Plan): Manifest {
   };
 }
 
+/** One scaffold as a human summary line ("web        Next.js → apps/web  :3000  (create-next-app@16)"). */
+export function describeScaffold(scaffold: PlannedScaffold): string {
+  const port = scaffold.port === null ? "" : `  :${scaffold.port}`;
+  const source = scaffold.generator ?? "groot-authored files";
+  const label = findChoice(scaffold.slot, scaffold.framework)?.label ?? scaffold.framework;
+  return `${scaffold.slot.padEnd(9)}  ${label} → ${scaffold.path}${port}  (${source})`;
+}
+
 /** Human-readable plan summary for the confirm step and dry runs. */
 export function describePlan(plan: Plan): string {
   const lines: string[] = [`name       ${plan.name}`, `target     ${plan.targetDir}`];
@@ -110,10 +118,7 @@ export function describePlan(plan: Plan): string {
     lines.push("scaffolds  (none — an empty turborepo trunk)");
   }
   for (const scaffold of plan.scaffolds) {
-    const port = scaffold.port === null ? "" : `  :${scaffold.port}`;
-    const source = scaffold.generator ?? "groot-authored files";
-    const label = findChoice(scaffold.slot, scaffold.framework)?.label ?? scaffold.framework;
-    lines.push(`${scaffold.slot.padEnd(9)}  ${label} → ${scaffold.path}${port}  (${source})`);
+    lines.push(describeScaffold(scaffold));
   }
   const skips: string[] = [];
   if (!plan.options.install) skips.push("install");

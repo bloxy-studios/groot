@@ -4,37 +4,9 @@ import pc from "picocolors";
 import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
 import { normalizeArgv } from "./cli-compat.ts";
+import { add } from "./commands/add.ts";
 import { doctor } from "./commands/doctor.ts";
 import { init } from "./commands/init.ts";
-
-const SPEC_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/cli-spec.md";
-const ROADMAP_URL = "https://github.com/bloxy-studios/groot/blob/main/docs/roadmap.md";
-
-/**
- * `add` is specified in docs/cli-spec.md and lands with the next PR of the v0.3
- * series. The stub exists so early adopters get a helpful pointer instead of an
- * unknown-command error.
- */
-function comingSoon(command: string, version: string): never {
-  console.log(banner(pkg.version));
-  console.log();
-  console.log(`${pc.yellow("●")} ${pc.bold(`groot ${command}`)} arrives in ${pc.bold(version)}.`);
-  console.log(`  Planned matrix — ${scaffoldMatrixSummary()}`);
-  console.log();
-  console.log(`  Spec:    ${pc.cyan(SPEC_URL)}`);
-  console.log(`  Roadmap: ${pc.cyan(ROADMAP_URL)}`);
-  process.exit(0);
-}
-
-const add = defineCommand({
-  meta: {
-    name: "add",
-    description: "Grow an existing groot workspace with another scaffold (arrives in v0.3)",
-  },
-  run() {
-    comingSoon("add", "v0.3");
-  },
-});
 
 const main = defineCommand({
   meta: {
