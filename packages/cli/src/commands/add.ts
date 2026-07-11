@@ -5,7 +5,8 @@
  * Thin flag layer over engine/add.ts: load the manifest (walk-up), resolve the
  * new scaffold (occupancy rule, fresh destination, port warnings), then run
  * grow → stitch → verify for just that scaffold. `--dry-run` prints the
- * would-be scaffold and the groot.json change without writing anything.
+ * would-be scaffold and the groot.json change without writing anything;
+ * `--dry-run --json` emits the would-be manifest on pure stdout.
  */
 import { defineCommand } from "citty";
 import pc from "picocolors";
@@ -15,9 +16,9 @@ import {
   readRootPackageName,
   resolveAddScaffold,
 } from "../engine/add.ts";
-import { GrootError } from "../engine/errors.ts";
+import { EXIT, GrootError } from "../engine/errors.ts";
 import { loadManifest } from "../engine/manifest.ts";
-import { describeScaffold } from "../engine/plan.ts";
+import { describeScaffold, planToManifest } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
 
 async function runAdd(args: {
@@ -26,8 +27,12 @@ async function runAdd(args: {
   install: boolean;
   keepFailed: boolean;
   dryRun: boolean;
+  json: boolean;
   verbose: boolean;
 }): Promise<void> {
+  if (args.json && !args.dryRun) {
+    throw new GrootError("--json currently requires --dry-run", EXIT.USAGE);
+  }
   const loaded = await loadManifest(process.cwd());
   const { scaffold, warnings } = await resolveAddScaffold(
     loaded.manifest,
@@ -42,15 +47,25 @@ async function runAdd(args: {
     verbose: args.verbose,
   });
 
-  console.log();
-  console.log(`${pc.dim("workspace")}  ${loaded.workspaceRoot}`);
-  console.log(`${pc.dim("growing")}    ${describeScaffold(scaffold)}`);
-  console.log();
+  // In --json mode all diagnostics go to stderr so stdout stays pure
+  // machine-readable output (docs/cli-spec.md#output-contract).
+  const write = args.json ? console.error : console.log;
+  write();
+  write(`${pc.dim("workspace")}  ${loaded.workspaceRoot}`);
+  write(`${pc.dim("growing")}    ${describeScaffold(scaffold)}`);
+  write();
   for (const warning of warnings) {
-    console.log(`${pc.yellow("●")} ${warning}`);
+    write(`${pc.yellow("●")} ${warning}`);
   }
 
   if (args.dryRun) {
+    if (args.json) {
+      // The manifest as groot.json would read after the add — the same
+      // versioned schema `init --dry-run --json` emits; the new scaffold is
+      // the final entry.
+      console.log(JSON.stringify(planToManifest(plan), null, 2));
+      return;
+    }
     console.log(
       `groot.json gains one scaffold (${loaded.manifest.scaffolds.length} → ${plan.scaffolds.length}):`,
     );
@@ -118,6 +133,11 @@ export const add = defineCommand({
       default: false,
       description: "Print the would-be scaffold and groot.json change; write nothing",
     },
+    json: {
+      type: "boolean",
+      default: false,
+      description: "With --dry-run: the would-be groot.json (manifest schema) on stdout",
+    },
     verbose: {
       type: "boolean",
       default: false,
@@ -132,6 +152,7 @@ export const add = defineCommand({
         install: args.install,
         keepFailed: args["keep-failed"],
         dryRun: args["dry-run"],
+        json: args.json,
         verbose: args.verbose,
       });
     } catch (error) {
