@@ -1,6 +1,8 @@
 # Scaffold flows — verified generator reference
 
 > **Last verified: 2026-07-10.** Every adapter change must re-verify its section against upstream and update this date, the facts, and the sources. This document is the ground truth groot's adapters are written against.
+>
+> Drift is watched automatically: [`e2e.yml`](../.github/workflows/e2e.yml) re-runs the real generators weekly (behavior), and [`drift.yml`](../.github/workflows/drift.yml) re-checks every pinned series and this document's age (pins & docs) — see the [maintainer runbook](./maintainers.md#upstream-drift-watch).
 
 Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0.16.2 (SvelteKit 2.63 / Svelte 5.56 / Vite 8) · create-expo-app 4.0.0 (Expo SDK 57) · elysia 1.4.29 · create-hono 0.19.4 (hono 4.12.28) · convex 1.42.1.
 

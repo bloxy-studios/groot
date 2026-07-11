@@ -36,12 +36,12 @@ The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](.
 - [x] `groot doctor` — workspace health checks with fixes.
 - Preset support → moved to v0.4 (v0.3.0 was released before it landed).
 
-## v0.4 — Presets, agents & CI hardening 🤖
+## v0.4 — Presets, agents & CI hardening 🤖 ✅ (2026-07-11)
 
 - [x] Preset support: `groot init --preset <path>` reading a shared groot.json as the selections source.
 - [x] Stable machine-readable output across all commands (`--json` everywhere): `init --dry-run --json`, `add --dry-run --json`, `doctor --json`.
 - [x] Non-TTY behavior guarantees; scaffold-in-CI documentation — process-level contract tests across `init`/`add`/`doctor`, plus [ci.md](./ci.md).
-- [ ] Generator-version pinning matrix with automated upstream-drift detection (scheduled job re-verifies scaffold-flows.md facts).
+- [x] Generator-version pinning matrix with automated upstream-drift detection — [`drift.yml`](../.github/workflows/drift.yml) re-checks every pinned series + scaffold-flows.md's age weekly and files a self-healing issue ([runbook](./maintainers.md#upstream-drift-watch)).
 
 ## v1.0 — Stability contract 🏛️
 

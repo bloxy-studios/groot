@@ -53,6 +53,15 @@ Do this **early** — unclaimed names can be squatted.
 - Want an extra pass without pushing? Comment `@greptileai` on the PR.
 - Merge bar: **5/5 confidence score**. Override only with a written justification comment; overrides should be rare and boring.
 
+## Upstream drift watch
+
+Two scheduled jobs keep groot honest against its moving upstream targets:
+
+- **Behavior drift — [`e2e.yml`](../.github/workflows/e2e.yml) (Wednesdays 05:41 UTC)** runs the real generators end to end. A red run means upstream output changed under an existing pin: fix the adapter and [scaffold-flows.md](./scaffold-flows.md) in the same PR.
+- **Pin & doc drift — [`drift.yml`](../.github/workflows/drift.yml) (Mondays 06:13 UTC)** runs [`scripts/check-upstream-drift.ts`](../scripts/check-upstream-drift.ts): every pinned series (trunk + matrix generators, the Expo SDK template tag, the dependency ranges in groot-authored packages — all read from the modules the CLI executes) is compared against the registry's latest, and scaffold-flows.md's "Last verified" date is held to a 90-day budget. Findings upsert a single [`upstream-drift`-labeled issue](https://github.com/bloxy-studios/groot/issues?q=label%3Aupstream-drift) — updated in place via a body fingerprint, closed automatically when drift clears. Registry failures fail the run instead of filing misleading issues.
+
+Intentional pin lags (e.g. scaffolded packages staying on TypeScript 5 while this repo builds with 7) live in the script's allowlist, each with a written reason; they're reported in the issue's collapsed "allowlisted" section rather than as findings. When the drift issue opens: re-verify the named section against upstream, bump the pin in its adapter, refresh scaffold-flows.md (facts, sources, date), and land it all in one PR.
+
 ## Security response
 
 Reports arrive via [private vulnerability reporting](https://github.com/bloxy-studios/groot/security/advisories/new). Per [SECURITY.md](../SECURITY.md): acknowledge ≤ 48h, assess ≤ 7 days, coordinate disclosure ≤ 90 days. Develop fixes in a temporary private fork (GitHub advisory workflow), publish the advisory with credit, ship via the normal release flow.
