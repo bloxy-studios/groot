@@ -44,8 +44,10 @@ Do this **early** — unclaimed names can be squatted.
 1. PRs with changesets merge into `main`.
 2. The **Release** workflow maintains a `chore: version packages` PR (changelog + version bumps).
    > **Nudge required:** GitHub intentionally does not run `pull_request` workflows on PRs created by a workflow's own `GITHUB_TOKEN`, so the version PR arrives with no CI checks. Close and reopen it (or push an empty commit to `changeset-release/main`) to fire the required checks, and comment `@greptileai` if the review didn't start automatically.
-3. Merging that PR triggers: `changeset publish` → npm publish (provenance) → git tag `create-groot@X.Y.Z` → GitHub Release → the `binaries` job compiles `groot` for linux-x64/arm64, darwin-x64/arm64, windows-x64, generates `SHA256SUMS.txt`, and uploads everything to the release.
-4. Verify: release page shows 6 assets (5 binaries + checksums); `bun info create-groot version` matches; run the installer end-to-end on one platform.
+3. Merging that PR triggers: `changeset publish` → npm publish (provenance) → git tag `create-groot@X.Y.Z` → GitHub Release → the `binaries` job compiles `groot` for linux-x64/arm64, darwin-x64/arm64, windows-x64, generates `SHA256SUMS.txt` and an SPDX SBOM (`groot-sbom.spdx.json`), signs build-provenance attestations for every artifact (Sigstore, GitHub attestation store), and uploads everything to the release.
+4. Verify: release page shows **7 assets** (5 binaries + checksums + SBOM; releases before 2026-07-11 have 6); `bun info create-groot version` matches; `gh attestation verify <downloaded asset> --repo bloxy-studios/groot` passes; run the installer end-to-end on one platform.
+
+> **macOS notarization is the one signing step that stays manual-gated:** it requires an Apple Developer account (certificates + notarytool credentials as repo secrets). Until the owner provisions those, macOS users rely on checksum + attestation verification; Gatekeeper prompts on first run are expected.
 
 ## Greptile review loop (policy)
 

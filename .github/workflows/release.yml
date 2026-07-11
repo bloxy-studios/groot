@@ -3,7 +3,9 @@
 #   2. Version PR merged           → publishes create-groot to npm (OIDC trusted publishing,
 #      provenance automatic), tags create-groot@X.Y.Z, creates the GitHub Release.
 #   3. binaries job                → compiles the standalone `groot` binary for 5 platforms,
-#      generates SHA256SUMS.txt, and attaches everything to that release.
+#      generates SHA256SUMS.txt and an SPDX SBOM, signs build-provenance attestations
+#      for every artifact (Sigstore, via GitHub's attestation store), and attaches
+#      everything to that release. Verify: gh attestation verify <asset> --repo bloxy-studios/groot
 #
 # npm auth: trusted publishing (no token) — configured at npmjs.com for this repo + this
 # workflow filename. Requires npm ≥ 11.5.1, hence the Node 24 setup. See docs/maintainers.md.
@@ -68,6 +70,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload release assets
+      id-token: write # Sigstore signing for build-provenance attestations
+      attestations: write # persist attestations to the repo's attestation store
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -103,6 +107,26 @@ jobs:
           set -euo pipefail
           sha256sum groot-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
+
+      # Source-level SBOM of the workspace (bun install already ran, so the
+      # full dependency tree is on disk for syft to catalog).
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: packages/cli/dist/release/groot-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false # attached below, together with the binaries
+
+      # Signed, verifiable provenance for every release artifact:
+      #   gh attestation verify groot-linux-x64 --repo bloxy-studios/groot
+      - name: Attest build provenance (binaries, checksums, SBOM)
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            packages/cli/dist/release/groot-*
+            packages/cli/dist/release/SHA256SUMS.txt
 
       - name: Attach binaries to the GitHub release
         env:
