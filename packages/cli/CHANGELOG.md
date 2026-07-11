@@ -6,6 +6,8 @@
 
 - [#18](https://github.com/bloxy-studios/groot/pull/18) [`94b947f`](https://github.com/bloxy-studios/groot/commit/94b947fe68851cfd06834d89f8e98befead03628) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - `groot add <scaffold>` — grow an existing workspace with one more scaffold. The same grow → stitch → verify pipeline as `init` runs for just the new scaffold: occupancy-checked destinations (`--path` unlocks a second scaffold per slot), automatic cross-wiring (adding convex links the existing frontends to the backend), a persistent `groot.json` update with provenance preserved, and targeted rollback that removes only the new scaffold directory on generator failure. Flags: `--path`, `--no-install`, `--keep-failed`, `--dry-run`, `--verbose`.
 
+- [#16](https://github.com/bloxy-studios/groot/pull/16) [`546856a`](https://github.com/bloxy-studios/groot/commit/546856a9e296a47c7cac227866a2a4baabd82064) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - `groot doctor` — workspace health checks with suggested fixes: groot.json validation with walk-up discovery, workspace globs, per-scaffold package presence and name uniqueness, lockfile hygiene, dev-port collisions, turbo task coverage, and per-adapter invariants (Convex `_generated` stubs + `@types/node`, API port drift). Exits 0 (healthy — warnings allowed) or 5; `--json` emits structured results on pure stdout. _(Documented retroactively — #16 shipped in 0.3.0 without a changeset.)_
+
 ## 0.2.1
 
 ### Patch Changes

@@ -25,6 +25,7 @@ import {
   validateSelections,
 } from "../engine/plan.ts";
 import { resolveDirConflict, runPreflight } from "../engine/preflight.ts";
+import { applyPresetSelections, loadPreset } from "../engine/preset.ts";
 import { stitch } from "../engine/stitch.ts";
 import type { DirConflictPolicy, Plan, PreflightCheck, Slot } from "../engine/types.ts";
 import { verify } from "../engine/verify.ts";
@@ -79,6 +80,7 @@ async function runInit(args: {
   mobile: string | undefined;
   api: string | undefined;
   backend: string | undefined;
+  preset: string | undefined;
   yes: boolean;
   dryRun: boolean;
   json: boolean;
@@ -100,6 +102,23 @@ async function runInit(args: {
     backend: args.backend,
   };
   validateSelections(selections);
+
+  // A preset decides every slot the flags left open (explicit flags win) —
+  // its manifest validation guarantees the framework ids are known ones.
+  // Diagnostics go to stderr in --json mode, like every other progress line.
+  if (args.preset !== undefined) {
+    const preset = await loadPreset(args.preset);
+    const write = args.json ? console.error : console.log;
+    const summary = SLOT_ORDER.map((slot) => `${slot} ${preset.selections[slot]}`).join(" · ");
+    write(`${pc.green("✓")} preset ${preset.path} ${pc.dim(summary)}`);
+    for (const warning of preset.warnings) {
+      write(`${pc.yellow("●")} ${warning}`);
+    }
+    const merged = applyPresetSelections(selections, preset.selections);
+    for (const slot of SLOT_ORDER) {
+      selections[slot] = merged[slot];
+    }
+  }
 
   const undecided = undecidedSlots(selections);
   const wantsPrompts = (undecided.length > 0 || args.dir === undefined) && !args.yes;
@@ -240,6 +259,11 @@ export const init = defineCommand({
     mobile: { type: "string", description: "Mobile app: expo | none" },
     api: { type: "string", description: "API: elysia | hono | none" },
     backend: { type: "string", description: "Backend: convex | none" },
+    preset: {
+      type: "string",
+      description:
+        "Path to a groot.json (or a workspace containing one) used as the selections source",
+    },
     yes: {
       type: "boolean",
       alias: "y",
@@ -283,6 +307,7 @@ export const init = defineCommand({
         mobile: args.mobile,
         api: args.api,
         backend: args.backend,
+        preset: args.preset,
         yes: args.yes,
         dryRun: args["dry-run"],
         json: args.json,
