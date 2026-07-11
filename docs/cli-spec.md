@@ -143,5 +143,7 @@ groot treats scriptability as a first-class feature:
 
 1. Any run where **every slot is fixed by flags (or a `--preset`) and `--yes` is present** must complete with zero prompts, or exit non-zero — it must never hang waiting for input.
 2. `--dry-run --json` (on `init` and `add`) is stable, versioned output (the manifest schema) — safe for agents to parse; `doctor --json` emits its structured results the same way.
-3. Non-TTY environments (CI) behave as if `--verbose` were set: no spinners, plain line-based progress.
+3. Progress output is plain and line-based everywhere — groot has no spinners to garble CI logs. `--verbose` additionally streams full generator output.
 4. Anything interactive that cannot be avoided (today: Convex login) is **never run by groot** — it is printed as a next step instead.
+
+Recipes for CI systems and agents live in [ci.md](./ci.md).
