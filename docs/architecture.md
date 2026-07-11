@@ -128,4 +128,4 @@ Rules for adapter authors:
 
 - groot runs well-known official generators fetched through bun's registry client; it never downloads or executes ad-hoc remote scripts.
 - Generator majors are pinned; bumping them is a reviewed, changelogged change.
-- groot's own supply chain: SHA-pinned CI actions, npm provenance, checksum-verified binary installers (see [SECURITY.md](../SECURITY.md)).
+- groot's own supply chain: SHA-pinned CI actions, npm provenance, checksum-verified binary installers, and — on every release — an SPDX SBOM plus Sigstore build-provenance attestations for each artifact (`gh attestation verify <asset> --repo bloxy-studios/groot`). See [SECURITY.md](../SECURITY.md).
