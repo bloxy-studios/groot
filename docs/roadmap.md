@@ -46,7 +46,7 @@ The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](.
 ## v1.0 — Stability contract 🏛️
 
 - [x] Semver stability for CLI flags, exit codes, `groot.json` schema — [stability.md](./stability.md) defines the covered surface and change rules, tripwired by a contract snapshot test; the guarantee becomes binding at v1.0.0.
-- [ ] Docs site (`apps/docs` — dogfooding a groot-style workspace).
+- [x] Docs site — [groot.dev on GitHub Pages](https://bloxy-studios.github.io/groot/): a dependency-free bun build (`apps/docs`) rendering the normative docs into the [Paper & Ink design system](../apps/docs/DESIGN.md). (Upgrading it to a full groot-scaffolded workspace app is tracked for when the site grows interactive.)
 - [x] SBOM + build-provenance attestations on every release — verify with `gh attestation verify <asset> --repo bloxy-studios/groot`.
 - [ ] macOS notarization — requires an Apple Developer account (owner action; see [maintainers.md](./maintainers.md#release-flow-fully-automated-after-setup)).
 

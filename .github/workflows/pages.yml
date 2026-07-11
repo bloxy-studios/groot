@@ -1,0 +1,61 @@
+name: Docs site
+
+# Builds the static docs site (apps/docs — a dependency-free bun build that
+# renders docs/*.md into the Paper & Ink shell) and deploys it to GitHub Pages
+# at https://bloxy-studios.github.io/groot/. Design system: apps/docs/DESIGN.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "apps/docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      # The builder is dependency-free (bun builtins only) — no bun install.
+      - name: Self-test the renderer
+        run: bun test apps/docs
+
+      - name: Build
+        run: bun apps/docs/build.ts
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: apps/docs/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write # deploy to Pages
+      id-token: write # verify the deployment originates from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

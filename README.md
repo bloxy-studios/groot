@@ -110,7 +110,7 @@ Read the full design in [docs/architecture.md](./docs/architecture.md) and each 
 - [x] **v0.4** — `init --preset`, stable `--json` everywhere, tested non-TTY guarantees, automated upstream-drift detection (weekly pin/doc watch + real-generator E2E cron).
 - [ ] **v1.0** — stability contract.
 
-Details in [docs/roadmap.md](./docs/roadmap.md).
+Details in [docs/roadmap.md](./docs/roadmap.md) — or browse everything on the [docs site](https://bloxy-studios.github.io/groot/).
 
 ## Contributing
 
