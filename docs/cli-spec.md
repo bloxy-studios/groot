@@ -85,6 +85,7 @@ Runs the same grow → stitch → verify stages as `init` for just the new scaff
 | `--no-install` | — | install on | Skip the root `bun install` after growing |
 | `--keep-failed` | — | off | Keep the new scaffold directory if its generator fails |
 | `--dry-run` | — | off | Print the would-be scaffold and the `groot.json` change; write nothing |
+| `--json` | — | off | With `--dry-run`: the would-be `groot.json` (manifest schema) on stdout |
 | `--verbose` | — | off | Stream generator output instead of progress lines |
 
 ### Rules
@@ -95,6 +96,7 @@ Runs the same grow → stitch → verify stages as `init` for just the new scaff
 - **Provenance**: `groot.json`'s `createdWith` keeps its original value — it records which CLI planted the workspace, not which one last grew it.
 - **Git**: `add` never runs `git init` — the workspace keeps whatever git state it has, including none.
 - **Targeted rollback**: if the generator fails, only the new scaffold directory is removed (`--keep-failed` keeps it for inspection); the rest of the workspace is never touched. Stitch/verify failures leave the tree in place, as in `init`.
+- **Machine output**: `--dry-run --json` emits the manifest as `groot.json` would read after the add — the same versioned schema `init --dry-run --json` emits, with the new scaffold as the final entry. Stdout carries only the manifest; diagnostics and warnings go to stderr, per the output contract.
 
 ### Exit codes
 
@@ -140,6 +142,6 @@ Written to the workspace root by `init`, updated by `add`. The manifest is groot
 groot treats scriptability as a first-class feature:
 
 1. Any run where **every slot is fixed by flags (or a `--preset`) and `--yes` is present** must complete with zero prompts, or exit non-zero — it must never hang waiting for input.
-2. `--dry-run --json` is stable, versioned output (the manifest schema) — safe for agents to parse.
+2. `--dry-run --json` (on `init` and `add`) is stable, versioned output (the manifest schema) — safe for agents to parse; `doctor --json` emits its structured results the same way.
 3. Non-TTY environments (CI) behave as if `--verbose` were set: no spinners, plain line-based progress.
 4. Anything interactive that cannot be avoided (today: Convex login) is **never run by groot** — it is printed as a next step instead.

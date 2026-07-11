@@ -39,7 +39,7 @@ The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](.
 ## v0.4 — Presets, agents & CI hardening 🤖
 
 - [x] Preset support: `groot init --preset <path>` reading a shared groot.json as the selections source.
-- [ ] Stable machine-readable output across all commands (`--json` everywhere).
+- [x] Stable machine-readable output across all commands (`--json` everywhere): `init --dry-run --json`, `add --dry-run --json`, `doctor --json`.
 - [ ] Non-TTY behavior guarantees; scaffold-in-CI documentation.
 - [ ] Generator-version pinning matrix with automated upstream-drift detection (scheduled job re-verifies scaffold-flows.md facts).
 
