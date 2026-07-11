@@ -1,5 +1,11 @@
 # create-groot
 
+## 0.3.0
+
+### Minor Changes
+
+- [#18](https://github.com/bloxy-studios/groot/pull/18) [`94b947f`](https://github.com/bloxy-studios/groot/commit/94b947fe68851cfd06834d89f8e98befead03628) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - `groot add <scaffold>` — grow an existing workspace with one more scaffold. The same grow → stitch → verify pipeline as `init` runs for just the new scaffold: occupancy-checked destinations (`--path` unlocks a second scaffold per slot), automatic cross-wiring (adding convex links the existing frontends to the backend), a persistent `groot.json` update with provenance preserved, and targeted rollback that removes only the new scaffold directory on generator failure. Flags: `--path`, `--no-install`, `--keep-failed`, `--dry-run`, `--verbose`.
+
 ## 0.2.1
 
 ### Patch Changes
