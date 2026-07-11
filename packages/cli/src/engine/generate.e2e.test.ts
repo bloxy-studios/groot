@@ -12,7 +12,10 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildAddPlan, executeAdd, readRootPackageName, resolveAddScaffold } from "./add.ts";
+import { isHealthy, runDoctor } from "./doctor.ts";
 import { generate } from "./generate.ts";
+import { loadManifest } from "./manifest.ts";
 import { buildPlan } from "./plan.ts";
 import { stitch } from "./stitch.ts";
 import type { PlanOptions, Slot } from "./types.ts";
@@ -155,3 +158,71 @@ describe.skipIf(!e2e)("full pipeline (real generators — alt web/api: sveltekit
     TIMEOUT_MS,
   );
 });
+
+describe.skipIf(!e2e)(
+  "scenario 3: grow an existing workspace (init next → add elysia → add convex)",
+  () => {
+    test(
+      "adds run the pipeline for just the new scaffold and doctor stays healthy",
+      async () => {
+        // Plant a web-only workspace with the real generators.
+        const plan = await planFor(
+          { web: "next", mobile: "none", api: "none", backend: "none" },
+          "grown",
+        );
+        await generate(plan, { verbose: false });
+        await stitch(plan);
+        await verify(plan, { verbose: false });
+        const root = plan.targetDir;
+
+        // `groot add <framework>` — composed exactly as commands/add.ts does.
+        const addOnce = async (framework: string) => {
+          const loaded = await loadManifest(root);
+          const resolution = await resolveAddScaffold(
+            loaded.manifest,
+            loaded.workspaceRoot,
+            framework,
+            undefined,
+          );
+          const addPlan = buildAddPlan(
+            loaded,
+            resolution.scaffold,
+            await readRootPackageName(loaded.workspaceRoot),
+            { install: false, keepFailed: false, verbose: false },
+          );
+          await executeAdd(addPlan, resolution.scaffold, { verbose: false });
+          return resolution;
+        };
+
+        const elysia = await addOnce("elysia");
+        expect(elysia.warnings).toEqual([]);
+        const api = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
+        expect(api).toContain(".listen(3001)");
+
+        await addOnce("convex");
+        // The full (idempotent) stitch after adding convex wires the EXISTING web app.
+        const webPkg = JSON.parse(await readFile(join(root, "apps/web/package.json"), "utf8"));
+        expect(webPkg.dependencies["@repo/backend"]).toBe("workspace:*");
+        expect(await readFile(join(root, ".env.example"), "utf8")).toContain(
+          "NEXT_PUBLIC_CONVEX_URL=",
+        );
+
+        // groot.json grew to three scaffolds and kept its provenance.
+        const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
+        expect(manifest.scaffolds).toHaveLength(3);
+        expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
+          "api",
+          "backend",
+          "web",
+        ]);
+        expect(manifest.createdWith).toBe("create-groot@0.2.0-e2e");
+
+        // The grown workspace is healthy (warns allowed — no install ran here).
+        const checks = await runDoctor(await loadManifest(root));
+        const failures = checks.filter((check) => check.status === "fail");
+        expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);
+      },
+      TIMEOUT_MS,
+    );
+  },
+);

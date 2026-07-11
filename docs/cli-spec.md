@@ -1,6 +1,6 @@
 # groot CLI specification
 
-> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` land in v0.3 (stubs point here until then). Changes to this document are semver-relevant.
+> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` are implemented on main and release with v0.3.0. Changes to this document are semver-relevant.
 
 ## Invocation forms
 
@@ -64,9 +64,31 @@ Prompts (clack) run **only for slots not already fixed by flags** — mixing fla
 
 Grow an existing groot workspace: `groot add expo`, `groot add hono`, `groot add sveltekit --path apps/marketing`.
 
-- Requires a `groot.json` manifest at the workspace root (written by `init`).
-- Refuses to add a scaffold whose slot is already occupied unless `--path` targets a new directory.
-- Runs the same generate → stitch → verify stages for just the new scaffold, then updates `groot.json`.
+Runs the same grow → stitch → verify stages as `init` for just the new scaffold — no trunk is re-planted. Because every stitch operation is idempotent over the existing scaffolds, cross-cutting wiring lands automatically: adding `convex` links the existing web/mobile apps to the backend, and adding a frontend next to an existing backend wires the new app the same way. The stitch stage persists the updated `groot.json`.
+
+### Flags
+
+| Flag | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `<scaffold>` | `next` \| `sveltekit` \| `expo` \| `elysia` \| `hono` \| `convex` | required | Positional: the scaffold to grow |
+| `--path <dir>` | workspace-relative | the framework's slot path | Fresh directory (absent or empty), a direct child of `apps/` (web/mobile/api) or `packages/` (backend), not claimed by `groot.json` |
+| `--no-install` | — | install on | Skip the root `bun install` after growing |
+| `--keep-failed` | — | off | Keep the new scaffold directory if its generator fails |
+| `--dry-run` | — | off | Print the would-be scaffold and the `groot.json` change; write nothing |
+| `--verbose` | — | off | Stream generator output instead of progress lines |
+
+### Rules
+
+- Requires a `groot.json` manifest (written by `init`) — `add` walks up from the current directory to find the workspace root. Relative `--path` values resolve against that root, not the current directory.
+- **Occupancy**: a scaffold whose slot is already filled is refused (exit 2) unless `--path` targets a fresh directory. Path equality with any existing scaffold is always refused. The backend slot is single-occupancy — its package name (`@repo/backend`) is fixed by the workspace conventions, so `--path` is no escape hatch there.
+- **Ports**: a dev-port collision with an existing scaffold (e.g. growing Hono next to Elysia — both default to 3001) is a **warning**, not an error; `groot doctor` flags it persistently until one port is changed.
+- **Provenance**: `groot.json`'s `createdWith` keeps its original value — it records which CLI planted the workspace, not which one last grew it.
+- **Git**: `add` never runs `git init` — the workspace keeps whatever git state it has, including none.
+- **Targeted rollback**: if the generator fails, only the new scaffold directory is removed (`--keep-failed` keeps it for inspection); the rest of the workspace is never touched. Stitch/verify failures leave the tree in place, as in `init`.
+
+### Exit codes
+
+Same table as `init`: `2` invalid arguments and occupancy violations, `4` generator failure, `5` stitch/verify failure.
 
 ## `groot doctor` (v0.3)
 

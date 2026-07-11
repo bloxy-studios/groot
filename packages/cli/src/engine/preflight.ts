@@ -28,8 +28,8 @@ export function versionAtLeast(current: string, minimum: string): boolean {
   return true;
 }
 
-/** Does the path exist and contain at least one entry? */
-async function isNonEmptyDir(path: string): Promise<boolean> {
+/** Does the path exist and contain at least one entry? (A file in the way counts too.) */
+export async function isNonEmptyDir(path: string): Promise<boolean> {
   try {
     const info = await stat(path);
     if (!info.isDirectory()) return true; // a file in the way counts as a conflict

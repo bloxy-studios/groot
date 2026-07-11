@@ -15,7 +15,7 @@ import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "../adapters/trunk.ts";
 import type { FileSpec } from "./adapter.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { runCommand } from "./run.ts";
-import type { Plan } from "./types.ts";
+import type { Plan, PlannedScaffold } from "./types.ts";
 
 /**
  * Move every entry of `srcDir` into `destDir` (created if missing). Throws
@@ -66,6 +66,44 @@ export interface GenerateOptions {
   readonly onStep?: (label: string) => void;
 }
 
+/**
+ * Grow one scaffold via its adapter: generator command → direct file writes →
+ * post-commands. `generate` runs this for every scaffold in the plan; `groot add`
+ * runs it for just the new one (no trunk).
+ */
+export async function growScaffold(
+  plan: Plan,
+  scaffold: PlannedScaffold,
+  options: GenerateOptions,
+): Promise<void> {
+  const report = options.onStep ?? (() => {});
+  const adapter = ADAPTERS[scaffold.framework];
+  if (adapter === undefined) {
+    throw new GrootError(`No adapter registered for "${scaffold.framework}"`, EXIT.INTERNAL);
+  }
+  const ctx = { plan, scaffold };
+
+  // Generators create their own leaf directory; guarantee the parent exists.
+  await mkdir(dirname(join(plan.targetDir, scaffold.path)), { recursive: true });
+
+  const command = adapter.command(ctx);
+  if (command !== null) {
+    report(command.label);
+    await runCommand(command, { verbose: options.verbose });
+  }
+
+  const files = adapter.writeFiles?.(ctx);
+  if (files !== undefined && files.length > 0) {
+    report(`Writing ${scaffold.path} (${scaffold.framework})`);
+    await writeFileSpecs(plan.targetDir, files);
+  }
+
+  for (const post of adapter.postCommands?.(ctx) ?? []) {
+    report(post.label);
+    await runCommand(post, { verbose: options.verbose });
+  }
+}
+
 /** Plant the trunk and grow every scaffold in the plan. */
 export async function generate(plan: Plan, options: GenerateOptions): Promise<void> {
   const report = options.onStep ?? (() => {});
@@ -91,31 +129,7 @@ export async function generate(plan: Plan, options: GenerateOptions): Promise<vo
 
     // 2. Branches, in slot order.
     for (const scaffold of plan.scaffolds) {
-      const adapter = ADAPTERS[scaffold.framework];
-      if (adapter === undefined) {
-        throw new GrootError(`No adapter registered for "${scaffold.framework}"`, EXIT.INTERNAL);
-      }
-      const ctx = { plan, scaffold };
-
-      // Generators create their own leaf directory; guarantee the parent exists.
-      await mkdir(dirname(join(plan.targetDir, scaffold.path)), { recursive: true });
-
-      const command = adapter.command(ctx);
-      if (command !== null) {
-        report(command.label);
-        await runCommand(command, { verbose: options.verbose });
-      }
-
-      const files = adapter.writeFiles?.(ctx);
-      if (files !== undefined && files.length > 0) {
-        report(`Writing ${scaffold.path} (${scaffold.framework})`);
-        await writeFileSpecs(plan.targetDir, files);
-      }
-
-      for (const post of adapter.postCommands?.(ctx) ?? []) {
-        report(post.label);
-        await runCommand(post, { verbose: options.verbose });
-      }
+      await growScaffold(plan, scaffold, options);
     }
   } catch (error) {
     if (createdByGroot && !plan.options.keepFailed) {
