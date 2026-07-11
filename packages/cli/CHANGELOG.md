@@ -1,5 +1,11 @@
 # create-groot
 
+## 0.4.0
+
+### Minor Changes
+
+- [#20](https://github.com/bloxy-studios/groot/pull/20) [`16909c6`](https://github.com/bloxy-studios/groot/commit/16909c6c29e3d6d7d9ccb34d9af647669c9a7f46) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - `groot init --preset <path>` — replicate a workspace shape from any groot.json (a file, or a workspace directory containing one). The preset is the **selections source**: slot → framework comes from the manifest, validated exactly like a workspace manifest, while the workspace name, paths, ports, generator pins, and conventions come from the current CLI — a preset written by an older groot never pins stale generators. Explicit slot flags win over the preset; extra same-slot scaffolds (grown via `groot add --path`) surface as warnings. With a target directory given, a preset run is fully non-interactive.
+
 ## 0.3.0
 
 ### Minor Changes
