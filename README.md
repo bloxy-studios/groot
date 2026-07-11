@@ -107,7 +107,7 @@ Read the full design in [docs/architecture.md](./docs/architecture.md) and each 
 - [x] **v0.1** — `create-groot` published to npm (OIDC provenance), 5-platform binaries + checksum-verified installers live.
 - [x] **v0.2** — `groot init` with the full scaffold matrix: the resolve → preflight → generate → stitch → verify pipeline, interactive + fully non-interactive, `--dry-run --json`, real-generator E2E in CI.
 - [x] **v0.3** — `groot add` (grow an existing workspace, with occupancy rules and targeted rollback) and `groot doctor` (health checks with fixes).
-- [ ] **v0.4** — `init --preset`, stable `--json` everywhere, automated upstream-drift detection.
+- [x] **v0.4** — `init --preset`, stable `--json` everywhere, tested non-TTY guarantees, automated upstream-drift detection (weekly pin/doc watch + real-generator E2E cron).
 - [ ] **v1.0** — stability contract.
 
 Details in [docs/roadmap.md](./docs/roadmap.md).

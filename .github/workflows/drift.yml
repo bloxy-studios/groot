@@ -1,0 +1,41 @@
+name: Upstream drift watch
+
+# The pin & doc half of drift detection: re-checks every pinned generator
+# series, the Expo SDK template line, and the dependency ranges groot-authored
+# packages ship with against the npm registry, plus scaffold-flows.md's
+# "Last verified" age. Behavior drift (generator output changing under a pin)
+# is e2e.yml's Wednesday cron. Runbook: docs/maintainers.md#upstream-drift-watch.
+
+on:
+  schedule:
+    - cron: "13 6 * * 1" # Mondays 06:13 UTC — offset from e2e.yml's Wednesday cron
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Pin & doc drift check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # upserts the single `upstream-drift`-labeled issue
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      # The checker is dependency-free (bun builtins + workspace source
+      # imports), so no `bun install` is needed here.
+      - name: Self-test the checker
+        run: bun test scripts
+
+      - name: Check pins and docs against upstream
+        run: bun scripts/check-upstream-drift.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
