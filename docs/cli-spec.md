@@ -1,6 +1,6 @@
 # groot CLI specification
 
-> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` are implemented on main and release with v0.3.0. Changes to this document are semver-relevant.
+> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` shipped in v0.3; `init --preset` ships in v0.4. Changes to this document are semver-relevant.
 
 ## Invocation forms
 
@@ -25,6 +25,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | `--mobile <choice>` | `expo` \| `none` | prompt | Mobile app in `apps/mobile` |
 | `--api <choice>` | `elysia` \| `hono` \| `none` | prompt | API app in `apps/api` |
 | `--backend <choice>` | `convex` \| `none` | prompt | Backend in `packages/backend` |
+| `--preset <path>` | groot.json file or workspace dir | — | Selections source for slots not fixed by flags — see [Presets](#presets) |
 | `--yes`, `-y` | — | off | Accept defaults for all unanswered prompts |
 | `--dry-run` | — | off | Print the resolved plan; write nothing |
 | `--json` | — | off | With `--dry-run`: machine-readable plan on stdout |
@@ -38,6 +39,15 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 ### Defaults (`--yes` with no selection flags)
 
 `--web next --mobile none --api none --backend convex` — a Next.js app wired to a Convex backend: groot's flagship pairing.
+
+### Presets
+
+`--preset <path>` reads an existing `groot.json` — a file, or a workspace directory containing one — as the **selections source**: `groot init my-app --preset ../flagship` replicates the shape of the workspace that manifest describes.
+
+- Only the slot → framework shape is read. Workspace name, destination paths, ports, generator pins, `conventions`, and `createdWith` always come from the current CLI — a preset written by an older groot never pins stale generators.
+- Explicit slot flags win over the preset; slots absent from the preset resolve to `none`. With a target directory given, a preset run is fully non-interactive.
+- The preset is validated like any workspace manifest — unknown framework ids or manifest versions are rejected with exit 2.
+- A manifest that grew multiple scaffolds into one slot (via `groot add --path`) presets the **first** one per slot and warns about the rest — replicate them with `groot add --path` afterwards.
 
 ### Interactive flow
 
@@ -129,7 +139,7 @@ Written to the workspace root by `init`, updated by `add`. The manifest is groot
 
 groot treats scriptability as a first-class feature:
 
-1. Any run where **every slot is fixed by flags and `--yes` is present** must complete with zero prompts, or exit non-zero — it must never hang waiting for input.
+1. Any run where **every slot is fixed by flags (or a `--preset`) and `--yes` is present** must complete with zero prompts, or exit non-zero — it must never hang waiting for input.
 2. `--dry-run --json` is stable, versioned output (the manifest schema) — safe for agents to parse.
 3. Non-TTY environments (CI) behave as if `--verbose` were set: no spinners, plain line-based progress.
 4. Anything interactive that cannot be avoided (today: Convex login) is **never run by groot** — it is printed as a next step instead.

@@ -15,13 +15,13 @@
 
 ---
 
-> 🌳 **v0.2 — `groot init` is live.** One command plants a complete, installed, git-initialized workspace. Pre-1.0: `groot add` and `groot doctor` land in **v0.3** — follow the [roadmap](./docs/roadmap.md) and watch [releases](https://github.com/bloxy-studios/groot/releases).
+> 🌿 **v0.3 — grow and tend.** `groot init` plants a complete workspace, `groot add` grows another scaffold into it, and `groot doctor` keeps it healthy. Pre-1.0: `init --preset` ships in **v0.4** — follow the [roadmap](./docs/roadmap.md) and watch [releases](https://github.com/bloxy-studios/groot/releases).
 
 ## What is groot?
 
 groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) monorepo and grows it with the apps you pick** — a web app, a mobile app, an API, and a backend — in one command. Instead of shipping its own frozen templates, groot **orchestrates each framework's official generator** (`create-next-app`, `sv create`, `create-expo-app`, `create-hono`, …) and then **stitches the results into one coherent bun workspace**: shared config packages, workspace protocol dependencies, non-conflicting dev ports, a clean root `turbo.json`, and a single lockfile.
 
-| Slot        | Options at v0.2                          | Where it lands        |
+| Slot        | Options at v0.3                          | Where it lands        |
 | ----------- | ---------------------------------------- | --------------------- |
 | 🌐 Web      | **Next.js** · SvelteKit                  | `apps/web`            |
 | 📱 Mobile   | **Expo**                                 | `apps/mobile`         |
@@ -53,7 +53,7 @@ powershell -c "irm https://raw.githubusercontent.com/bloxy-studios/groot/main/in
 Then answer a few prompts:
 
 ```text
-🌱 groot v0.2.0 — plant a bun-first Turborepo and grow it.
+🌱 groot v0.3.0 — plant a bun-first Turborepo and grow it.
 
 ◆  Web app?      › Next.js
 ◆  Mobile app?   › Expo
@@ -79,11 +79,21 @@ bunx create-groot@latest init my-app \
   --web next --mobile expo --api elysia --backend convex --yes
 ```
 
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `groot init [dir]` | Plant a new workspace — interactive, or fully flag-driven (`--dry-run --json` for agents) |
+| `groot add <scaffold>` | Grow an existing workspace: `groot add hono`, `groot add sveltekit --path apps/marketing` |
+| `groot doctor` | Health checks with suggested fixes — ports, lockfiles, manifests, per-framework invariants |
+
+The full contract — every flag, exit code, and the `groot.json` manifest schema — lives in [docs/cli-spec.md](./docs/cli-spec.md).
+
 ## How it works
 
 1. **Generate** — groot runs each framework's *official* generator with pinned, non-interactive flags. No vendored templates, so scaffolds never rot behind upstream.
 2. **Stitch** — groot patches the output into monorepo shape: workspace globs, `@repo/*` package names, shared TypeScript config, deterministic dev ports, merged `.gitignore`, one root lockfile.
-3. **Verify** — a post-flight check (`groot doctor`) confirms the workspace installs, typechecks, and boots.
+3. **Verify** — structural checks and the root install prove the workspace coheres; `groot doctor` re-runs health checks on any groot workspace, any time, with suggested fixes.
 
 Read the full design in [docs/architecture.md](./docs/architecture.md) and each generator's verified flags in [docs/scaffold-flows.md](./docs/scaffold-flows.md).
 
@@ -96,7 +106,8 @@ Read the full design in [docs/architecture.md](./docs/architecture.md) and each 
 - [x] **Phase 0** — production-grade OSS repository: CI, CodeQL, OpenSSF Scorecard, release automation, signed provenance, this documentation.
 - [x] **v0.1** — `create-groot` published to npm (OIDC provenance), 5-platform binaries + checksum-verified installers live.
 - [x] **v0.2** — `groot init` with the full scaffold matrix: the resolve → preflight → generate → stitch → verify pipeline, interactive + fully non-interactive, `--dry-run --json`, real-generator E2E in CI.
-- [ ] **v0.3** — `groot add` and `groot doctor`.
+- [x] **v0.3** — `groot add` (grow an existing workspace, with occupancy rules and targeted rollback) and `groot doctor` (health checks with fixes).
+- [ ] **v0.4** — `init --preset`, stable `--json` everywhere, automated upstream-drift detection.
 - [ ] **v1.0** — stability contract.
 
 Details in [docs/roadmap.md](./docs/roadmap.md).

@@ -30,14 +30,15 @@ The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](.
 - [x] `groot.json` manifest + published JSON schema.
 - [x] E2E scaffold tests in CI running the real generators (also on a weekly cron as upstream drift detection — an early slice of v0.4).
 
-## v0.3 — Grow and tend 🌿
+## v0.3 — Grow and tend 🌿 ✅ (2026-07-11)
 
-- [ ] `groot add <scaffold>` — grow an existing workspace.
-- [ ] `groot doctor` — workspace health checks with fixes.
-- [ ] Preset support: `groot init --preset <name>` reading a shared groot.json.
+- [x] `groot add <scaffold>` — grow an existing workspace.
+- [x] `groot doctor` — workspace health checks with fixes.
+- Preset support → moved to v0.4 (v0.3.0 was released before it landed).
 
-## v0.4 — Agent & CI hardening 🤖
+## v0.4 — Presets, agents & CI hardening 🤖
 
+- [x] Preset support: `groot init --preset <path>` reading a shared groot.json as the selections source.
 - [ ] Stable machine-readable output across all commands (`--json` everywhere).
 - [ ] Non-TTY behavior guarantees; scaffold-in-CI documentation.
 - [ ] Generator-version pinning matrix with automated upstream-drift detection (scheduled job re-verifies scaffold-flows.md facts).
