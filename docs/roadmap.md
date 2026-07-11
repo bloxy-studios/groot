@@ -45,7 +45,7 @@ The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](.
 
 ## v1.0 — Stability contract 🏛️
 
-- [ ] Semver stability for CLI flags, exit codes, `groot.json` schema.
+- [x] Semver stability for CLI flags, exit codes, `groot.json` schema — [stability.md](./stability.md) defines the covered surface and change rules, tripwired by a contract snapshot test; the guarantee becomes binding at v1.0.0.
 - [ ] Docs site (`apps/docs` — dogfooding a groot-style workspace).
 - [ ] Signed binaries (macOS notarization; SBOM + attestations on releases).
 

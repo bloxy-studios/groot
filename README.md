@@ -87,7 +87,7 @@ bunx create-groot@latest init my-app \
 | `groot add <scaffold>` | Grow an existing workspace: `groot add hono`, `groot add sveltekit --path apps/marketing` |
 | `groot doctor` | Health checks with suggested fixes — ports, lockfiles, manifests, per-framework invariants |
 
-The full contract — every flag, exit code, and the `groot.json` manifest schema — lives in [docs/cli-spec.md](./docs/cli-spec.md). Running groot in CI or from an agent? Recipes in [docs/ci.md](./docs/ci.md).
+The full contract — every flag, exit code, and the `groot.json` manifest schema — lives in [docs/cli-spec.md](./docs/cli-spec.md); [docs/stability.md](./docs/stability.md) defines what's covered by semver (binding at v1.0). Running groot in CI or from an agent? Recipes in [docs/ci.md](./docs/ci.md).
 
 ## How it works
 
