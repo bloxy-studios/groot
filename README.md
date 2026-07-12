@@ -21,12 +21,13 @@
 
 ## What is groot?
 
-groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) monorepo and grows it with the apps you pick** — a web app, a mobile app, an API, and a backend — in one command. Instead of shipping its own frozen templates, groot **orchestrates each framework's official generator** (`create-next-app`, `sv create`, `create-expo-app`, `create-hono`, …) and then **stitches the results into one coherent bun workspace**: shared config packages, workspace protocol dependencies, non-conflicting dev ports, a clean root `turbo.json`, and a single lockfile.
+groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) monorepo and grows it with the apps you pick** — a web app, a mobile app, a desktop app, an API, and a backend — in one command. Instead of shipping its own frozen templates, groot **orchestrates each framework's official generator** (`create-next-app`, `sv create`, `create-expo-app`, `create-tauri-app`, `create-hono`, …) and then **stitches the results into one coherent bun workspace**: shared config packages, workspace protocol dependencies, non-conflicting dev ports, a clean root `turbo.json`, and a single lockfile.
 
-| Slot        | Options at v1.0                          | Where it lands        |
+| Slot        | Options at v1.1                          | Where it lands        |
 | ----------- | ---------------------------------------- | --------------------- |
 | 🌐 Web      | **Next.js** · SvelteKit                  | `apps/web`            |
 | 📱 Mobile   | **Expo**                                 | `apps/mobile`         |
+| 🖥️ Desktop | **Tauri**                                | `apps/desktop`        |
 | ⚡ API      | **Elysia** · Hono                        | `apps/api`            |
 | 🗄️ Backend | **Convex** (default)                     | `packages/backend`    |
 
@@ -59,6 +60,7 @@ Then answer a few prompts:
 
 ◆  Web app?      › Next.js
 ◆  Mobile app?   › Expo
+◆  Desktop app?  › Skip
 ◆  API?          › Elysia
 ◆  Backend?      › Convex
 

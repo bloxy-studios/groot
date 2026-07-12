@@ -37,7 +37,13 @@ describe("exit codes (normative — docs/cli-spec.md)", () => {
 describe("validateSelections", () => {
   test("accepts valid choices and none", () => {
     expect(() =>
-      validateSelections({ web: "sveltekit", mobile: "none", api: "hono", backend: "convex" }),
+      validateSelections({
+        web: "sveltekit",
+        mobile: "none",
+        desktop: "none",
+        api: "hono",
+        backend: "convex",
+      }),
     ).not.toThrow();
   });
 
@@ -61,14 +67,19 @@ describe("validateSelections", () => {
 
 describe("selection resolution", () => {
   test("undecidedSlots lists only missing slots in order", () => {
-    expect(undecidedSlots({ web: "next", backend: "convex" })).toEqual(["mobile", "api"]);
-    expect(undecidedSlots({})).toEqual(["web", "mobile", "api", "backend"]);
+    expect(undecidedSlots({ web: "next", backend: "convex" })).toEqual([
+      "mobile",
+      "desktop",
+      "api",
+    ]);
+    expect(undecidedSlots({})).toEqual(["web", "mobile", "desktop", "api", "backend"]);
   });
 
   test("applyYesDefaults fills gaps without overriding explicit picks", () => {
     expect(applyYesDefaults({ api: "elysia" })).toEqual({
       web: "next",
       mobile: "none",
+      desktop: "none",
       api: "elysia",
       backend: "convex",
     });
@@ -80,6 +91,7 @@ describe("buildScaffolds", () => {
     const scaffolds = buildScaffolds({
       web: "next",
       mobile: "none",
+      desktop: "none",
       api: "elysia",
       backend: "convex",
     });
@@ -91,6 +103,7 @@ describe("buildScaffolds", () => {
     const scaffolds = buildScaffolds({
       web: "sveltekit",
       mobile: "expo",
+      desktop: "none",
       api: "none",
       backend: "none",
     });
@@ -112,7 +125,7 @@ describe("plan → manifest", () => {
     name: "my-app",
     targetDir: "/tmp/my-app",
     cliVersion: "0.1.0",
-    selections: { web: "next", mobile: "none", api: "none", backend: "convex" },
+    selections: { web: "next", mobile: "none", desktop: "none", api: "none", backend: "convex" },
     options: OPTIONS,
   });
 
@@ -146,7 +159,7 @@ describe("describePlan", () => {
       name: "demo",
       targetDir: "/tmp/demo",
       cliVersion: "0.1.0",
-      selections: { web: "next", mobile: "expo", api: "hono", backend: "convex" },
+      selections: { web: "next", mobile: "expo", desktop: "none", api: "hono", backend: "convex" },
       options: { ...OPTIONS, install: false },
     });
     const text = describePlan(plan);

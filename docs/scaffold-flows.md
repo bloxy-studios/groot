@@ -14,6 +14,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | Next.js | `bunx create-next-app@16 … --disable-git --skip-install` | skips inside existing repo; forced off anyway | yes → suppressed | **refuses** ("could conflict") |
 | SvelteKit | `bunx sv@0.16 create … --no-install --no-dir-check` | never | only with `--install` | refuses unless `--no-dir-check` |
 | Expo | `bunx create-expo-app@4 … --no-install` | no flag exists (see caveats) | yes → suppressed | (unverified) |
+| Tauri | `bunx create-tauri-app@4 <name> --template react-ts --manager bun --identifier <id> --yes` | never | never | refuses unless `--force` |
 | Elysia | *(none — groot writes files directly)* | — | — | — |
 | Hono | `bunx create-hono@0.19 … --template bun` | never | only with `-i` | **interactive confirm, no bypass** → must target fresh dir |
 | Convex | *(files written directly, incl. vendored `_generated` stubs)* | — | — | — |
@@ -127,6 +128,19 @@ packages/backend/
 - The one unavoidable interactive step — `bunx convex dev --until-success` (login, deployment provisioning, `.env.local`) — is **never run by groot**; it's printed as the first "next step".
 - Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive `NEXT_PUBLIC_CONVEX_URL` / `EXPO_PUBLIC_CONVEX_URL` via `.env` plumbing.
 - Sources: <https://docs.convex.dev/cli/reference/codegen>, <https://docs.convex.dev/cli>, <https://github.com/get-convex/templates> (stub strategy), <https://github.com/get-convex/turbo-expo-nextjs-clerk-convex-monorepo>, <https://docs.convex.dev/production/project-configuration>.
+
+## 8. Desktop: Tauri — `create-tauri-app`
+
+```sh
+bunx create-tauri-app@4 desktop --template react-ts --manager bun --identifier com.<workspace>.desktop --yes
+```
+
+- Flags: `-t/--template` (`react-ts` pinned — TS + React frontend), `-m/--manager` (`bun` is a first-class option), `--identifier` (reverse-domain bundle id; the CLI warns on its `com.tauri.dev` default, so groot derives one from the workspace name), `-y/--yes` (skip remaining prompts), `-f/--force`, `--tauri-version`. Never installs, never git-inits.
+- ⚠️ **The positional is a NAME, not a path** — the generator derives the app and crate names from it. groot therefore spawns from the scaffold's *parent* directory (`apps/`) with the bare directory name, instead of passing `apps/desktop` from the workspace root.
+- **Port 1420 is the template's own contract**: the generated `vite.config` pins `server.port: 1420` with `strictPort: true`, and `src-tauri/tauri.conf.json` points `build.devUrl` at the same port. Unique in groot's matrix → kept, no rewrite.
+- **Rust is a dev-time dependency, not a scaffold-time one**: generation is pure npm; `bun install` works without cargo. `tauri dev`/`tauri build` need Rust (plus webkit2gtk on Linux) — groot prints a rustup next-step and `doctor` warns (never fails) when cargo is absent.
+- Wrap-the-existing-web-app mode (`bunx @tauri-apps/cli init --ci` pointed at `apps/web`) is a distinct, officially supported shape — deferred to the add-on engine ([expansion.md](./expansion.md#desktop-slot-candidates-new-slot), [roadmap v1.4](./roadmap.md)).
+- Sources: <https://v2.tauri.app/start/create-project/>, <https://v2.tauri.app/reference/cli/>, <https://github.com/tauri-apps/create-tauri-app>.
 
 ## Stitching reference
 

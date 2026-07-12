@@ -13,9 +13,9 @@ describe("banner", () => {
 });
 
 describe("scaffold matrix", () => {
-  test("covers all four slots", () => {
+  test("covers all five slots", () => {
     const slots = SCAFFOLD_SLOTS.map((s) => s.slot);
-    expect(slots).toEqual(["web", "mobile", "api", "backend"]);
+    expect(slots).toEqual(["web", "mobile", "desktop", "api", "backend"]);
   });
 
   test("summary mentions every option", () => {

@@ -96,6 +96,11 @@ function printNextSteps(plan: Plan, scaffold: PlannedScaffold): void {
       `bun run --cwd ${scaffold.path} setup   # Convex login + dev deployment (interactive)`,
     );
   }
+  if (scaffold.framework === "tauri") {
+    steps.push(
+      `bun run --cwd ${scaffold.path} tauri dev   # needs Rust — install via https://rustup.rs`,
+    );
+  }
   steps.push("bun dev");
   steps.forEach((text, index) => {
     console.log(`  ${index + 1}. ${pc.cyan(text)}`);
@@ -111,7 +116,7 @@ export const add = defineCommand({
     framework: {
       type: "positional",
       required: true,
-      description: "Scaffold to grow: next | sveltekit | expo | elysia | hono | convex",
+      description: "Scaffold to grow: next | sveltekit | expo | tauri | elysia | hono | convex",
     },
     path: {
       type: "string",

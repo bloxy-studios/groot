@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AdapterContext } from "../engine/adapter.ts";
 import { buildPlan } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
@@ -9,13 +12,14 @@ import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
+import { identifierSegment, tauriAdapter } from "./tauri.ts";
 import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "./trunk.ts";
 
 const PLAN: Plan = buildPlan({
   name: "demo",
   targetDir: "/work/demo",
   cliVersion: "0.2.0",
-  selections: { web: "next", mobile: "expo", api: "elysia", backend: "convex" },
+  selections: { web: "next", mobile: "expo", desktop: "none", api: "elysia", backend: "convex" },
   options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
 });
 
@@ -36,6 +40,7 @@ describe("registry", () => {
       "hono",
       "next",
       "sveltekit",
+      "tauri",
     ]);
     for (const [id, adapter] of Object.entries(ADAPTERS)) {
       expect(adapter.id).toBe(id as keyof typeof ADAPTERS);
@@ -142,6 +147,78 @@ describe("expo (scaffold-flows.md#4)", () => {
     expect(cmd?.argv).toContain("default@sdk-57");
     expect(cmd?.argv).toContain("--no-install");
     expect(cmd?.argv).toContain("--yes");
+  });
+});
+
+describe("tauri (scaffold-flows.md#8)", () => {
+  const tauriPlan: Plan = buildPlan({
+    name: "My Demo_App",
+    targetDir: "/work/my-demo",
+    cliVersion: "1.1.0",
+    selections: { web: "none", mobile: "none", desktop: "tauri", api: "none", backend: "none" },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = tauriPlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the tauri scaffold in the plan");
+
+  test("runs create-tauri-app with a bare name from the scaffold's parent dir", () => {
+    const cmd = tauriAdapter.command({ plan: tauriPlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "create-tauri-app@4",
+      "desktop",
+      "--template",
+      "react-ts",
+      "--manager",
+      "bun",
+      "--identifier",
+      "com.my-demo-app.desktop",
+      "--yes",
+    ]);
+    // The positional must be a bare directory name — the generator derives app
+    // and crate names from it — so the spawn runs from the scaffold's parent.
+    expect(cmd?.cwd).toBe("/work/my-demo/apps");
+  });
+
+  test("identifierSegment builds valid reverse-domain segments", () => {
+    expect(identifierSegment("My Demo_App")).toBe("my-demo-app");
+    expect(identifierSegment("desktop")).toBe("desktop");
+    expect(identifierSegment("--weird--")).toBe("weird");
+    expect(identifierSegment("日本語")).toBe("app");
+  });
+
+  test("doctor: healthy scaffold passes config, port, and vite checks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-tauri-"));
+    await mkdir(join(root, "apps/desktop/src-tauri"), { recursive: true });
+    await writeFile(
+      join(root, "apps/desktop/src-tauri/tauri.conf.json"),
+      JSON.stringify({ build: { devUrl: "http://localhost:1420" } }),
+    );
+    await writeFile(join(root, "apps/desktop/vite.config.ts"), "export default {};\n");
+    const checks = await tauriAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    const byName = new Map(checks?.map((check) => [check.name, check]));
+    expect(byName.get("apps/desktop tauri config")?.status).toBe("pass");
+    expect(byName.get("apps/desktop dev port")?.status).toBe("pass");
+    expect(byName.get("apps/desktop vite config")?.status).toBe("pass");
+    // Environment-dependent: pass with cargo installed, warn without — never fail.
+    expect(["pass", "warn"]).toContain(byName.get("apps/desktop rust toolchain")?.status ?? "");
+  });
+
+  test("doctor: missing conf fails; drifted devUrl port warns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-tauri-"));
+    await mkdir(join(root, "apps/desktop"), { recursive: true });
+    let checks = await tauriAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/desktop tauri config")?.status).toBe("fail");
+
+    await mkdir(join(root, "apps/desktop/src-tauri"), { recursive: true });
+    await writeFile(
+      join(root, "apps/desktop/src-tauri/tauri.conf.json"),
+      JSON.stringify({ build: { devUrl: "http://localhost:5173" } }),
+    );
+    checks = await tauriAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    const port = checks?.find((c) => c.name === "apps/desktop dev port");
+    expect(port?.status).toBe("warn");
+    expect(port?.detail).toContain(":1420");
   });
 });
 

@@ -40,10 +40,10 @@
         "required": ["slot", "framework", "path", "generator", "port"],
         "properties": {
           "slot": {
-            "enum": ["web", "mobile", "api", "backend"]
+            "enum": ["web", "mobile", "desktop", "api", "backend"]
           },
           "framework": {
-            "enum": ["next", "sveltekit", "expo", "elysia", "hono", "convex"]
+            "enum": ["next", "sveltekit", "expo", "tauri", "elysia", "hono", "convex"]
           },
           "path": {
             "description": "Workspace-relative destination of the scaffold.",

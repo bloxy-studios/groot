@@ -39,7 +39,7 @@ Two deliberate exceptions where groot writes files directly instead of shelling 
 
 ### 1. Resolve
 
-Merge CLI flags, interactive prompt answers (clack), and defaults into an immutable **plan**: the target directory, the selected scaffold for each slot (web / mobile / api / backend), assigned ports, and package names. The plan is serializable — `--dry-run --json` prints it for agents and CI.
+Merge CLI flags, interactive prompt answers (clack), and defaults into an immutable **plan**: the target directory, the selected scaffold for each slot (web / mobile / desktop / api / backend), assigned ports, and package names. The plan is serializable — `--dry-run --json` prints it for agents and CI.
 
 ### 2. Preflight
 
@@ -85,6 +85,7 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `apps/web` (SvelteKit) | 5173 | Vite default (kept) |
 | `apps/api` (Elysia / Hono) | 3001 | Written into source (`.listen(3001)` / `export default { port: 3001, fetch }`) — these templates have no port flag |
 | `apps/mobile` (Expo / Metro) | 8081 | Metro default (kept) |
+| `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |
 | `packages/backend` (Convex) | — | Cloud dev deployment; no local port |
 
 ## Workspace conventions (what groot outputs)

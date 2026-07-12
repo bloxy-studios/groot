@@ -75,6 +75,7 @@ describe("loadPreset", () => {
     expect(preset.selections).toEqual({
       web: "next",
       mobile: "none",
+      desktop: "none",
       api: "elysia",
       backend: "convex",
     });
@@ -93,7 +94,7 @@ describe("loadPreset", () => {
   test("an empty scaffold list means every slot is none (bare trunk)", async () => {
     const { file } = await presetFile([]);
     const preset = await loadPreset(file);
-    expect(Object.values(preset.selections)).toEqual(["none", "none", "none", "none"]);
+    expect(Object.values(preset.selections)).toEqual(["none", "none", "none", "none", "none"]);
   });
 
   test("multiple scaffolds in one slot: first wins, the rest become a warning", async () => {
@@ -143,6 +144,7 @@ describe("applyPresetSelections", () => {
   const preset: Record<Slot, string> = {
     web: "next",
     mobile: "none",
+    desktop: "none",
     api: "elysia",
     backend: "convex",
   };
@@ -156,6 +158,7 @@ describe("applyPresetSelections", () => {
     expect(merged).toEqual({
       web: "sveltekit",
       mobile: "none",
+      desktop: "none",
       api: "elysia",
       backend: "none",
     });
