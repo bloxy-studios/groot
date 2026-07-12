@@ -81,7 +81,8 @@ export const tanstackStartAdapter: ScaffoldAdapter = {
           scripts?: Record<string, string>;
         };
         const dev = pkg.scripts?.dev ?? "";
-        const matches = dev.includes(`--port ${ctx.scaffold.port}`);
+        // Whole-token match: a substring test would accept --port 30001 for 3000.
+        const matches = new RegExp(`--port\\s+${ctx.scaffold.port}(?!\\d)`).test(dev);
         checks.push({
           name,
           status: matches ? "pass" : "warn",

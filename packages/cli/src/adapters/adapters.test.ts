@@ -202,6 +202,14 @@ describe("tanstack-start (scaffold-flows.md#10)", () => {
     expect(port?.status).toBe("warn");
     expect(port?.detail).toContain(":3000");
 
+    // The substring trap: "--port 30001" contains "--port 3000" but is NOT it.
+    await writeFile(
+      join(root, "apps/web/package.json"),
+      JSON.stringify({ name: "web", scripts: { dev: "vite dev --port 30001" } }),
+    );
+    checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web dev port")?.status).toBe("warn");
+
     const bare = await mkdtemp(join(tmpdir(), "groot-tanstack-"));
     await mkdir(join(bare, "apps/web"), { recursive: true });
     checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: bare, scaffold });
