@@ -21,7 +21,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | Flag | Values | Default | Notes |
 | --- | --- | --- | --- |
 | `--name <name>` | string | dir basename | Workspace/root package name |
-| `--web <choice>` | `next` \| `sveltekit` \| `tanstack-start` \| `none` | prompt | Web app in `apps/web` |
+| `--web <choice>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `none` | prompt | Web app in `apps/web` |
 | `--mobile <choice>` | `expo` \| `none` | prompt | Mobile app in `apps/mobile` |
 | `--desktop <choice>` | `tauri` \| `electron` \| `none` | prompt | Desktop app in `apps/desktop` (v1.1) |
 | `--api <choice>` | `elysia` \| `hono` \| `none` | prompt | API app in `apps/api` |
@@ -81,7 +81,7 @@ Runs the same grow → stitch → verify stages as `init` for just the new scaff
 
 | Flag | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `<scaffold>` | `next` \| `sveltekit` \| `tanstack-start` \| `expo` \| `tauri` \| `electron` \| `elysia` \| `hono` \| `convex` | required | Positional: the scaffold to grow |
+| `<scaffold>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `expo` \| `tauri` \| `electron` \| `elysia` \| `hono` \| `convex` | required | Positional: the scaffold to grow |
 | `--path <dir>` | workspace-relative | the framework's slot path | Fresh directory (absent or empty), a direct child of `apps/` (web/mobile/api) or `packages/` (backend), not claimed by `groot.json` |
 | `--no-install` | — | install on | Skip the root `bun install` after growing |
 | `--keep-failed` | — | off | Keep the new scaffold directory if its generator fails |

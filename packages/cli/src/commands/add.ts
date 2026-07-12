@@ -117,7 +117,7 @@ export const add = defineCommand({
       type: "positional",
       required: true,
       description:
-        "Scaffold to grow: next | sveltekit | tanstack-start | expo | tauri | electron | elysia | hono | convex",
+        "Scaffold to grow: next | sveltekit | tanstack-start | astro | expo | tauri | electron | elysia | hono | convex",
     },
     path: {
       type: "string",

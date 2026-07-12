@@ -4,6 +4,7 @@
  */
 import type { ScaffoldAdapter } from "../engine/adapter.ts";
 import type { FrameworkId } from "../engine/types.ts";
+import { astroAdapter } from "./astro.ts";
 import { convexAdapter } from "./convex.ts";
 import { electronAdapter } from "./electron.ts";
 import { elysiaAdapter } from "./elysia.ts";
@@ -18,6 +19,7 @@ export const ADAPTERS: Record<FrameworkId, ScaffoldAdapter> = {
   next: nextAdapter,
   sveltekit: sveltekitAdapter,
   "tanstack-start": tanstackStartAdapter,
+  astro: astroAdapter,
   expo: expoAdapter,
   tauri: tauriAdapter,
   electron: electronAdapter,

@@ -12,6 +12,7 @@ export type FrameworkId =
   | "next"
   | "sveltekit"
   | "tanstack-start"
+  | "astro"
   | "expo"
   | "tauri"
   | "electron"

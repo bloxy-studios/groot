@@ -215,9 +215,34 @@ describe.skipIf(!e2e)("full pipeline (real generators — sveltekit + hono + add
         "api",
         "web",
         "web",
-      ]);
+      ]); // astro joins below → 4
 
-      // Two web scaffolds, unique ports, healthy workspace.
+      // And a THIRD web scaffold: the REAL create-astro at apps/blog.
+      // sveltekit(5173) + hono(3001) + tanstack(3000) + astro(4321) — all unique.
+      const loaded2 = await loadManifest(root);
+      const astroRes = await resolveAddScaffold(
+        loaded2.manifest,
+        loaded2.workspaceRoot,
+        "astro",
+        "apps/blog",
+      );
+      expect(astroRes.warnings).toEqual([]);
+      const astroPlan = buildAddPlan(
+        loaded2,
+        astroRes.scaffold,
+        await readRootPackageName(loaded2.workspaceRoot),
+        { install: false, keepFailed: false, verbose: false },
+      );
+      await executeAdd(astroPlan, astroRes.scaffold, { verbose: false });
+
+      expect(existsSync(join(root, "apps/blog/astro.config.mjs"))).toBe(true);
+      expect(existsSync(join(root, "apps/blog/.git"))).toBe(false);
+      const blogPkg = JSON.parse(await readFile(join(root, "apps/blog/package.json"), "utf8"));
+      expect(blogPkg.name).toBe("blog");
+
+      // Three web scaffolds, unique ports, healthy workspace.
+      const finalManifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
+      expect(finalManifest.scaffolds).toHaveLength(4);
       const checks = await runDoctor(await loadManifest(root));
       const failures = checks.filter((check) => check.status === "fail");
       expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);

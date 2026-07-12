@@ -107,6 +107,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
   test("allFrameworkIds lists every choice and never 'none'", () => {
     const ids = allFrameworkIds();
     expect(ids.sort()).toEqual([
+      "astro",
       "convex",
       "electron",
       "elysia",
@@ -160,7 +161,7 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       'Unknown scaffold "angular"',
     );
     expect(error.hint).toContain(
-      "next | sveltekit | tanstack-start | expo | tauri | electron | elysia | hono | convex",
+      "next | sveltekit | tanstack-start | astro | expo | tauri | electron | elysia | hono | convex",
     );
   });
 
