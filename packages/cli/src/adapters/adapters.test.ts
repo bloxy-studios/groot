@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { AdapterContext } from "../engine/adapter.ts";
 import { buildPlan } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
+import { astroAdapter } from "./astro.ts";
 import { convexAdapter } from "./convex.ts";
 import { electronAdapter } from "./electron.ts";
 import { elysiaAdapter } from "./elysia.ts";
@@ -36,6 +37,7 @@ function ctxFor(
 describe("registry", () => {
   test("covers every framework id and agrees on slot", () => {
     expect(Object.keys(ADAPTERS).sort()).toEqual([
+      "astro",
       "convex",
       "electron",
       "elysia",
@@ -214,6 +216,54 @@ describe("tanstack-start (scaffold-flows.md#10)", () => {
     await mkdir(join(bare, "apps/web"), { recursive: true });
     checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: bare, scaffold });
     expect(checks?.find((c) => c.name === "apps/web dev port")?.status).toBe("fail");
+  });
+});
+
+describe("astro (scaffold-flows.md#11)", () => {
+  const astroPlan: Plan = buildPlan({
+    name: "demo",
+    targetDir: "/work/demo",
+    cliVersion: "1.4.0",
+    selections: { web: "astro", mobile: "none", desktop: "none", api: "none", backend: "none" },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = astroPlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the astro scaffold in the plan");
+
+  test("runs create-astro fully silenced, name-not-path, from the parent dir", () => {
+    const cmd = astroAdapter.command({ plan: astroPlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "create-astro@5",
+      "web",
+      "--template",
+      "minimal",
+      "--no-install",
+      "--no-git",
+      "--no-ai",
+      "--skip-houston",
+      "--yes",
+    ]);
+    // Bare name: create-astro derives the package name from the positional AND
+    // silently redirects non-empty targets to a random dir under --yes — the
+    // generate stage's fresh-destination guarantee is load-bearing here.
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("declares the unique web port 4321 (astro dev's built-in default)", () => {
+    expect(scaffold.port).toBe(4321);
+  });
+
+  test("doctor: config presence passes and warns when missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-astro-"));
+    await mkdir(join(root, "apps/web"), { recursive: true });
+    let checks = await astroAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web astro config")?.status).toBe("warn");
+
+    await writeFile(join(root, "apps/web/astro.config.mjs"), "export default {};\n");
+    checks = await astroAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web astro config")?.status).toBe("pass");
   });
 });
 

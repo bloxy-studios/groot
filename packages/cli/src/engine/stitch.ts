@@ -131,6 +131,7 @@ const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
   next: "NEXT_PUBLIC_CONVEX_URL=",
   sveltekit: "PUBLIC_CONVEX_URL=",
   "tanstack-start": "VITE_CONVEX_URL=",
+  astro: "PUBLIC_CONVEX_URL=", // import.meta.env.PUBLIC_* — Astro's client prefix
 };
 
 /**
@@ -204,7 +205,8 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
     frameworks.has("elysia") ||
     frameworks.has("hono") ||
     frameworks.has("tauri") ||
-    frameworks.has("tanstack-start")
+    frameworks.has("tanstack-start") ||
+    frameworks.has("astro")
   ) {
     outputs.add("dist/**");
   }

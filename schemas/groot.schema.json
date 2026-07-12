@@ -47,6 +47,7 @@
               "next",
               "sveltekit",
               "tanstack-start",
+              "astro",
               "expo",
               "tauri",
               "electron",

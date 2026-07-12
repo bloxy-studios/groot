@@ -35,6 +35,8 @@ export const MATRIX: Record<Slot, SlotSpec> = {
         port: 3000,
         generator: "@tanstack/cli@0.69",
       },
+      // 4321 is astro dev's built-in default — the only unique web port.
+      { id: "astro", label: "Astro", path: "apps/web", port: 4321, generator: "create-astro@5" },
     ],
   },
   mobile: {
