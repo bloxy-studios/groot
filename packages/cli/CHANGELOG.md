@@ -1,5 +1,11 @@
 # create-groot
 
+## 1.6.0
+
+### Minor Changes
+
+- [#66](https://github.com/bloxy-studios/groot/pull/66) [`b82035a`](https://github.com/bloxy-studios/groot/commit/b82035af40ca8aadb01f768a6b37d9dec9fd045e) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - The web wave completes: Nuxt and Vite join the web slot, bringing it to seven choices (Next.js, SvelteKit, TanStack Start, Astro, React Router, Nuxt, Vite). Nuxt rides the official `create-nuxt@3` with every non-interactive-required arg passed explicitly (the CLI enforces dir + template + packageManager + gitInit in non-TTY shells — verified in source), template `minimal`, port 3000, `NUXT_PUBLIC_CONVEX_URL` env plumbing, and `.output/` turbo-cached. Vite rides `create-vite@9` with the `react-ts` template pinned, `--no-interactive --no-immediate` (9.x's immediate mode would install and start dev), port 5173, and `VITE_CONVEX_URL`. Both get doctor config checks. Schema framework enum grows `nuxt` and `vite`; manifest stays version 1.
+
 ## 1.5.0
 
 ### Minor Changes
