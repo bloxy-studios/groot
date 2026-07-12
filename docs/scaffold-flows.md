@@ -16,6 +16,8 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | TanStack Start | `bunx @tanstack/cli@0.69 create <name> --framework React --package-manager bun --no-git --no-install --no-examples --no-toolchain --no-intent --yes` | `--no-git` | `--no-install` | refuses unless `--force` |
 | Astro | `bunx create-astro@5 <name> --template minimal --no-install --no-git --no-ai --skip-houston --yes` | `--no-git` | `--no-install` | ⚠️ silently redirects to a random dir under `--yes` (see §11) |
 | React Router | `bunx create-react-router@8 <name> --package-manager bun --no-git-init --no-install --no-agent-skills --yes` | `--no-git-init` | `--no-install` | hard-fails on collisions without `--overwrite` |
+| Nuxt | `bunx create-nuxt@3 <name> --template minimal --packageManager bun --no-gitInit --no-install --no-modules` | `--no-gitInit` | `--no-install` | `--force` to override |
+| Vite | `bunx create-vite@9 <name> --template react-ts --no-interactive --no-immediate` | never | `--no-immediate` | `--overwrite` to clear |
 | Expo | `bunx create-expo-app@4 … --no-install` | no flag exists (see caveats) | yes → suppressed | (unverified) |
 | Tauri | `bunx create-tauri-app@4 <name> --template react-ts --manager bun --identifier <id> --yes` | never | never | refuses unless `--force` |
 | Electron | `bunx @quick-start/create-electron@1 <name> --template react-ts --skip` | never | never | overwrite prompt nulled by `--skip` |
@@ -130,7 +132,7 @@ packages/backend/
 - ⚠️ **The vendored `convex/tsconfig.json` declares `"types": ["node"]`** — the generated package.json must therefore carry `@types/node` (pin tracks the upstream template), or `convex dev`'s built-in typecheck fails with TS2688. Caught in a live v0.2.0 run; the E2E now typechecks scaffolded packages, not just installs them.
 - ⚠️ **Known upstream quirk (verified 2026-07-10, cosmetic)**: `convex dev`'s optional "Set up Convex AI files?" step installs agent skills via `npx`, which trips npm's `devEngines` guard inside the bun-declared workspace (`EBADDEVENGINES: required { name: 'bun' }`). The guard is working as intended; Convex prints a manual retry command and continues — deployment provisioning and `.env.local` are unaffected.
 - The one unavoidable interactive step — `bunx convex dev --until-success` (login, deployment provisioning, `.env.local`) — is **never run by groot**; it's printed as the first "next step".
-- Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive the Convex URL via `.env` plumbing, named per framework: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router), `EXPO_PUBLIC_CONVEX_URL` (Expo).
+- Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive the Convex URL via `.env` plumbing, named per framework: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router, Vite), `NUXT_PUBLIC_CONVEX_URL` (Nuxt), `EXPO_PUBLIC_CONVEX_URL` (Expo).
 - Sources: <https://docs.convex.dev/cli/reference/codegen>, <https://docs.convex.dev/cli>, <https://github.com/get-convex/templates> (stub strategy), <https://github.com/get-convex/turbo-expo-nextjs-clerk-convex-monorepo>, <https://docs.convex.dev/production/project-configuration>.
 
 ## 8. Desktop: Tauri — `create-tauri-app`
@@ -202,6 +204,33 @@ bunx create-react-router@8 web --package-manager bun --no-git-init --no-install 
 - **Port 5173** is the Vite default (no dev-script flag, no config entry) — shared with SvelteKit; same-slot alternatives share ports (the elysia/hono precedent), and `add --path` coexistence rides the collision warning.
 - Build: `react-router build` → `build/` (client + server; the template's serve script points at `build/server/index.js`) — added to turbo's outputs. Typecheck: `react-router typegen && tsc`.
 - Sources: <https://reactrouter.com/start/framework/installation>, <https://www.npmjs.com/package/create-react-router> (dist/cli.js option table), <https://github.com/remix-run/react-router-templates/tree/main/default>.
+
+## 13. Web: Nuxt — `create-nuxt`
+
+```sh
+bunx create-nuxt@3 web --template minimal --packageManager bun --no-gitInit --no-install --no-modules
+```
+
+- **Flags (verified 2026-07-12 against the published 3.36.1 source — citty args)**: positional `dir`, `-t/--template`, `--packageManager <npm|pnpm|yarn|bun|deno|aube>`, `--gitInit` (boolean → `--no-gitInit` via citty negation), `--install` (default true → `--no-install`), `-M/--modules` (string, `--no-modules` skips the prompt), `-f/--force`, `--offline`, `--preferOffline`, `--shell`, `--nightly`, `--logLevel`.
+- ⚠️ **Non-interactive completeness is ENFORCED (verified in source)**: `nonInteractiveRequiredArgs = [dir, template, packageManager, gitInit]` — in a non-TTY shell, any of the four missing exits 2 with a usage report. groot passes all four explicitly; there is no `--yes`.
+- The CLI's default template is `minimal`, fetched via giget from the **nuxt/starter templates registry** (raw.githubusercontent.com — network to GitHub at scaffold time). Package is `create-nuxt` 3.x even though Nuxt itself is v4.
+- The template ships `postinstall: nuxt prepare` — it runs during the root `bun install` (workspace-member scripts always run under bun; this is not a blocked dependency lifecycle script).
+- **Port 3000** is `nuxt dev`'s built-in default — shared with Next/TanStack per the same-slot rule.
+- Build: `nuxt build` → `.output/` (Nitro) — added to turbo's outputs. Convex env: `NUXT_PUBLIC_CONVEX_URL` (runtimeConfig.public via `NUXT_PUBLIC_*`).
+- Sources: <https://nuxt.com/docs/api/commands/init>, <https://www.npmjs.com/package/create-nuxt> (dist/index.mjs citty args + nonInteractiveRequiredArgs), <https://github.com/nuxt/starter>.
+
+## 14. Web: Vite — `create-vite`
+
+```sh
+bunx create-vite@9 web --template react-ts --no-interactive --no-immediate
+```
+
+- **Flags (verified 2026-07-12 against the published 9.1.1 bundle)**: `-t/--template`, `--interactive/--no-interactive` (force mode), `-i/--immediate/--no-immediate` (⚠️ 9.x's `--immediate` installs dependencies AND starts the dev server — groot passes `--no-immediate` explicitly), `--eslint/--no-eslint` (React templates default to **Oxlint** in 9.x; groot keeps the default — the workspace root owns linting), `--overwrite`, `-h/--help`.
+- Templates: `vanilla-ts`, `vue-ts`, `react-ts` (groot's pin), `react-compiler-ts`, `solid-ts`, `svelte-ts`, `preact-ts`, `qwik-ts`, `lit-ts` (+ JS variants). Watch renames across create-vite majors.
+- **The cleanest generator in the matrix**: never installs, never git-inits, writes no lockfile; ships its gitignore as `_gitignore`, renamed on copy (verified in bundle).
+- **Port 5173** is the Vite default — shared with SvelteKit/React Router per the same-slot rule.
+- Build: `vite build` → `dist/` (already in turbo's outputs). Convex env: `VITE_CONVEX_URL`.
+- Sources: <https://vite.dev/guide/>, <https://www.npmjs.com/package/create-vite> (dist/index.js option table + templates).
 
 ## Stitching reference
 

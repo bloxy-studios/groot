@@ -349,3 +349,61 @@ describe.skipIf(!e2e)(
     );
   },
 );
+
+describe.skipIf(!e2e)("scenario 4: nuxt web + add vite (real generators)", () => {
+  test(
+    "plants a nuxt workspace, then grows a vite SPA at apps/landing",
+    async () => {
+      const plan = await planFor(
+        { web: "nuxt", mobile: "none", desktop: "none", api: "none", backend: "none" },
+        "vueshop",
+      );
+      await generate(plan, { verbose: false });
+      await stitch(plan);
+      await verify(plan, { verbose: false });
+      const root = plan.targetDir;
+
+      // The REAL create-nuxt grew apps/web (template via the nuxt/starter registry).
+      expect(existsSync(join(root, "apps/web/nuxt.config.ts"))).toBe(true);
+      expect(existsSync(join(root, "apps/web/.git"))).toBe(false);
+      const webPkg = JSON.parse(await readFile(join(root, "apps/web/package.json"), "utf8"));
+      expect(webPkg.name).toBe("web");
+      // nuxt build → .output/ is turbo-cached.
+      const turbo = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
+      expect(turbo.tasks.build.outputs).toContain(".output/**");
+
+      // The REAL create-vite grows a second web scaffold — nuxt(3000) + vite(5173).
+      const loaded = await loadManifest(root);
+      const resolution = await resolveAddScaffold(
+        loaded.manifest,
+        loaded.workspaceRoot,
+        "vite",
+        "apps/landing",
+      );
+      expect(resolution.warnings).toEqual([]);
+      const addPlan = buildAddPlan(
+        loaded,
+        resolution.scaffold,
+        await readRootPackageName(loaded.workspaceRoot),
+        { install: false, keepFailed: false, verbose: false },
+      );
+      await executeAdd(addPlan, resolution.scaffold, { verbose: false });
+
+      expect(existsSync(join(root, "apps/landing/vite.config.ts"))).toBe(true);
+      // create-vite ships _gitignore renamed on copy — the real file must exist.
+      expect(existsSync(join(root, "apps/landing/.gitignore"))).toBe(true);
+      expect(existsSync(join(root, "apps/landing/.git"))).toBe(false);
+      const landingPkg = JSON.parse(
+        await readFile(join(root, "apps/landing/package.json"), "utf8"),
+      );
+      expect(landingPkg.name).toBe("landing");
+
+      const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
+      expect(manifest.scaffolds).toHaveLength(2);
+      const checks = await runDoctor(await loadManifest(root));
+      const failures = checks.filter((check) => check.status === "fail");
+      expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+});

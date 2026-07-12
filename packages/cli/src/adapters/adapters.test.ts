@@ -13,11 +13,13 @@ import { expoAdapter } from "./expo.ts";
 import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
+import { nuxtAdapter } from "./nuxt.ts";
 import { reactRouterAdapter } from "./react-router.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { identifierSegment, tauriAdapter } from "./tauri.ts";
 import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "./trunk.ts";
+import { viteAdapter } from "./vite.ts";
 
 const PLAN: Plan = buildPlan({
   name: "demo",
@@ -45,10 +47,12 @@ describe("registry", () => {
       "expo",
       "hono",
       "next",
+      "nuxt",
       "react-router",
       "sveltekit",
       "tanstack-start",
       "tauri",
+      "vite",
     ]);
     for (const [id, adapter] of Object.entries(ADAPTERS)) {
       expect(adapter.id).toBe(id as keyof typeof ADAPTERS);
@@ -268,6 +272,85 @@ describe("react-router (scaffold-flows.md#12)", () => {
     await writeFile(join(root, "apps/web/react-router.config.ts"), "export default {};\n");
     checks = await reactRouterAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.find((c) => c.name === "apps/web react-router config")?.status).toBe("pass");
+  });
+});
+
+describe("nuxt (scaffold-flows.md#13)", () => {
+  const nuxtPlan: Plan = buildPlan({
+    name: "demo",
+    targetDir: "/work/demo",
+    cliVersion: "1.6.0",
+    selections: { web: "nuxt", mobile: "none", desktop: "none", api: "none", backend: "none" },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = nuxtPlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the nuxt scaffold in the plan");
+
+  test("passes every non-interactive-required arg explicitly (dir, template, pm, gitInit)", () => {
+    const cmd = nuxtAdapter.command({ plan: nuxtPlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "create-nuxt@3",
+      "web",
+      "--template",
+      "minimal",
+      "--packageManager",
+      "bun",
+      "--no-gitInit",
+      "--no-install",
+      "--no-modules",
+    ]);
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("doctor: nuxt config presence passes and warns when missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-nuxt-"));
+    await mkdir(join(root, "apps/web"), { recursive: true });
+    let checks = await nuxtAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web nuxt config")?.status).toBe("warn");
+
+    await writeFile(join(root, "apps/web/nuxt.config.ts"), "export default {};\n");
+    checks = await nuxtAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web nuxt config")?.status).toBe("pass");
+  });
+});
+
+describe("vite (scaffold-flows.md#14)", () => {
+  const vitePlan: Plan = buildPlan({
+    name: "demo",
+    targetDir: "/work/demo",
+    cliVersion: "1.6.0",
+    selections: { web: "vite", mobile: "none", desktop: "none", api: "none", backend: "none" },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = vitePlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the vite scaffold in the plan");
+
+  test("pins react-ts and suppresses interactivity AND 9.x's immediate mode", () => {
+    const cmd = viteAdapter.command({ plan: vitePlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "create-vite@9",
+      "web",
+      "--template",
+      "react-ts",
+      "--no-interactive",
+      "--no-immediate",
+    ]);
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("doctor: vite config presence passes and warns when missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-vite-"));
+    await mkdir(join(root, "apps/web"), { recursive: true });
+    let checks = await viteAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web vite config")?.status).toBe("warn");
+
+    await writeFile(join(root, "apps/web/vite.config.ts"), "export default {};\n");
+    checks = await viteAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web vite config")?.status).toBe("pass");
   });
 });
 

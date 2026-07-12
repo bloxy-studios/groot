@@ -46,6 +46,16 @@ export const MATRIX: Record<Slot, SlotSpec> = {
         port: 5173,
         generator: "create-react-router@8",
       },
+      // nuxt dev defaults to 3000 (shared with next/tanstack — same-slot rule).
+      { id: "nuxt", label: "Nuxt", path: "apps/web", port: 3000, generator: "create-nuxt@3" },
+      // Plain Vite SPA (react-ts template pinned); Vite default 5173.
+      {
+        id: "vite",
+        label: "Vite (React)",
+        path: "apps/web",
+        port: 5173,
+        generator: "create-vite@9",
+      },
     ],
   },
   mobile: {
