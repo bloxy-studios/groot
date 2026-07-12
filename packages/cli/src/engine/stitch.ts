@@ -10,7 +10,7 @@ import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { EXIT, GrootError } from "./errors.ts";
 import { planToManifest } from "./plan.ts";
-import type { Plan } from "./types.ts";
+import type { FrameworkId, Plan } from "./types.ts";
 
 /** Lockfiles a generator may have left inside its scaffold directory. */
 const NESTED_LOCKFILES = [
@@ -122,6 +122,18 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
 }
 
 /**
+ * The client-exposed env var each web framework actually reads — Next.js only
+ * exposes NEXT_PUBLIC_*, SvelteKit's $env/static/public requires PUBLIC_*, and
+ * Vite-based frameworks (TanStack Start) expose VITE_*. Matches each
+ * framework's Convex quickstart naming.
+ */
+const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
+  next: "NEXT_PUBLIC_CONVEX_URL=",
+  sveltekit: "PUBLIC_CONVEX_URL=",
+  "tanstack-start": "VITE_CONVEX_URL=",
+};
+
+/**
  * Wire frontends to the Convex backend: workspace dependency + env placeholders
  * (docs/architecture.md — consumption via deep imports of convex/_generated).
  */
@@ -144,7 +156,11 @@ export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
       await writeJson(path, pkg);
       notes.push(`${scaffold.path} → depends on ${backendName} (workspace:*)`);
     }
-    envLines.push(scaffold.slot === "web" ? "NEXT_PUBLIC_CONVEX_URL=" : "EXPO_PUBLIC_CONVEX_URL=");
+    envLines.push(
+      scaffold.slot === "web"
+        ? (CONVEX_URL_ENV_BY_WEB_FRAMEWORK[scaffold.framework] ?? "VITE_CONVEX_URL=")
+        : "EXPO_PUBLIC_CONVEX_URL=",
+    );
   }
 
   if (envLines.length > 0) {

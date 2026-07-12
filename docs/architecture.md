@@ -68,7 +68,7 @@ Stitch operations (each implemented as a pure, unit-tested transform):
 | Port allocation | Deterministic dev ports written into each app (flag or source, per adapter) — see table below |
 | turbo.json | Root tasks (`dev`, `build`, `lint`, `check-types`) with correct `outputs` per framework |
 | Shared TS config | `packages/typescript-config` kept from the trunk. In v0.2 apps keep their generated standalone tsconfigs (they work as-is); rewiring them to shared extends arrives with `groot add`/`doctor` (v0.3), where breakage can be detected and fixed |
-| Env plumbing | `.env.example` entries per scaffold (e.g. `NEXT_PUBLIC_CONVEX_URL`, `EXPO_PUBLIC_CONVEX_URL`) |
+| Env plumbing | `.env.example` entries per scaffold, named for what each framework exposes to the client: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit), `VITE_CONVEX_URL` (TanStack Start / Vite), `EXPO_PUBLIC_CONVEX_URL` (Expo) |
 | groot.json | Manifest recording what was scaffolded, by which generator version — the contract for `groot add`/`doctor` |
 
 ### 5. Verify

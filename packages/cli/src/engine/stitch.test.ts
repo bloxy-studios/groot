@@ -80,6 +80,8 @@ async function fixture(selections: Record<Slot, string>): Promise<{ plan: Plan; 
       );
     } else if (scaffold.framework === "expo") {
       await write(`${scaffold.path}/package.json`, JSON.stringify({ name: "mobile" }, null, 2));
+    } else if (scaffold.framework === "tanstack-start") {
+      await write(`${scaffold.path}/package.json`, JSON.stringify({ name: "web" }, null, 2));
     }
   }
   return { plan, root };
@@ -112,7 +114,8 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     // Frontend linked to the backend.
     expect(webPkg.dependencies["@repo/backend"]).toBe("workspace:*");
     const env = await readFile(join(root, ".env.example"), "utf8");
-    expect(env).toContain("NEXT_PUBLIC_CONVEX_URL=");
+    // SvelteKit reads $env/static/public → PUBLIC_* (anchored: substring of NEXT_PUBLIC_).
+    expect(env).toMatch(/^PUBLIC_CONVEX_URL=/m);
 
     // Turbo build outputs tuned per framework.
     const turbo = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
@@ -150,7 +153,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     expect(secondNotes.join("\n")).not.toContain("depends on @repo/backend");
     expect(secondNotes.join("\n")).not.toContain('name "web"');
     const env = await readFile(join(root, ".env.example"), "utf8");
-    expect(env.match(/NEXT_PUBLIC_CONVEX_URL=/g)).toHaveLength(1);
+    expect(env.match(/^PUBLIC_CONVEX_URL=/gm)).toHaveLength(1);
   });
 
   test("without a backend, no links or env entries appear", async () => {
