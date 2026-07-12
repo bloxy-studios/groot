@@ -25,6 +25,16 @@ export const MATRIX: Record<Slot, SlotSpec> = {
         generator: "create-next-app@16",
       },
       { id: "sveltekit", label: "SvelteKit", path: "apps/web", port: 5173, generator: "sv@0.16" },
+      // Port 3000 comes from the template's own dev script (`vite dev --port
+      // 3000`) — same default as Next; the port-collision warning machinery
+      // covers `add --path` coexistence, exactly like elysia/hono on 3001.
+      {
+        id: "tanstack-start",
+        label: "TanStack Start",
+        path: "apps/web",
+        port: 3000,
+        generator: "@tanstack/cli@0.69",
+      },
     ],
   },
   mobile: {

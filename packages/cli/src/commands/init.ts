@@ -263,7 +263,7 @@ export const init = defineCommand({
   args: {
     dir: { type: "positional", required: false, description: "Target directory" },
     name: { type: "string", description: "Workspace name (default: dir basename)" },
-    web: { type: "string", description: "Web app: next | sveltekit | none" },
+    web: { type: "string", description: "Web app: next | sveltekit | tanstack-start | none" },
     mobile: { type: "string", description: "Mobile app: expo | none" },
     desktop: { type: "string", description: "Desktop app: tauri | electron | none" },
     api: { type: "string", description: "API: elysia | hono | none" },

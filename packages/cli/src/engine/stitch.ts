@@ -10,7 +10,7 @@ import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { EXIT, GrootError } from "./errors.ts";
 import { planToManifest } from "./plan.ts";
-import type { Plan } from "./types.ts";
+import type { FrameworkId, Plan } from "./types.ts";
 
 /** Lockfiles a generator may have left inside its scaffold directory. */
 const NESTED_LOCKFILES = [
@@ -122,6 +122,18 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
 }
 
 /**
+ * The client-exposed env var each web framework actually reads — Next.js only
+ * exposes NEXT_PUBLIC_*, SvelteKit's $env/static/public requires PUBLIC_*, and
+ * Vite-based frameworks (TanStack Start) expose VITE_*. Matches each
+ * framework's Convex quickstart naming.
+ */
+const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
+  next: "NEXT_PUBLIC_CONVEX_URL=",
+  sveltekit: "PUBLIC_CONVEX_URL=",
+  "tanstack-start": "VITE_CONVEX_URL=",
+};
+
+/**
  * Wire frontends to the Convex backend: workspace dependency + env placeholders
  * (docs/architecture.md — consumption via deep imports of convex/_generated).
  */
@@ -144,7 +156,11 @@ export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
       await writeJson(path, pkg);
       notes.push(`${scaffold.path} → depends on ${backendName} (workspace:*)`);
     }
-    envLines.push(scaffold.slot === "web" ? "NEXT_PUBLIC_CONVEX_URL=" : "EXPO_PUBLIC_CONVEX_URL=");
+    envLines.push(
+      scaffold.slot === "web"
+        ? (CONVEX_URL_ENV_BY_WEB_FRAMEWORK[scaffold.framework] ?? "VITE_CONVEX_URL=")
+        : "EXPO_PUBLIC_CONVEX_URL=",
+    );
   }
 
   if (envLines.length > 0) {
@@ -152,7 +168,12 @@ export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
     const header =
       "# Convex deployment URL — written to packages/backend/.env.local by `bun run setup`.\n";
     const existing = existsSync(envPath) ? await readFile(envPath, "utf8") : "";
-    const missing = envLines.filter((line) => !existing.includes(line));
+    // Exact-line membership: a substring test would let NEXT_PUBLIC_CONVEX_URL=
+    // swallow SvelteKit's PUBLIC_CONVEX_URL= in mixed-web workspaces. The Set
+    // over envLines also collapses duplicates when two scaffolds of the same
+    // framework coexist (add --path).
+    const existingLines = new Set(existing.split("\n").map((line) => line.trim()));
+    const missing = [...new Set(envLines)].filter((line) => !existingLines.has(line));
     if (missing.length > 0) {
       await appendFile(envPath, `${existing.length > 0 ? "\n" : header}${missing.join("\n")}\n`);
       notes.push(`.env.example → ${missing.join(", ")}`);
@@ -177,8 +198,14 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
   }
   if (frameworks.has("sveltekit")) outputs.add(".svelte-kit/**");
   // Tauri's `build` is the Vite frontend build (dist/); the Rust build lives in
-  // src-tauri/target (cargo-managed, never a turbo output).
-  if (frameworks.has("elysia") || frameworks.has("hono") || frameworks.has("tauri")) {
+  // src-tauri/target (cargo-managed, never a turbo output). TanStack Start's
+  // 1.x template is plain `vite build` → dist/ (no Nitro .output).
+  if (
+    frameworks.has("elysia") ||
+    frameworks.has("hono") ||
+    frameworks.has("tauri") ||
+    frameworks.has("tanstack-start")
+  ) {
     outputs.add("dist/**");
   }
   // electron-vite builds main/preload/renderer into out/.
