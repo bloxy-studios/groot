@@ -1,6 +1,6 @@
 # Stability contract
 
-> Status: **defined ahead of v1.0; becomes binding at v1.0.0.** Until then, minor releases may still adjust the surface below (each adjustment changelogged). From v1.0.0 on, this document is the semver contract — breaking any covered item requires a major release.
+> Status: **binding as of v1.0.0.** This document is the semver contract — breaking any covered item requires a major release.
 
 groot's promise is narrow on purpose: the **interface** is stable; the **output workspaces** track living upstream generators by design. This page defines exactly where that line sits.
 
