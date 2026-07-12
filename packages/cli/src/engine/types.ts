@@ -8,7 +8,15 @@
 export type Slot = "web" | "mobile" | "desktop" | "api" | "backend";
 
 /** Framework identifiers accepted by the slot flags (`--web next`, `--api hono`, …). */
-export type FrameworkId = "next" | "sveltekit" | "expo" | "tauri" | "elysia" | "hono" | "convex";
+export type FrameworkId =
+  | "next"
+  | "sveltekit"
+  | "expo"
+  | "tauri"
+  | "electron"
+  | "elysia"
+  | "hono"
+  | "convex";
 
 /** The explicit "skip this slot" choice. */
 export const NONE = "none" as const;

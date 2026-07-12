@@ -15,6 +15,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | SvelteKit | `bunx sv@0.16 create … --no-install --no-dir-check` | never | only with `--install` | refuses unless `--no-dir-check` |
 | Expo | `bunx create-expo-app@4 … --no-install` | no flag exists (see caveats) | yes → suppressed | (unverified) |
 | Tauri | `bunx create-tauri-app@4 <name> --template react-ts --manager bun --identifier <id> --yes` | never | never | refuses unless `--force` |
+| Electron | `bunx @quick-start/create-electron@1 <name> --template react-ts --skip` | never | never | overwrite prompt nulled by `--skip` |
 | Elysia | *(none — groot writes files directly)* | — | — | — |
 | Hono | `bunx create-hono@0.19 … --template bun` | never | only with `-i` | **interactive confirm, no bypass** → must target fresh dir |
 | Convex | *(files written directly, incl. vendored `_generated` stubs)* | — | — | — |
@@ -141,6 +142,20 @@ bunx create-tauri-app@4 desktop --template react-ts --manager bun --identifier c
 - **Rust is a dev-time dependency, not a scaffold-time one**: generation is pure npm; `bun install` works without cargo. `tauri dev`/`tauri build` need Rust (plus webkit2gtk on Linux) — groot prints a rustup next-step and `doctor` warns (never fails) when cargo is absent.
 - Wrap-the-existing-web-app mode (`bunx @tauri-apps/cli init --ci` pointed at `apps/web`) is a distinct, officially supported shape — deferred to the add-on engine ([expansion.md](./expansion.md#desktop-slot-candidates-new-slot), [roadmap v1.4](./roadmap.md)).
 - Sources: <https://v2.tauri.app/start/create-project/>, <https://v2.tauri.app/reference/cli/>, <https://github.com/tauri-apps/create-tauri-app>.
+
+## 9. Desktop: Electron — `@quick-start/create-electron` (electron-vite)
+
+```sh
+bunx @quick-start/create-electron@1 desktop --template react-ts --skip
+```
+
+- **Why this generator**: electron-vite's scaffolder is the de-facto standard for Electron + Vite + TS. Electron Forge's own `create-electron-app` force-installs dependencies (npm/yarn only, no skip flag) and marks its Vite template experimental — unsuitable for groot's scaffold-dry model ([expansion.md](./expansion.md#desktop-slot-candidates-new-slot)).
+- Flags: `-t/--template` (`react-ts` pinned; the `-ts` suffix nulls the TypeScript prompt) and `--skip` (nulls the remaining prompts: overwrite, auto-update, mirror). Never installs, never git-inits — prints next steps only.
+- ⚠️ **The positional is a NAME, not a path** — same contract as create-tauri-app: groot spawns from the scaffold's parent directory (`apps/`) with the bare directory name.
+- **No declared dev port**: the renderer dev server is plain Vite (non-strict) and electron-vite launches Electron with whatever URL it resolved — self-wiring, so groot neither promises nor manages a port (unlike Tauri's contractual strictPort 1420).
+- ⚠️ **Bun lifecycle nuance**: the `electron` package downloads its runtime binary in a postinstall script, and bun only runs dependency lifecycle scripts for trusted packages. `electron` is on bun's default-trusted list — asserted empirically by the flagship E2E (`node_modules/electron/dist` exists after a real `bun install`). `groot doctor` catches the blocked state with a `bun pm trust electron` fix should that default ever change.
+- Build output: `out/` (main/preload/renderer) — added to turbo's `build.outputs`; electron-builder's installers land in `dist/` (not cached).
+- Sources: <https://electron-vite.org/guide/>, <https://www.npmjs.com/package/@quick-start/create-electron>, <https://bun.com/docs/pm/lifecycle>.
 
 ## Stitching reference
 

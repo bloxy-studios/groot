@@ -13,6 +13,10 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("api", "elysia")?.port).toBe(3001);
     expect(findChoice("api", "hono")?.port).toBe(3001);
     expect(findChoice("mobile", "expo")?.port).toBe(8081);
+    expect(findChoice("desktop", "tauri")?.port).toBe(1420);
+    // electron-vite's renderer dev server is non-strict and self-wiring —
+    // groot declares no port for it (docs/scaffold-flows.md#9).
+    expect(findChoice("desktop", "electron")?.port).toBeNull();
     expect(findChoice("backend", "convex")?.port).toBeNull();
   });
 
@@ -20,6 +24,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "next")?.path).toBe("apps/web");
     expect(findChoice("web", "sveltekit")?.path).toBe("apps/web");
     expect(findChoice("mobile", "expo")?.path).toBe("apps/mobile");
+    expect(findChoice("desktop", "tauri")?.path).toBe("apps/desktop");
+    expect(findChoice("desktop", "electron")?.path).toBe("apps/desktop");
     expect(findChoice("api", "hono")?.path).toBe("apps/api");
     expect(findChoice("backend", "convex")?.path).toBe("packages/backend");
   });
@@ -28,6 +34,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "next")?.generator).toBe("create-next-app@16");
     expect(findChoice("web", "sveltekit")?.generator).toBe("sv@0.16");
     expect(findChoice("mobile", "expo")?.generator).toBe("create-expo-app@4");
+    expect(findChoice("desktop", "tauri")?.generator).toBe("create-tauri-app@4");
+    expect(findChoice("desktop", "electron")?.generator).toBe("@quick-start/create-electron@1");
     expect(findChoice("api", "hono")?.generator).toBe("create-hono@0.19");
     // Elysia and Convex are written directly by groot (docs/scaffold-flows.md).
     expect(findChoice("api", "elysia")?.generator).toBeNull();

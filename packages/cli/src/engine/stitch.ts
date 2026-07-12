@@ -181,6 +181,8 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
   if (frameworks.has("elysia") || frameworks.has("hono") || frameworks.has("tauri")) {
     outputs.add("dist/**");
   }
+  // electron-vite builds main/preload/renderer into out/.
+  if (frameworks.has("electron")) outputs.add("out/**");
 
   build.outputs = [...outputs];
   tasks.build = build;
