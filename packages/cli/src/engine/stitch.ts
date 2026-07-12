@@ -168,7 +168,12 @@ export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
     const header =
       "# Convex deployment URL — written to packages/backend/.env.local by `bun run setup`.\n";
     const existing = existsSync(envPath) ? await readFile(envPath, "utf8") : "";
-    const missing = envLines.filter((line) => !existing.includes(line));
+    // Exact-line membership: a substring test would let NEXT_PUBLIC_CONVEX_URL=
+    // swallow SvelteKit's PUBLIC_CONVEX_URL= in mixed-web workspaces. The Set
+    // over envLines also collapses duplicates when two scaffolds of the same
+    // framework coexist (add --path).
+    const existingLines = new Set(existing.split("\n").map((line) => line.trim()));
+    const missing = [...new Set(envLines)].filter((line) => !existingLines.has(line));
     if (missing.length > 0) {
       await appendFile(envPath, `${existing.length > 0 ? "\n" : header}${missing.join("\n")}\n`);
       notes.push(`.env.example → ${missing.join(", ")}`);
