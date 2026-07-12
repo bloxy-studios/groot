@@ -10,11 +10,14 @@
  * runs from the scaffold's parent directory with the bare basename.
  *
  * The one bun-specific nuance: the `electron` package downloads its binary in
- * a postinstall script. Bun runs dependency lifecycle scripts only for trusted
- * packages — electron sits on bun's default-trusted list, which the flagship
- * E2E asserts empirically (node_modules/electron/dist present after a real
- * `bun install`). The doctor check below catches the blocked-postinstall state
- * with a `bun pm trust` fix in case that default ever changes.
+ * a postinstall script, and bun runs dependency lifecycle scripts only for
+ * trusted packages — electron is NOT on bun's default-trusted list (verified
+ * empirically: the flagship E2E's real `bun install` left the runtime missing
+ * until the stitch fix landed). The stitch stage therefore writes
+ * trustedDependencies: ["electron"] into the workspace root package.json
+ * (stitchTrustedDependencies), and the flagship E2E asserts the runtime
+ * arrives (node_modules/electron/dist). The doctor check below catches the
+ * blocked state in hand-edited workspaces with a `bun pm trust` fix.
  *
  * No declared dev port: electron-vite's renderer dev server is non-strict and
  * self-wiring (Electron is launched with whatever URL it resolved), unlike

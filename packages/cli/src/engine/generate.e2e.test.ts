@@ -95,6 +95,11 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship + electron de
       // turbo caches electron-vite's out/ build dir.
       const turboAfter = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
       expect(turboAfter.tasks.build.outputs).toContain("out/**");
+      // Stitch granted bun trust for electron's postinstall BEFORE the install
+      // (electron is NOT on bun's default-trusted list — this run proves the
+      // grant is what makes the runtime download below happen).
+      const rootAfterStitch = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+      expect(rootAfterStitch.trustedDependencies).toContain("electron");
 
       // Stitch: identity, backend link, env plumbing, manifest, lockfile hygiene.
       const stitchedRootPkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -117,8 +122,9 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship + electron de
       expect(existsSync(join(root, "node_modules"))).toBe(true);
       // Bun links workspace deps inside the depending app's node_modules.
       expect(existsSync(join(root, "apps/web/node_modules/@repo/backend"))).toBe(true);
-      // Electron's postinstall (runtime binary download) ran under bun — proves
-      // the package is on bun's default-trusted lifecycle list (adapter doc).
+      // Electron's postinstall (runtime binary download) ran under bun — via
+      // the stitched trustedDependencies grant (NOT default-trusted; verified
+      // 2026-07-12 on bun 1.3.14 when this assertion failed without the grant).
       expect(existsSync(join(root, "node_modules/electron/dist"))).toBe(true);
 
       // The scaffolded packages must TYPECHECK, not just install — `convex dev`

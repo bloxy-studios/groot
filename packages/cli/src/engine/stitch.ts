@@ -191,6 +191,33 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
   return `turbo.json → build.outputs [${[...outputs].join(", ")}]`;
 }
 
+/**
+ * Bun runs dependency lifecycle scripts only for trusted packages, and
+ * electron's runtime download is a postinstall script that is NOT on bun's
+ * default-trusted list (verified empirically: the flagship E2E's real
+ * `bun install` left node_modules/electron/dist missing until this landed).
+ * Workspaces with an electron scaffold get it added to the root
+ * trustedDependencies so the verify-stage install produces a runnable app.
+ *
+ * Note: bun treats an explicit trustedDependencies as replacing its default
+ * allowlist — a deliberate tradeoff here. Packages a user later adds that need
+ * their own postinstalls belong in this same array; doctor's electron-binary
+ * check points at `bun pm trust` for exactly that discovery flow.
+ */
+export async function stitchTrustedDependencies(plan: Plan): Promise<string | null> {
+  if (!plan.scaffolds.some((scaffold) => scaffold.framework === "electron")) return null;
+  const path = join(plan.targetDir, "package.json");
+  const pkg = await readJson(path);
+  const trusted = new Set<string>(
+    Array.isArray(pkg.trustedDependencies) ? (pkg.trustedDependencies as string[]) : [],
+  );
+  if (trusted.has("electron")) return null;
+  trusted.add("electron");
+  pkg.trustedDependencies = [...trusted];
+  await writeJson(path, pkg);
+  return "root package.json → trustedDependencies [electron] (bun runs its postinstall)";
+}
+
 /** Root .gitignore must cover the workspace basics regardless of what the trunk shipped. */
 export async function stitchRootGitignore(plan: Plan): Promise<string | null> {
   const path = join(plan.targetDir, ".gitignore");
@@ -235,6 +262,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchBackendLinks(plan));
   push(await stitchTurboOutputs(plan));
   push(await stitchRootIdentity(plan));
+  push(await stitchTrustedDependencies(plan));
   push(await stitchRootGitignore(plan));
   push(await stitchManifest(plan));
   return notes;
