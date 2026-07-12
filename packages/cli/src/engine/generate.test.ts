@@ -4,7 +4,14 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXIT, GrootError } from "./errors.ts";
-import { cleanupTrunkExamples, moveDirContents, writeFileSpecs } from "./generate.ts";
+import {
+  cleanupTrunkExamples,
+  growScaffold,
+  moveDirContents,
+  scrubGeneratorGit,
+  writeFileSpecs,
+} from "./generate.ts";
+import { buildPlan } from "./plan.ts";
 
 async function scratch(): Promise<string> {
   return mkdtemp(join(tmpdir(), "groot-generate-"));
@@ -88,5 +95,66 @@ describe("writeFileSpecs", () => {
     ]);
     expect(await readFile(join(root, "apps/api/src/index.ts"), "utf8")).toBe("export {};\n");
     expect(existsSync(join(root, "apps/api/package.json"))).toBe(true);
+  });
+});
+
+describe("scrubGeneratorGit", () => {
+  test("removes a .git the generator created during the grow", async () => {
+    const dir = await scratch();
+    await mkdir(join(dir, ".git"), { recursive: true });
+    await writeFile(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    expect(await scrubGeneratorGit(dir, false)).toBe(true);
+    expect(existsSync(join(dir, ".git"))).toBe(false);
+  });
+
+  test("preserves a .git that existed before the grow (merge onto a user sub-repo)", async () => {
+    const dir = await scratch();
+    await mkdir(join(dir, ".git"), { recursive: true });
+    await writeFile(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    expect(await scrubGeneratorGit(dir, true)).toBe(false);
+    expect(existsSync(join(dir, ".git", "HEAD"))).toBe(true);
+  });
+
+  test("no-op when the generator created nothing", async () => {
+    const dir = await scratch();
+    expect(await scrubGeneratorGit(dir, false)).toBe(false);
+  });
+});
+
+describe("growScaffold git hygiene", () => {
+  test("a .git that pre-dates the grow survives it (dir-conflict merge)", async () => {
+    const base = await scratch();
+    const targetDir = join(base, "ws");
+    const plan = buildPlan({
+      name: "ws",
+      targetDir,
+      cliVersion: "0.0.0-test",
+      selections: { web: "none", mobile: "none", api: "elysia", backend: "none" },
+      options: {
+        install: false,
+        git: false,
+        dirConflict: "merge",
+        keepFailed: false,
+        verbose: false,
+      },
+    });
+    const scaffold = plan.scaffolds[0];
+    if (scaffold === undefined) {
+      throw new Error("expected the plan to contain the elysia scaffold");
+    }
+    // The user already tracks this directory — merge must not eat their repo.
+    await mkdir(join(targetDir, scaffold.path, ".git"), { recursive: true });
+    await writeFile(join(targetDir, scaffold.path, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    const steps: string[] = [];
+    await growScaffold(plan, scaffold, { verbose: false, onStep: (label) => steps.push(label) });
+
+    // The scaffold grew…
+    expect(existsSync(join(targetDir, scaffold.path, "src", "index.ts"))).toBe(true);
+    // …and the pre-existing .git was preserved, with no scrub step reported.
+    expect(existsSync(join(targetDir, scaffold.path, ".git", "HEAD"))).toBe(true);
+    expect(steps.some((label) => label.includes("Removed generator-created .git"))).toBe(false);
   });
 });

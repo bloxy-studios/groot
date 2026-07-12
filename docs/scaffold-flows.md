@@ -70,7 +70,7 @@ bunx create-expo-app@4 apps/mobile --template default@sdk-57 --no-install --yes
 
 - Flags: `--yes`, `--no-install`, `--template <name>[@<tag>]`, `--example <name>`, `--no-agents-md`, `--version`. Templates: `default` (Expo Router + TS — groot's choice), `blank`, `blank-typescript`, `tabs`, `bare-minimum`.
 - ⚠️ **SDK transition gotcha:** during the SDK 57 transition, omitting `--template` yields an SDK **54** project. groot always pins the template tag explicitly (`default@sdk-57`).
-- ⚠️ **No git-suppression flag exists.** groot runs Expo *after* the workspace root exists as a git repo (Expo's generator behaves like create-next-app inside an existing repo) and verifies no nested `.git` was created (doctor check).
+- ⚠️ **No git-suppression flag exists.** `create-expo-app` git-inits its output whenever it doesn't detect an enclosing repo — and during `groot init` the root repo doesn't exist yet (root `git init` runs in the verify stage, after generation), so a nested `apps/mobile/.git` appeared every time (fixed in v1.0.1). The engine now scrubs any generator-created `.git` immediately after each scaffold grows ([architecture.md#3-generate](./architecture.md#3-generate)); the doctor check remains as a tripwire for workspaces grown earlier.
 - Monorepos: Expo has **first-class bun-workspaces support**; since SDK 52 Metro **auto-configures** for monorepos — do *not* write legacy `metro.config.js` workspace hacks (`watchFolders`, `nodeModulesPath`…). Shared packages consumed as `"<pkg>": "*"`.
 - Metro dev server port: 8081 (kept).
 - Sources: <https://docs.expo.dev/more/create-expo/>, <https://docs.expo.dev/guides/monorepos/>, <https://www.npmjs.com/package/expo>.

@@ -141,6 +141,9 @@ describe.skipIf(!e2e)("full pipeline (real generators — alt web/api: sveltekit
       await verify(plan, { verbose: false });
 
       const root = plan.targetDir;
+      // No generator left a nested repo behind (engine scrub — upstream drift tripwire).
+      expect(existsSync(join(root, "apps/web/.git"))).toBe(false);
+      expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
       // sv ≥ 0.16 folds SvelteKit config into vite.config.ts (no svelte.config.js).
       const viteConfig = await readFile(join(root, "apps/web/vite.config.ts"), "utf8");
       expect(viteConfig).toContain("sveltekit(");
@@ -206,6 +209,10 @@ describe.skipIf(!e2e)(
         expect(await readFile(join(root, ".env.example"), "utf8")).toContain(
           "NEXT_PUBLIC_CONVEX_URL=",
         );
+
+        // No add left a nested repo inside its scaffold (engine scrub).
+        expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
+        expect(existsSync(join(root, "packages/backend/.git"))).toBe(false);
 
         // groot.json grew to three scaffolds and kept its provenance.
         const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
