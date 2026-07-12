@@ -15,13 +15,13 @@
 
 ---
 
-> 🌿 **v0.3 — grow and tend.** `groot init` plants a complete workspace, `groot add` grows another scaffold into it, and `groot doctor` keeps it healthy. Pre-1.0: `init --preset` ships in **v0.4** — follow the [roadmap](./docs/roadmap.md) and watch [releases](https://github.com/bloxy-studios/groot/releases).
+> 🏛️ **v1.0 — stable.** The [stability contract](./docs/stability.md) is binding: the command set, every documented flag, exit codes, and the `groot.json` schema follow semver. `groot init` plants a complete workspace, `groot add` grows another scaffold into it, and `groot doctor` keeps it healthy. What's next lives on the [roadmap](./docs/roadmap.md).
 
 ## What is groot?
 
 groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) monorepo and grows it with the apps you pick** — a web app, a mobile app, an API, and a backend — in one command. Instead of shipping its own frozen templates, groot **orchestrates each framework's official generator** (`create-next-app`, `sv create`, `create-expo-app`, `create-hono`, …) and then **stitches the results into one coherent bun workspace**: shared config packages, workspace protocol dependencies, non-conflicting dev ports, a clean root `turbo.json`, and a single lockfile.
 
-| Slot        | Options at v0.3                          | Where it lands        |
+| Slot        | Options at v1.0                          | Where it lands        |
 | ----------- | ---------------------------------------- | --------------------- |
 | 🌐 Web      | **Next.js** · SvelteKit                  | `apps/web`            |
 | 📱 Mobile   | **Expo**                                 | `apps/mobile`         |
@@ -53,7 +53,7 @@ powershell -c "irm https://raw.githubusercontent.com/bloxy-studios/groot/main/in
 Then answer a few prompts:
 
 ```text
-🌱 groot v0.3.0 — plant a bun-first Turborepo and grow it.
+🌱 groot v1.0.0 — plant a bun-first Turborepo and grow it.
 
 ◆  Web app?      › Next.js
 ◆  Mobile app?   › Expo
@@ -87,7 +87,7 @@ bunx create-groot@latest init my-app \
 | `groot add <scaffold>` | Grow an existing workspace: `groot add hono`, `groot add sveltekit --path apps/marketing` |
 | `groot doctor` | Health checks with suggested fixes — ports, lockfiles, manifests, per-framework invariants |
 
-The full contract — every flag, exit code, and the `groot.json` manifest schema — lives in [docs/cli-spec.md](./docs/cli-spec.md); [docs/stability.md](./docs/stability.md) defines what's covered by semver (binding at v1.0). Running groot in CI or from an agent? Recipes in [docs/ci.md](./docs/ci.md).
+The full contract — every flag, exit code, and the `groot.json` manifest schema — lives in [docs/cli-spec.md](./docs/cli-spec.md); [docs/stability.md](./docs/stability.md) defines what's covered by semver (binding since v1.0). Running groot in CI or from an agent? Recipes in [docs/ci.md](./docs/ci.md).
 
 ## How it works
 
@@ -108,7 +108,7 @@ Read the full design in [docs/architecture.md](./docs/architecture.md) and each 
 - [x] **v0.2** — `groot init` with the full scaffold matrix: the resolve → preflight → generate → stitch → verify pipeline, interactive + fully non-interactive, `--dry-run --json`, real-generator E2E in CI.
 - [x] **v0.3** — `groot add` (grow an existing workspace, with occupancy rules and targeted rollback) and `groot doctor` (health checks with fixes).
 - [x] **v0.4** — `init --preset`, stable `--json` everywhere, tested non-TTY guarantees, automated upstream-drift detection (weekly pin/doc watch + real-generator E2E cron).
-- [ ] **v1.0** — stability contract.
+- [x] **v1.0** — the [stability contract](./docs/stability.md) goes binding: CLI surface, exit codes, and manifest schema under semver — plus SBOM + build-provenance attestations on every release and the live docs site.
 
 Details in [docs/roadmap.md](./docs/roadmap.md) — or browse everything on the [docs site](https://bloxy-studios.github.io/groot/).
 

@@ -43,12 +43,18 @@ The scaffolding engine, per [cli-spec.md](./cli-spec.md) and [architecture.md](.
 - [x] Non-TTY behavior guarantees; scaffold-in-CI documentation — process-level contract tests across `init`/`add`/`doctor`, plus [ci.md](./ci.md).
 - [x] Generator-version pinning matrix with automated upstream-drift detection — [`drift.yml`](../.github/workflows/drift.yml) re-checks every pinned series + scaffold-flows.md's age weekly and files a self-healing issue ([runbook](./maintainers.md#upstream-drift-watch)).
 
-## v1.0 — Stability contract 🏛️
+## v1.0 — Stability contract 🏛️ ✅ (2026-07-12)
 
-- [x] Semver stability for CLI flags, exit codes, `groot.json` schema — [stability.md](./stability.md) defines the covered surface and change rules, tripwired by a contract snapshot test; the guarantee becomes binding at v1.0.0.
+- [x] Semver stability for CLI flags, exit codes, `groot.json` schema — [stability.md](./stability.md) defines the covered surface and change rules, tripwired by a contract snapshot test; binding as of v1.0.0.
 - [x] Docs site — [groot.dev on GitHub Pages](https://bloxy-studios.github.io/groot/): a dependency-free bun build (`apps/docs`) rendering the normative docs into the [Paper & Ink design system](../apps/docs/DESIGN.md). (Upgrading it to a full groot-scaffolded workspace app is tracked for when the site grows interactive.)
 - [x] SBOM + build-provenance attestations on every release — verify with `gh attestation verify <asset> --repo bloxy-studios/groot`.
+
+## Post-1.0 hardening (owner-gated)
+
+Items that need accounts or console access only the owner holds — none of them block releases:
+
 - [ ] macOS notarization — requires an Apple Developer account (owner action; see [maintainers.md](./maintainers.md#release-flow-fully-automated-after-setup)).
+- [ ] npm publish-access hardening — tighten the package's publishing access on npmjs.com (trusted publishing only, no tokens); OIDC releases keep working unchanged.
 
 ## Ideas beyond 1.0 (unscheduled)
 

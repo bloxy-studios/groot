@@ -1,6 +1,6 @@
 # groot CLI specification
 
-> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` in v0.3; `init --preset` in v0.4. Changes to this document are semver-relevant — [stability.md](./stability.md) defines exactly which surfaces are covered and the change rules (binding at v1.0.0).
+> Status: **normative contract**. `init` shipped in v0.2; `add` and `doctor` in v0.3; `init --preset` in v0.4. Changes to this document are semver-relevant — [stability.md](./stability.md) defines exactly which surfaces are covered and the change rules (binding since v1.0.0).
 
 ## Invocation forms
 
