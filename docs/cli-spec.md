@@ -94,7 +94,7 @@ Runs the same grow → stitch → verify stages as `init` for just the new scaff
 - **Occupancy**: a scaffold whose slot is already filled is refused (exit 2) unless `--path` targets a fresh directory. Path equality with any existing scaffold is always refused. The backend slot is single-occupancy — its package name (`@repo/backend`) is fixed by the workspace conventions, so `--path` is no escape hatch there.
 - **Ports**: a dev-port collision with an existing scaffold (e.g. growing Hono next to Elysia — both default to 3001) is a **warning**, not an error; `groot doctor` flags it persistently until one port is changed.
 - **Provenance**: `groot.json`'s `createdWith` keeps its original value — it records which CLI planted the workspace, not which one last grew it.
-- **Git**: `add` never runs `git init` — the workspace keeps whatever git state it has, including none.
+- **Git**: `add` never runs `git init` — the workspace keeps whatever git state it has, including none. Any `.git` a generator initializes *inside* the new scaffold is removed after the grow (the workspace root owns git history); a `.git` that pre-existed the grow is preserved. `init` applies the same rule to every scaffold it grows.
 - **Targeted rollback**: if the generator fails, only the new scaffold directory is removed (`--keep-failed` keeps it for inspection); the rest of the workspace is never touched. Stitch/verify failures leave the tree in place, as in `init`.
 - **Machine output**: `--dry-run --json` emits the manifest as `groot.json` would read after the add — the same versioned schema `init --dry-run --json` emits, with the new scaffold as the final entry. Stdout carries only the manifest; diagnostics and warnings go to stderr, per the output contract.
 

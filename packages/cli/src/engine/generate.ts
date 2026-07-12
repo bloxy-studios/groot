@@ -60,6 +60,31 @@ export async function writeFileSpecs(targetDir: string, specs: readonly FileSpec
   }
 }
 
+/**
+ * Remove a `.git` a generator created inside a freshly-grown scaffold.
+ *
+ * Not every generator can be silenced by flags — `create-expo-app` has no
+ * git-suppression flag and initializes a repo whenever it doesn't detect an
+ * enclosing one, which is always the case during `groot init` (the root
+ * `git init` runs in the verify stage, *after* generation). A nested repo
+ * splits workspace history, so the engine removes it deterministically.
+ *
+ * Only generator-created entries are scrubbed: when `.git` existed before the
+ * grow (`--dir-conflict merge` onto a directory the user already tracks), it
+ * is the user's and is preserved. Returns true when a scrub happened.
+ */
+export async function scrubGeneratorGit(
+  scaffoldDir: string,
+  hadGitBefore: boolean,
+): Promise<boolean> {
+  const nestedGit = join(scaffoldDir, ".git");
+  if (hadGitBefore || !existsSync(nestedGit)) {
+    return false;
+  }
+  await rm(nestedGit, { recursive: true, force: true });
+  return true;
+}
+
 export interface GenerateOptions {
   readonly verbose: boolean;
   /** Progress callback — receives a human label as each step starts. */
@@ -82,9 +107,13 @@ export async function growScaffold(
     throw new GrootError(`No adapter registered for "${scaffold.framework}"`, EXIT.INTERNAL);
   }
   const ctx = { plan, scaffold };
+  const scaffoldDir = join(plan.targetDir, scaffold.path);
 
   // Generators create their own leaf directory; guarantee the parent exists.
-  await mkdir(dirname(join(plan.targetDir, scaffold.path)), { recursive: true });
+  await mkdir(dirname(scaffoldDir), { recursive: true });
+
+  // Snapshot BEFORE any step runs, so only generator-created .git is scrubbed.
+  const hadNestedGit = existsSync(join(scaffoldDir, ".git"));
 
   const command = adapter.command(ctx);
   if (command !== null) {
@@ -101,6 +130,10 @@ export async function growScaffold(
   for (const post of adapter.postCommands?.(ctx) ?? []) {
     report(post.label);
     await runCommand(post, { verbose: options.verbose });
+  }
+
+  if (await scrubGeneratorGit(scaffoldDir, hadNestedGit)) {
+    report(`Removed generator-created .git from ${scaffold.path}`);
   }
 }
 

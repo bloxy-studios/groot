@@ -3,8 +3,12 @@
  *
  * The template tag is pinned explicitly: during the SDK 57 transition,
  * `create-expo-app` without `--template` scaffolds SDK 54. Expo has no
- * git-suppression flag, but skips git init inside an existing repo; a doctor
- * check (v0.3) verifies no nested .git appeared. Metro auto-configures for
+ * git-suppression flag — it git-inits its output whenever it doesn't detect
+ * an enclosing repo, which is always the case during `groot init` (the root
+ * `git init` runs in verify, after generation). The engine scrubs any
+ * generator-created .git right after the scaffold grows (generate.ts);
+ * the doctor check below remains as a tripwire for workspaces grown before
+ * the scrub existed (< v1.0.1) or touched by hand. Metro auto-configures for
  * monorepos since SDK 52 — no metro.config workspace patches are needed.
  */
 import { existsSync } from "node:fs";
@@ -39,8 +43,9 @@ export const expoAdapter: ScaffoldAdapter = {
     };
   },
   async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
-    // create-expo-app has no git-suppression flag; it skips git init inside an
-    // existing repo, but a nested .git would split workspace history.
+    // A nested .git splits workspace history. The engine scrubs generator-created
+    // ones since v1.0.1; this tripwire still catches older workspaces and manual
+    // re-inits inside the scaffold.
     const nestedGit = existsSync(join(ctx.workspaceRoot, ctx.scaffold.path, ".git"));
     return [
       {

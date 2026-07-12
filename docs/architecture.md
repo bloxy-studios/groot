@@ -51,6 +51,8 @@ Merge CLI flags, interactive prompt answers (clack), and defaults into an immuta
 
 Run each selected generator with its **silence flags** (non-interactive, no git init, no install — see the adapter contract below). Order: trunk first (`create-turbo` plants the workspace, then groot removes the example apps it doesn't need), then branches (web → mobile → api → backend). Each generator writes into its final location (`apps/web`, `apps/mobile`, `apps/api`, `packages/backend`).
 
+Not every generator can be silenced by flags: `create-expo-app` has no git-suppression flag and initializes a repo whenever it doesn't detect an enclosing one — which is always the case here, since the root `git init` happens in the verify stage, *after* generation. So immediately after each scaffold grows, groot **removes any `.git` the generator created inside it** — nested repos split workspace history; the root owns git. A `.git` that existed *before* the grow (`--dir-conflict merge` onto a directory the user already tracks) is the user's and is preserved. This guarantee covers both `init` and `groot add`, which share the per-scaffold grow path.
+
 ### 4. Stitch
 
 The stitch stage is groot's real value — the deterministic patch set that turns N independent scaffolds into one workspace. Canonical reference: the diff between raw generator output and the equivalent app inside Turborepo's own `basic`/`kitchen-sink` examples.
