@@ -121,6 +121,7 @@ PRs are very welcome — especially [scaffold adapters](https://github.com/bloxy
 This project follows the [Contributor Covenant Code of Conduct](./CODE_OF_CONDUCT.md). Security issues? See [SECURITY.md](./SECURITY.md) — never open a public issue for a vulnerability.
 
 ## Star History
+
 <a href="https://www.star-history.com/?repos=bloxy-studios%2Fgroot&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=bloxy-studios/groot&type=date&theme=dark&legend=top-left&sealed_token=pt5O3VmEwWzt5Aohk5h-0AETkiY5VHy4pGXOyEdvA2CkNbqZgDDlLIQQOoTF8o7sBUOKFUfLIat5Mys04vCP5kDgsHq-Wqvo-NVyIzZPw8-hufF6ENY8PeN2wBowKbgo1eV1Lo54BpUIUEgdk2cEVPsICVUktctgx84ohODEffQUTp8P-2Of1KniqpZJ" />
