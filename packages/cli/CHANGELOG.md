@@ -1,5 +1,13 @@
 # create-groot
 
+## 1.0.0
+
+### Major Changes
+
+- [#29](https://github.com/bloxy-studios/groot/pull/29) [`79278c9`](https://github.com/bloxy-studios/groot/commit/79278c91d0e2280794b2e66dd023f1e15375e51b) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - v1.0.0 — the stability contract is binding.
+
+  No behavior changes in this release: it seals the contract [docs/stability.md](https://github.com/bloxy-studios/groot/blob/main/docs/stability.md) defines. The `init`/`add`/`doctor` command set and every documented flag, the exit-code table, the versioned `groot.json` manifest schema, and the non-interactive + `--json` guarantees are covered by semver from here on — breaking any of them requires a major release. The covered surface is tripwired by the contract snapshot tests in `packages/cli/src/contract.test.ts`.
+
 ## 0.5.0
 
 ### Minor Changes
