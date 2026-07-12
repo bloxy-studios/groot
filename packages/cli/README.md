@@ -6,7 +6,7 @@
 bun create groot my-app
 ```
 
-> 🚧 **Pre-release.** This package currently ships the CLI skeleton while the scaffolding engine is built in the open. The full `groot init` experience lands in v0.2 — see the [roadmap](https://github.com/bloxy-studios/groot/blob/main/docs/roadmap.md) and the [CLI spec](https://github.com/bloxy-studios/groot/blob/main/docs/cli-spec.md) for exactly what's coming.
+> 🏛️ **v1.0 — stable.** `groot init` plants a complete workspace (web · mobile · API · backend), `groot add` grows another scaffold into an existing one, and `groot doctor` keeps it healthy. The CLI surface — flags, exit codes, the `groot.json` schema — is under a binding [semver contract](https://github.com/bloxy-studios/groot/blob/main/docs/stability.md). Full contract in the [CLI spec](https://github.com/bloxy-studios/groot/blob/main/docs/cli-spec.md); browse everything on the [docs site](https://bloxy-studios.github.io/groot/).
 
 Prefer a standalone binary (no Bun needed to run the CLI)?
 

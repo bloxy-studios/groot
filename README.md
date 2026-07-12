@@ -5,6 +5,8 @@
 **Plant a bun-first Turborepo. Grow the apps you actually want.**
 
 [![npm](https://img.shields.io/npm/v/create-groot?logo=npm&color=cb0000)](https://www.npmjs.com/package/create-groot)
+[![npm downloads](https://img.shields.io/npm/dm/create-groot?logo=npm&color=cb0000)](https://www.npmjs.com/package/create-groot)
+[![GitHub stars](https://img.shields.io/github/stars/bloxy-studios/groot?logo=github&color=e3b341)](https://github.com/bloxy-studios/groot/stargazers)
 [![CI](https://github.com/bloxy-studios/groot/actions/workflows/ci.yml/badge.svg)](https://github.com/bloxy-studios/groot/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/bloxy-studios/groot/actions/workflows/codeql.yml/badge.svg)](https://github.com/bloxy-studios/groot/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bloxy-studios/groot/badge)](https://scorecard.dev/viewer/?uri=github.com/bloxy-studios/groot)
@@ -117,6 +119,18 @@ Details in [docs/roadmap.md](./docs/roadmap.md) — or browse everything on the 
 PRs are very welcome — especially [scaffold adapters](https://github.com/bloxy-studios/groot/issues/new?template=scaffold_request.yml) for new frameworks. Start with [CONTRIBUTING.md](./CONTRIBUTING.md). Every PR is reviewed by CI **and** by [Greptile](https://greptile.com); merges require a 5/5 review score.
 
 This project follows the [Contributor Covenant Code of Conduct](./CODE_OF_CONDUCT.md). Security issues? See [SECURITY.md](./SECURITY.md) — never open a public issue for a vulnerability.
+
+## Star history
+
+<div align="center">
+  <a href="https://www.star-history.com/#bloxy-studios/groot&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=bloxy-studios/groot&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=bloxy-studios/groot&type=Date" />
+      <img alt="Star history chart for bloxy-studios/groot" src="https://api.star-history.com/svg?repos=bloxy-studios/groot&type=Date" width="600" />
+    </picture>
+  </a>
+</div>
 
 ## License
 
