@@ -13,6 +13,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "tanstack-start")?.port).toBe(3000);
     expect(findChoice("web", "astro")?.port).toBe(4321);
     expect(findChoice("web", "react-router")?.port).toBe(5173);
+    expect(findChoice("web", "nuxt")?.port).toBe(3000);
+    expect(findChoice("web", "vite")?.port).toBe(5173);
     expect(findChoice("api", "elysia")?.port).toBe(3001);
     expect(findChoice("api", "hono")?.port).toBe(3001);
     expect(findChoice("mobile", "expo")?.port).toBe(8081);
@@ -29,6 +31,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "tanstack-start")?.path).toBe("apps/web");
     expect(findChoice("web", "astro")?.path).toBe("apps/web");
     expect(findChoice("web", "react-router")?.path).toBe("apps/web");
+    expect(findChoice("web", "nuxt")?.path).toBe("apps/web");
+    expect(findChoice("web", "vite")?.path).toBe("apps/web");
     expect(findChoice("mobile", "expo")?.path).toBe("apps/mobile");
     expect(findChoice("desktop", "tauri")?.path).toBe("apps/desktop");
     expect(findChoice("desktop", "electron")?.path).toBe("apps/desktop");
@@ -42,6 +46,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "tanstack-start")?.generator).toBe("@tanstack/cli@0.69");
     expect(findChoice("web", "astro")?.generator).toBe("create-astro@5");
     expect(findChoice("web", "react-router")?.generator).toBe("create-react-router@8");
+    expect(findChoice("web", "nuxt")?.generator).toBe("create-nuxt@3");
+    expect(findChoice("web", "vite")?.generator).toBe("create-vite@9");
     expect(findChoice("mobile", "expo")?.generator).toBe("create-expo-app@4");
     expect(findChoice("desktop", "tauri")?.generator).toBe("create-tauri-app@4");
     expect(findChoice("desktop", "electron")?.generator).toBe("@quick-start/create-electron@1");
@@ -78,6 +84,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
       "tanstack-start",
       "astro",
       "react-router",
+      "nuxt",
+      "vite",
     ]);
   });
 });

@@ -133,6 +133,8 @@ const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
   "tanstack-start": "VITE_CONVEX_URL=",
   astro: "PUBLIC_CONVEX_URL=", // import.meta.env.PUBLIC_* — Astro's client prefix
   "react-router": "VITE_CONVEX_URL=", // framework mode is Vite-based
+  nuxt: "NUXT_PUBLIC_CONVEX_URL=", // runtimeConfig.public via NUXT_PUBLIC_*
+  vite: "VITE_CONVEX_URL=",
 };
 
 /**
@@ -207,10 +209,13 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
     frameworks.has("hono") ||
     frameworks.has("tauri") ||
     frameworks.has("tanstack-start") ||
-    frameworks.has("astro")
+    frameworks.has("astro") ||
+    frameworks.has("vite")
   ) {
     outputs.add("dist/**");
   }
+  // nuxt build → .output/ (Nitro).
+  if (frameworks.has("nuxt")) outputs.add(".output/**");
   // electron-vite builds main/preload/renderer into out/.
   if (frameworks.has("electron")) outputs.add("out/**");
   // react-router build → build/ (client + server).

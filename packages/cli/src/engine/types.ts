@@ -14,6 +14,8 @@ export type FrameworkId =
   | "tanstack-start"
   | "astro"
   | "react-router"
+  | "nuxt"
+  | "vite"
   | "expo"
   | "tauri"
   | "electron"

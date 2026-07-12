@@ -114,10 +114,12 @@ describe("frameworkChoice / allFrameworkIds", () => {
       "expo",
       "hono",
       "next",
+      "nuxt",
       "react-router",
       "sveltekit",
       "tanstack-start",
       "tauri",
+      "vite",
     ]);
   });
 });
@@ -162,7 +164,7 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       'Unknown scaffold "angular"',
     );
     expect(error.hint).toContain(
-      "next | sveltekit | tanstack-start | astro | react-router | expo | tauri | electron | elysia | hono | convex",
+      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | tauri | electron | elysia | hono | convex",
     );
   });
 
