@@ -1,5 +1,11 @@
 # create-groot
 
+## 1.0.2
+
+### Patch Changes
+
+- [#33](https://github.com/bloxy-studios/groot/pull/33) [`65aacf3`](https://github.com/bloxy-studios/groot/commit/65aacf373844b9ca67151ce60d6ec42a32da726e) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - npm README: replace the stale v0.1 pre-release banner ("ships the CLI skeleton… full `groot init` lands in v0.2") with the v1.0 stable banner. The npm package page was still describing create-groot as a skeleton awaiting v0.2 while the published CLI was at 1.0.x.
+
 ## 1.0.1
 
 ### Patch Changes
