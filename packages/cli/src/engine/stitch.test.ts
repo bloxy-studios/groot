@@ -90,6 +90,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     const { plan, root } = await fixture({
       web: "sveltekit",
       mobile: "none",
+      desktop: "none",
       api: "hono",
       backend: "convex",
     });
@@ -135,6 +136,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     const { plan, root } = await fixture({
       web: "sveltekit",
       mobile: "none",
+      desktop: "none",
       api: "hono",
       backend: "convex",
     });
@@ -155,6 +157,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     const { plan, root } = await fixture({
       web: "next",
       mobile: "none",
+      desktop: "none",
       api: "none",
       backend: "none",
     });
@@ -171,6 +174,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     const { plan, root } = await fixture({
       web: "none",
       mobile: "none",
+      desktop: "none",
       api: "hono",
       backend: "none",
     });

@@ -61,6 +61,8 @@ describe("groot init (process-level, non-TTY)", () => {
       "next",
       "--mobile",
       "none",
+      "--desktop",
+      "none",
       "--api",
       "none",
       "--backend",

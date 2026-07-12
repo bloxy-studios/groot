@@ -3,8 +3,8 @@ import { choiceIdsFor, findChoice, MATRIX, SLOT_ORDER, YES_DEFAULTS } from "./ma
 import type { Slot } from "./types.ts";
 
 describe("scaffold matrix (normative — docs/architecture.md)", () => {
-  test("slot order covers all four slots", () => {
-    expect(SLOT_ORDER).toEqual(["web", "mobile", "api", "backend"]);
+  test("slot order covers all five slots", () => {
+    expect(SLOT_ORDER).toEqual(["web", "mobile", "desktop", "api", "backend"]);
   });
 
   test("port allocation matches the architecture doc", () => {

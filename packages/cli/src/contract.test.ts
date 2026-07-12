@@ -38,6 +38,7 @@ describe("stability contract: command surface", () => {
         "name",
         "web",
         "mobile",
+        "desktop",
         "api",
         "backend",
         "preset",

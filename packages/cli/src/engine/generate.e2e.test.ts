@@ -51,7 +51,7 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship: next + elysi
     "generate → stitch → verify produces an installed, coherent workspace",
     async () => {
       const plan = await planFor(
-        { web: "next", mobile: "none", api: "elysia", backend: "convex" },
+        { web: "next", mobile: "none", desktop: "none", api: "elysia", backend: "convex" },
         "flagship",
         { install: true }, // real root bun install — the whole point of verify
       );
@@ -133,7 +133,7 @@ describe.skipIf(!e2e)("full pipeline (real generators — alt web/api: sveltekit
     "grows and stitches sveltekit + hono (names + port rewrites applied)",
     async () => {
       const plan = await planFor(
-        { web: "sveltekit", mobile: "none", api: "hono", backend: "none" },
+        { web: "sveltekit", mobile: "none", desktop: "none", api: "hono", backend: "none" },
         "altstack",
       );
       await generate(plan, { verbose: false });
@@ -163,14 +163,14 @@ describe.skipIf(!e2e)("full pipeline (real generators — alt web/api: sveltekit
 });
 
 describe.skipIf(!e2e)(
-  "scenario 3: grow an existing workspace (init next → add elysia → add convex)",
+  "scenario 3: grow an existing workspace (init next → add elysia → add convex → add tauri)",
   () => {
     test(
       "adds run the pipeline for just the new scaffold and doctor stays healthy",
       async () => {
         // Plant a web-only workspace with the real generators.
         const plan = await planFor(
-          { web: "next", mobile: "none", api: "none", backend: "none" },
+          { web: "next", mobile: "none", desktop: "none", api: "none", backend: "none" },
           "grown",
         );
         await generate(plan, { verbose: false });
@@ -210,16 +210,33 @@ describe.skipIf(!e2e)(
           "NEXT_PUBLIC_CONVEX_URL=",
         );
 
+        // Desktop slot: the REAL create-tauri-app grows apps/desktop.
+        await addOnce("tauri");
+        expect(existsSync(join(root, "apps/desktop/src-tauri/tauri.conf.json"))).toBe(true);
+        expect(existsSync(join(root, "apps/desktop/package.json"))).toBe(true);
+        const tauriConf = JSON.parse(
+          await readFile(join(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"),
+        );
+        // The template pins its Vite dev server to 1420 (strictPort) and couples
+        // devUrl to it — groot keeps that port (unique in the matrix).
+        expect(JSON.stringify(tauriConf)).toContain("1420");
+        const desktopPkg = JSON.parse(
+          await readFile(join(root, "apps/desktop/package.json"), "utf8"),
+        );
+        expect(desktopPkg.name).toBe("desktop"); // stitchAppNames covers new slots
+
         // No add left a nested repo inside its scaffold (engine scrub).
         expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
         expect(existsSync(join(root, "packages/backend/.git"))).toBe(false);
+        expect(existsSync(join(root, "apps/desktop/.git"))).toBe(false);
 
-        // groot.json grew to three scaffolds and kept its provenance.
+        // groot.json grew to four scaffolds and kept its provenance.
         const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-        expect(manifest.scaffolds).toHaveLength(3);
+        expect(manifest.scaffolds).toHaveLength(4);
         expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
           "api",
           "backend",
+          "desktop",
           "web",
         ]);
         expect(manifest.createdWith).toBe("create-groot@0.2.0-e2e");

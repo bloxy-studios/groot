@@ -78,6 +78,7 @@ async function runInit(args: {
   name: string | undefined;
   web: string | undefined;
   mobile: string | undefined;
+  desktop: string | undefined;
   api: string | undefined;
   backend: string | undefined;
   preset: string | undefined;
@@ -98,6 +99,7 @@ async function runInit(args: {
   const selections: SlotSelections = {
     web: args.web,
     mobile: args.mobile,
+    desktop: args.desktop,
     api: args.api,
     backend: args.backend,
   };
@@ -128,7 +130,7 @@ async function runInit(args: {
     throw new GrootError(
       "Interactive prompts need a TTY, and this environment doesn't have one.",
       EXIT.USAGE,
-      "Pass --yes (accept defaults) or set a target dir plus every slot flag (--web/--mobile/--api/--backend).",
+      "Pass --yes (accept defaults) or set a target dir plus every slot flag (--web/--mobile/--desktop/--api/--backend).",
     );
   }
 
@@ -239,6 +241,12 @@ function printNextSteps(plan: Plan, verifyNotes: string[]): void {
       "bun run --cwd packages/backend setup   # Convex login + dev deployment (interactive)",
     );
   }
+  const tauri = plan.scaffolds.find((scaffold) => scaffold.framework === "tauri");
+  if (tauri !== undefined) {
+    steps.push(
+      `bun run --cwd ${tauri.path} tauri dev   # needs Rust — install via https://rustup.rs`,
+    );
+  }
   steps.push("bun dev");
   steps.forEach((text, index) => {
     console.log(`  ${index + 1}. ${pc.cyan(text)}`);
@@ -257,6 +265,7 @@ export const init = defineCommand({
     name: { type: "string", description: "Workspace name (default: dir basename)" },
     web: { type: "string", description: "Web app: next | sveltekit | none" },
     mobile: { type: "string", description: "Mobile app: expo | none" },
+    desktop: { type: "string", description: "Desktop app: tauri | none" },
     api: { type: "string", description: "API: elysia | hono | none" },
     backend: { type: "string", description: "Backend: convex | none" },
     preset: {
@@ -305,6 +314,7 @@ export const init = defineCommand({
         name: args.name,
         web: args.web,
         mobile: args.mobile,
+        desktop: args.desktop,
         api: args.api,
         backend: args.backend,
         preset: args.preset,

@@ -39,6 +39,20 @@ export const MATRIX: Record<Slot, SlotSpec> = {
       },
     ],
   },
+  desktop: {
+    title: "Desktop app",
+    choices: [
+      // Port 1420 is the create-tauri-app template's own strictPort default,
+      // referenced by tauri.conf.json's devUrl — unique in the matrix, kept.
+      {
+        id: "tauri",
+        label: "Tauri",
+        path: "apps/desktop",
+        port: 1420,
+        generator: "create-tauri-app@4",
+      },
+    ],
+  },
   api: {
     title: "API",
     choices: [
@@ -59,7 +73,7 @@ export const MATRIX: Record<Slot, SlotSpec> = {
 };
 
 /** Prompt/display order of slots. */
-export const SLOT_ORDER: readonly Slot[] = ["web", "mobile", "api", "backend"];
+export const SLOT_ORDER: readonly Slot[] = ["web", "mobile", "desktop", "api", "backend"];
 
 /**
  * Defaults applied by `--yes` for slots the user didn't pick — groot's flagship
@@ -68,6 +82,7 @@ export const SLOT_ORDER: readonly Slot[] = ["web", "mobile", "api", "backend"];
 export const YES_DEFAULTS: Record<Slot, string> = {
   web: "next",
   mobile: "none",
+  desktop: "none",
   api: "none",
   backend: "convex",
 };

@@ -9,7 +9,7 @@ import { EXIT, GrootError } from "./errors.ts";
 import { findChoice } from "./matrix.ts";
 import { MANIFEST_VERSION, type Manifest, type PlannedScaffold, type Slot } from "./types.ts";
 
-const SLOTS: readonly Slot[] = ["web", "mobile", "api", "backend"];
+const SLOTS: readonly Slot[] = ["web", "mobile", "desktop", "api", "backend"];
 
 export interface LoadedManifest {
   readonly manifest: Manifest;

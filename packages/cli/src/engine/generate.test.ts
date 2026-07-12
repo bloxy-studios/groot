@@ -131,7 +131,7 @@ describe("growScaffold git hygiene", () => {
       name: "ws",
       targetDir,
       cliVersion: "0.0.0-test",
-      selections: { web: "none", mobile: "none", api: "elysia", backend: "none" },
+      selections: { web: "none", mobile: "none", desktop: "none", api: "elysia", backend: "none" },
       options: {
         install: false,
         git: false,

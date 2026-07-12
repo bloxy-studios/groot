@@ -4,11 +4,11 @@
  * adapter contract) and docs/cli-spec.md (flags, exit codes, manifest schema).
  */
 
-/** The four scaffold slots a groot workspace can fill. */
-export type Slot = "web" | "mobile" | "api" | "backend";
+/** The five scaffold slots a groot workspace can fill. */
+export type Slot = "web" | "mobile" | "desktop" | "api" | "backend";
 
 /** Framework identifiers accepted by the slot flags (`--web next`, `--api hono`, …). */
-export type FrameworkId = "next" | "sveltekit" | "expo" | "elysia" | "hono" | "convex";
+export type FrameworkId = "next" | "sveltekit" | "expo" | "tauri" | "elysia" | "hono" | "convex";
 
 /** The explicit "skip this slot" choice. */
 export const NONE = "none" as const;

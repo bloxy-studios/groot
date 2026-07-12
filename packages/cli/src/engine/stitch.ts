@@ -176,7 +176,11 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
     outputs.add("!.next/cache/**");
   }
   if (frameworks.has("sveltekit")) outputs.add(".svelte-kit/**");
-  if (frameworks.has("elysia") || frameworks.has("hono")) outputs.add("dist/**");
+  // Tauri's `build` is the Vite frontend build (dist/); the Rust build lives in
+  // src-tauri/target (cargo-managed, never a turbo output).
+  if (frameworks.has("elysia") || frameworks.has("hono") || frameworks.has("tauri")) {
+    outputs.add("dist/**");
+  }
 
   build.outputs = [...outputs];
   tasks.build = build;
