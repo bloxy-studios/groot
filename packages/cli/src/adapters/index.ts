@@ -11,6 +11,7 @@ import { elysiaAdapter } from "./elysia.ts";
 import { expoAdapter } from "./expo.ts";
 import { honoAdapter } from "./hono.ts";
 import { nextAdapter } from "./next.ts";
+import { reactRouterAdapter } from "./react-router.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { tauriAdapter } from "./tauri.ts";
@@ -20,6 +21,7 @@ export const ADAPTERS: Record<FrameworkId, ScaffoldAdapter> = {
   sveltekit: sveltekitAdapter,
   "tanstack-start": tanstackStartAdapter,
   astro: astroAdapter,
+  "react-router": reactRouterAdapter,
   expo: expoAdapter,
   tauri: tauriAdapter,
   electron: electronAdapter,

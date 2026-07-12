@@ -13,6 +13,7 @@ export type FrameworkId =
   | "sveltekit"
   | "tanstack-start"
   | "astro"
+  | "react-router"
   | "expo"
   | "tauri"
   | "electron"

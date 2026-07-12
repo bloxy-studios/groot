@@ -15,6 +15,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | SvelteKit | `bunx sv@0.16 create … --no-install --no-dir-check` | never | only with `--install` | refuses unless `--no-dir-check` |
 | TanStack Start | `bunx @tanstack/cli@0.69 create <name> --framework React --package-manager bun --no-git --no-install --no-examples --no-toolchain --no-intent --yes` | `--no-git` | `--no-install` | refuses unless `--force` |
 | Astro | `bunx create-astro@5 <name> --template minimal --no-install --no-git --no-ai --skip-houston --yes` | `--no-git` | `--no-install` | ⚠️ silently redirects to a random dir under `--yes` (see §11) |
+| React Router | `bunx create-react-router@8 <name> --package-manager bun --no-git-init --no-install --no-agent-skills --yes` | `--no-git-init` | `--no-install` | hard-fails on collisions without `--overwrite` |
 | Expo | `bunx create-expo-app@4 … --no-install` | no flag exists (see caveats) | yes → suppressed | (unverified) |
 | Tauri | `bunx create-tauri-app@4 <name> --template react-ts --manager bun --identifier <id> --yes` | never | never | refuses unless `--force` |
 | Electron | `bunx @quick-start/create-electron@1 <name> --template react-ts --skip` | never | never | overwrite prompt nulled by `--skip` |
@@ -129,7 +130,7 @@ packages/backend/
 - ⚠️ **The vendored `convex/tsconfig.json` declares `"types": ["node"]`** — the generated package.json must therefore carry `@types/node` (pin tracks the upstream template), or `convex dev`'s built-in typecheck fails with TS2688. Caught in a live v0.2.0 run; the E2E now typechecks scaffolded packages, not just installs them.
 - ⚠️ **Known upstream quirk (verified 2026-07-10, cosmetic)**: `convex dev`'s optional "Set up Convex AI files?" step installs agent skills via `npx`, which trips npm's `devEngines` guard inside the bun-declared workspace (`EBADDEVENGINES: required { name: 'bun' }`). The guard is working as intended; Convex prints a manual retry command and continues — deployment provisioning and `.env.local` are unaffected.
 - The one unavoidable interactive step — `bunx convex dev --until-success` (login, deployment provisioning, `.env.local`) — is **never run by groot**; it's printed as the first "next step".
-- Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive the Convex URL via `.env` plumbing, named per framework: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start), `EXPO_PUBLIC_CONVEX_URL` (Expo).
+- Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive the Convex URL via `.env` plumbing, named per framework: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router), `EXPO_PUBLIC_CONVEX_URL` (Expo).
 - Sources: <https://docs.convex.dev/cli/reference/codegen>, <https://docs.convex.dev/cli>, <https://github.com/get-convex/templates> (stub strategy), <https://github.com/get-convex/turbo-expo-nextjs-clerk-convex-monorepo>, <https://docs.convex.dev/production/project-configuration>.
 
 ## 8. Desktop: Tauri — `create-tauri-app`
@@ -187,6 +188,20 @@ bunx create-astro@5 web --template minimal --no-install --no-git --no-ai --skip-
 - **Port 4321** is `astro dev`'s built-in default (no config entry, no dev-script flag) — the only unique web port in the matrix; nothing to rewrite or drift-check.
 - Build: `astro build` → `dist/` (already in turbo's outputs).
 - Sources: <https://docs.astro.build/en/install-and-setup/>, <https://www.npmjs.com/package/create-astro> (dist/index.js flag table + project-name action), <https://docs.astro.build/en/guides/environment-variables/> (PUBLIC_ prefix).
+
+## 12. Web: React Router (framework mode) — `create-react-router`
+
+```sh
+bunx create-react-router@8 web --package-manager bun --no-git-init --no-install --no-agent-skills --yes
+```
+
+- **Flags (verified 2026-07-12 against the published 8.2.0 source)**: `--yes`, `--git-init/--no-git-init`, `--install/--no-install`, `--package-manager <npm|pnpm|yarn|bun|deno>`, `--agent-skills/--no-agent-skills`, `--template <gh-url-or-shorthand>`, `--overwrite`, `--react-router-version/-v`, `--no-color`, `--no-motion`, `--show-install-output`, `--token`, `--debug`.
+- ⚠️ **v8.2 added an agent-skills step**: the CLI ships React Router's own SKILL.md + reference docs and offers to copy them into the project. groot passes `--no-agent-skills` — the same policy as TanStack's `--no-intent` and Astro's `--no-ai`: groot's own agent-era artifacts arrive with roadmap v1.3 and per-scaffold agent files would collide.
+- **The default template is fetched from GitHub at scaffold time** (`remix-run/react-router-templates/tree/main/default`): TS + Tailwind + SSR, plus a Dockerfile (kept as-is). In non-TTY runs the CLI auto-forces `--yes`; pre-existing file collisions hard-fail without `--overwrite` — groot's fresh-destination guarantee makes that unreachable.
+- **The positional doubles as the project-name source** (`toValidProjectName`, same shape as create-astro) — groot spawns from the scaffold's parent with the bare basename.
+- **Port 5173** is the Vite default (no dev-script flag, no config entry) — shared with SvelteKit; same-slot alternatives share ports (the elysia/hono precedent), and `add --path` coexistence rides the collision warning.
+- Build: `react-router build` → `build/` (client + server; the template's serve script points at `build/server/index.js`) — added to turbo's outputs. Typecheck: `react-router typegen && tsc`.
+- Sources: <https://reactrouter.com/start/framework/installation>, <https://www.npmjs.com/package/create-react-router> (dist/cli.js option table), <https://github.com/remix-run/react-router-templates/tree/main/default>.
 
 ## Stitching reference
 

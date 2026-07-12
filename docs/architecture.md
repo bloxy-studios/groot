@@ -68,7 +68,7 @@ Stitch operations (each implemented as a pure, unit-tested transform):
 | Port allocation | Deterministic dev ports written into each app (flag or source, per adapter) — see table below |
 | turbo.json | Root tasks (`dev`, `build`, `lint`, `check-types`) with correct `outputs` per framework |
 | Shared TS config | `packages/typescript-config` kept from the trunk. In v0.2 apps keep their generated standalone tsconfigs (they work as-is); rewiring them to shared extends arrives with `groot add`/`doctor` (v0.3), where breakage can be detected and fixed |
-| Env plumbing | `.env.example` entries per scaffold, named for what each framework exposes to the client: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start / Vite), `EXPO_PUBLIC_CONVEX_URL` (Expo) |
+| Env plumbing | `.env.example` entries per scaffold, named for what each framework exposes to the client: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router — Vite-based), `EXPO_PUBLIC_CONVEX_URL` (Expo) |
 | groot.json | Manifest recording what was scaffolded, by which generator version — the contract for `groot add`/`doctor` |
 
 ### 5. Verify
@@ -85,6 +85,7 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `apps/web` (SvelteKit) | 5173 | Vite default (kept) |
 | `apps/web` (TanStack Start) | 3000 | The template's own dev script (`vite dev --port 3000`) — same default as Next; `add --path` coexistence rides the collision warning |
 | `apps/web` (Astro) | 4321 | `astro dev` built-in default (kept) — the only unique web port |
+| `apps/web` (React Router) | 5173 | Vite default (kept) — shared with SvelteKit, like elysia/hono on 3001 |
 | `apps/api` (Elysia / Hono) | 3001 | Written into source (`.listen(3001)` / `export default { port: 3001, fetch }`) — these templates have no port flag |
 | `apps/mobile` (Expo / Metro) | 8081 | Metro default (kept) |
 | `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |

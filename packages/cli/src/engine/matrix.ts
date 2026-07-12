@@ -37,6 +37,15 @@ export const MATRIX: Record<Slot, SlotSpec> = {
       },
       // 4321 is astro dev's built-in default — the only unique web port.
       { id: "astro", label: "Astro", path: "apps/web", port: 4321, generator: "create-astro@5" },
+      // Vite default 5173, like SvelteKit — same-slot alternatives share ports
+      // (the elysia/hono precedent); add --path coexistence rides the warning.
+      {
+        id: "react-router",
+        label: "React Router",
+        path: "apps/web",
+        port: 5173,
+        generator: "create-react-router@8",
+      },
     ],
   },
   mobile: {

@@ -114,6 +114,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
       "expo",
       "hono",
       "next",
+      "react-router",
       "sveltekit",
       "tanstack-start",
       "tauri",
@@ -161,7 +162,7 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       'Unknown scaffold "angular"',
     );
     expect(error.hint).toContain(
-      "next | sveltekit | tanstack-start | astro | expo | tauri | electron | elysia | hono | convex",
+      "next | sveltekit | tanstack-start | astro | react-router | expo | tauri | electron | elysia | hono | convex",
     );
   });
 

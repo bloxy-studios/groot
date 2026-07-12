@@ -265,7 +265,7 @@ export const init = defineCommand({
     name: { type: "string", description: "Workspace name (default: dir basename)" },
     web: {
       type: "string",
-      description: "Web app: next | sveltekit | tanstack-start | astro | none",
+      description: "Web app: next | sveltekit | tanstack-start | astro | react-router | none",
     },
     mobile: { type: "string", description: "Mobile app: expo | none" },
     desktop: { type: "string", description: "Desktop app: tauri | electron | none" },

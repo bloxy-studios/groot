@@ -252,7 +252,7 @@ describe.skipIf(!e2e)("full pipeline (real generators — sveltekit + hono + add
 });
 
 describe.skipIf(!e2e)(
-  "scenario 3: grow an existing workspace (init next → add elysia → add convex → add tauri)",
+  "scenario 3: grow an existing workspace (add elysia → convex → react-router → tauri)",
   () => {
     test(
       "adds run the pipeline for just the new scaffold and doctor stays healthy",
@@ -268,13 +268,13 @@ describe.skipIf(!e2e)(
         const root = plan.targetDir;
 
         // `groot add <framework>` — composed exactly as commands/add.ts does.
-        const addOnce = async (framework: string) => {
+        const addOnce = async (framework: string, path?: string) => {
           const loaded = await loadManifest(root);
           const resolution = await resolveAddScaffold(
             loaded.manifest,
             loaded.workspaceRoot,
             framework,
-            undefined,
+            path,
           );
           const addPlan = buildAddPlan(
             loaded,
@@ -299,6 +299,15 @@ describe.skipIf(!e2e)(
           "NEXT_PUBLIC_CONVEX_URL=",
         );
 
+        // A second web scaffold via --path: the REAL create-react-router.
+        // next(3000) + elysia(3001) + rr(5173) — no collisions here.
+        const rr = await addOnce("react-router", "apps/admin");
+        expect(rr.warnings).toEqual([]);
+        expect(existsSync(join(root, "apps/admin/react-router.config.ts"))).toBe(true);
+        expect(existsSync(join(root, "apps/admin/.git"))).toBe(false);
+        const adminPkg = JSON.parse(await readFile(join(root, "apps/admin/package.json"), "utf8"));
+        expect(adminPkg.name).toBe("admin");
+
         // Desktop slot: the REAL create-tauri-app grows apps/desktop.
         await addOnce("tauri");
         expect(existsSync(join(root, "apps/desktop/src-tauri/tauri.conf.json"))).toBe(true);
@@ -319,13 +328,14 @@ describe.skipIf(!e2e)(
         expect(existsSync(join(root, "packages/backend/.git"))).toBe(false);
         expect(existsSync(join(root, "apps/desktop/.git"))).toBe(false);
 
-        // groot.json grew to four scaffolds and kept its provenance.
+        // groot.json grew to five scaffolds and kept its provenance.
         const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-        expect(manifest.scaffolds).toHaveLength(4);
+        expect(manifest.scaffolds).toHaveLength(5);
         expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
           "api",
           "backend",
           "desktop",
+          "web",
           "web",
         ]);
         expect(manifest.createdWith).toBe("create-groot@0.2.0-e2e");
