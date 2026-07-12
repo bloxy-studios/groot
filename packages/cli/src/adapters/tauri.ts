@@ -98,7 +98,15 @@ export const tauriAdapter: ScaffoldAdapter = {
           ? (conf.build as Record<string, unknown>)
           : {};
       const devUrl = typeof build.devUrl === "string" ? build.devUrl : "";
-      const matches = devUrl.includes(`:${ctx.scaffold.port}`);
+      // Parse the actual port — a substring test would accept :14200 for :1420.
+      let devUrlPort: number | null = null;
+      try {
+        const parsed = new URL(devUrl);
+        devUrlPort = parsed.port === "" ? null : Number(parsed.port);
+      } catch {
+        devUrlPort = null;
+      }
+      const matches = devUrlPort === ctx.scaffold.port;
       checks.push({
         name: `${ctx.scaffold.path} dev port`,
         status: matches ? "pass" : "warn",

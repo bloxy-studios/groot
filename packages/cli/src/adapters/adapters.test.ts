@@ -219,6 +219,22 @@ describe("tauri (scaffold-flows.md#8)", () => {
     const port = checks?.find((c) => c.name === "apps/desktop dev port");
     expect(port?.status).toBe("warn");
     expect(port?.detail).toContain(":1420");
+
+    // The substring trap: :14200 contains ":1420" but is NOT port 1420.
+    await writeFile(
+      join(root, "apps/desktop/src-tauri/tauri.conf.json"),
+      JSON.stringify({ build: { devUrl: "http://localhost:14200" } }),
+    );
+    checks = await tauriAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/desktop dev port")?.status).toBe("warn");
+
+    // Malformed devUrl parses to no port → warn, never a crash or false pass.
+    await writeFile(
+      join(root, "apps/desktop/src-tauri/tauri.conf.json"),
+      JSON.stringify({ build: { devUrl: "not a url" } }),
+    );
+    checks = await tauriAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/desktop dev port")?.status).toBe("warn");
   });
 });
 
