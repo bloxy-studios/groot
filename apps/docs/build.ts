@@ -60,6 +60,13 @@ export const DOC_PAGES: readonly DocPage[] = [
     description: "Where groot is headed, milestone by milestone.",
   },
   {
+    slug: "expansion",
+    source: "docs/expansion.md",
+    title: "Expansion",
+    description:
+      "The research ledger: candidate scaffolds, new slots, add-ons, git/GitHub powers, and agent-era capabilities.",
+  },
+  {
     slug: "maintainers",
     source: "docs/maintainers.md",
     title: "Maintainers",
