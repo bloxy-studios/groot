@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildAddPlan, executeAdd, readRootPackageName, resolveAddScaffold } from "./add.ts";
 import { isHealthy, runDoctor } from "./doctor.ts";
 import { generate } from "./generate.ts";
@@ -124,8 +124,13 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship + electron de
       expect(existsSync(join(root, "apps/web/node_modules/@repo/backend"))).toBe(true);
       // Electron's postinstall (runtime binary download) ran under bun — via
       // the stitched trustedDependencies grant (NOT default-trusted; verified
-      // 2026-07-12 on bun 1.3.14 when this assertion failed without the grant).
-      expect(existsSync(join(root, "node_modules/electron/dist"))).toBe(true);
+      // 2026-07-12 on bun 1.3.14 when this failed without the grant). Resolved
+      // from the app dir: bun 1.3's isolated layout keeps the package in the
+      // node_modules/.bun store — there is no top-level node_modules/electron.
+      const electronPkgDir = dirname(
+        Bun.resolveSync("electron/package.json", join(root, "apps/desktop")),
+      );
+      expect(existsSync(join(electronPkgDir, "dist"))).toBe(true);
 
       // The scaffolded packages must TYPECHECK, not just install — `convex dev`
       // runs tsc before pushing functions (caught live: missing @types/node).

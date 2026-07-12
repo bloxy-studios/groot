@@ -270,21 +270,31 @@ describe("electron (scaffold-flows.md#9)", () => {
     expect(scaffold.port).toBeNull();
   });
 
-  test("doctor: config presence gates fail; binary check only reports when installed", async () => {
+  test("doctor: missing config fails; binary check absent when electron isn't installed", async () => {
     const root = await mkdtemp(join(tmpdir(), "groot-electron-"));
     await mkdir(join(root, "apps/desktop"), { recursive: true });
-
-    // No config, electron not installed → one failing config check, no binary check.
-    let checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    const checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.find((c) => c.name === "apps/desktop electron-vite config")?.status).toBe(
       "fail",
     );
     expect(checks?.some((c) => c.name === "apps/desktop electron binary")).toBe(false);
+  });
 
-    // Config present, electron installed but postinstall blocked → pass + warn.
+  test("doctor: blocked postinstall warns; downloaded runtime passes", async () => {
+    // Fresh root (Bun.resolveSync caches negative lookups within a process —
+    // irrelevant for real doctor runs, which are one resolution per process).
+    // The fake package sits in the app's OWN node_modules, mirroring bun 1.3's
+    // isolated layout where no top-level node_modules/electron exists.
+    const root = await mkdtemp(join(tmpdir(), "groot-electron-"));
+    await mkdir(join(root, "apps/desktop/node_modules/electron"), { recursive: true });
     await writeFile(join(root, "apps/desktop/electron.vite.config.ts"), "export default {};\n");
-    await mkdir(join(root, "node_modules/electron"), { recursive: true });
-    checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    await writeFile(
+      join(root, "apps/desktop/node_modules/electron/package.json"),
+      JSON.stringify({ name: "electron", version: "0.0.0-test", main: "index.js" }),
+    );
+    await writeFile(join(root, "apps/desktop/node_modules/electron/index.js"), "");
+
+    let checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.find((c) => c.name === "apps/desktop electron-vite config")?.status).toBe(
       "pass",
     );
@@ -292,8 +302,8 @@ describe("electron (scaffold-flows.md#9)", () => {
     expect(binary?.status).toBe("warn");
     expect(binary?.fix).toContain("bun pm trust electron");
 
-    // Runtime downloaded → everything passes.
-    await mkdir(join(root, "node_modules/electron/dist"), { recursive: true });
+    // Runtime downloaded → passes (positive resolution result is path-stable).
+    await mkdir(join(root, "apps/desktop/node_modules/electron/dist"), { recursive: true });
     checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.find((c) => c.name === "apps/desktop electron binary")?.status).toBe("pass");
   });

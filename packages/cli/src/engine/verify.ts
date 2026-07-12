@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveElectronPackageDir } from "../adapters/electron.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { runCommand } from "./run.ts";
 import type { Plan } from "./types.ts";
@@ -51,22 +52,25 @@ export interface VerifyOptions {
 }
 
 /**
- * Electron's runtime arrives via a postinstall script that bun blocks for
- * untrusted packages — and in workspaces, bun does not reliably honor the
- * root trustedDependencies grant for a workspace member's dependencies
- * (verified empirically in the flagship E2E: the grant was present, the
- * runtime still didn't download). `bun pm trust` is bun's own retroactive
- * path: it runs the scripts it previously blocked. Only invoked when the
- * plan has an electron scaffold and the runtime is actually missing; a
- * failure here degrades to a note — doctor carries the persistent warning.
+ * Electron's runtime arrives via a postinstall script that bun runs only for
+ * trusted packages. The stitch stage grants that trust (root
+ * trustedDependencies — empirically honored for workspace-member deps under
+ * bun 1.3), so on a normal run the install above already downloaded the
+ * runtime and this is a no-op. It exists for the degraded cases — grant
+ * removed by hand, workspaces grown by older groots — where `bun pm trust`
+ * is bun's retroactive path: it runs the scripts it previously blocked.
+ * Paths resolve from the scaffold dir because bun 1.3's isolated layout has
+ * no top-level node_modules/electron. Failures degrade to a note — doctor
+ * carries the persistent warning.
  */
 async function runBlockedElectronPostinstall(
   plan: Plan,
   options: VerifyOptions,
 ): Promise<string[]> {
-  if (!plan.scaffolds.some((scaffold) => scaffold.framework === "electron")) return [];
-  const electronPkg = join(plan.targetDir, "node_modules", "electron");
-  if (!existsSync(electronPkg) || existsSync(join(electronPkg, "dist"))) return [];
+  const electron = plan.scaffolds.find((scaffold) => scaffold.framework === "electron");
+  if (electron === undefined) return [];
+  const pkgDir = resolveElectronPackageDir(join(plan.targetDir, electron.path));
+  if (pkgDir === null || existsSync(join(pkgDir, "dist"))) return [];
   const report = options.onStep ?? (() => {});
   report("Running electron's blocked postinstall (bun pm trust)");
   try {
@@ -81,7 +85,7 @@ async function runBlockedElectronPostinstall(
   } catch {
     // Fall through to the state check — doctor's fix hint covers the rest.
   }
-  return existsSync(join(electronPkg, "dist"))
+  return existsSync(join(pkgDir, "dist"))
     ? ["electron runtime downloaded (bun pm trust electron)"]
     : ["electron runtime still missing — run `bun pm trust electron` at the workspace root"];
 }
