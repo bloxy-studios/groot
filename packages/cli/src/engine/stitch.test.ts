@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPlan } from "./plan.ts";
-import { stitch } from "./stitch.ts";
+import { stitch, stitchTrustedDependencies } from "./stitch.ts";
 import type { Plan, Slot } from "./types.ts";
 
 /** Build a fixture tree simulating raw post-generate output, then stitch it. */
@@ -185,5 +185,39 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     );
     const notes = await stitch(plan);
     expect(notes.join("\n")).toContain("marker not found");
+  });
+});
+
+describe("stitchTrustedDependencies (bun lifecycle — scaffold-flows.md#9)", () => {
+  test("electron workspaces get the root trust grant, idempotently", async () => {
+    const { plan, root } = await fixture({
+      web: "none",
+      mobile: "none",
+      desktop: "electron",
+      api: "none",
+      backend: "none",
+    });
+    const note = await stitchTrustedDependencies(plan);
+    expect(note).toContain("trustedDependencies [electron]");
+    const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+    expect(pkg.trustedDependencies).toEqual(["electron"]);
+
+    // Second run: already granted → no-op, no duplicates.
+    expect(await stitchTrustedDependencies(plan)).toBeNull();
+    const again = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+    expect(again.trustedDependencies).toEqual(["electron"]);
+  });
+
+  test("non-electron workspaces are left untouched", async () => {
+    const { plan, root } = await fixture({
+      web: "next",
+      mobile: "none",
+      desktop: "tauri",
+      api: "none",
+      backend: "none",
+    });
+    expect(await stitchTrustedDependencies(plan)).toBeNull();
+    const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+    expect("trustedDependencies" in pkg).toBe(false);
   });
 });

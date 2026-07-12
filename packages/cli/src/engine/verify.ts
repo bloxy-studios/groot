@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveElectronPackageDir } from "../adapters/electron.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { runCommand } from "./run.ts";
 import type { Plan } from "./types.ts";
@@ -50,6 +51,45 @@ export interface VerifyOptions {
   readonly onStep?: (label: string) => void;
 }
 
+/**
+ * Electron's runtime arrives via a postinstall script that bun runs only for
+ * trusted packages. The stitch stage grants that trust (root
+ * trustedDependencies — empirically honored for workspace-member deps under
+ * bun 1.3), so on a normal run the install above already downloaded the
+ * runtime and this is a no-op. It exists for the degraded cases — grant
+ * removed by hand, workspaces grown by older groots — where `bun pm trust`
+ * is bun's retroactive path: it runs the scripts it previously blocked.
+ * Paths resolve from the scaffold dir because bun 1.3's isolated layout has
+ * no top-level node_modules/electron. Failures degrade to a note — doctor
+ * carries the persistent warning.
+ */
+async function runBlockedElectronPostinstall(
+  plan: Plan,
+  options: VerifyOptions,
+): Promise<string[]> {
+  const electron = plan.scaffolds.find((scaffold) => scaffold.framework === "electron");
+  if (electron === undefined) return [];
+  const pkgDir = resolveElectronPackageDir(join(plan.targetDir, electron.path));
+  if (pkgDir === null || existsSync(join(pkgDir, "dist"))) return [];
+  const report = options.onStep ?? (() => {});
+  report("Running electron's blocked postinstall (bun pm trust)");
+  try {
+    await runCommand(
+      {
+        argv: ["bun", "pm", "trust", "electron"],
+        cwd: plan.targetDir,
+        label: "bun pm trust electron",
+      },
+      { verbose: options.verbose },
+    );
+  } catch {
+    // Fall through to the state check — doctor's fix hint covers the rest.
+  }
+  return existsSync(join(pkgDir, "dist"))
+    ? ["electron runtime downloaded (bun pm trust electron)"]
+    : ["electron runtime still missing — run `bun pm trust electron` at the workspace root"];
+}
+
 /** Structural checks → root bun install → git init + initial commit. */
 export async function verify(plan: Plan, options: VerifyOptions): Promise<string[]> {
   const report = options.onStep ?? (() => {});
@@ -72,6 +112,7 @@ export async function verify(plan: Plan, options: VerifyOptions): Promise<string
         "The workspace files are in place — fix and re-run `bun install` manually.",
       );
     }
+    notes.push(...(await runBlockedElectronPostinstall(plan, options)));
   }
 
   if (plan.options.git && !existsSync(join(plan.targetDir, ".git"))) {

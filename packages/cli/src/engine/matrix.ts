@@ -51,6 +51,16 @@ export const MATRIX: Record<Slot, SlotSpec> = {
         port: 1420,
         generator: "create-tauri-app@4",
       },
+      // No declared port: electron-vite's renderer dev server is non-strict and
+      // self-wiring (it launches Electron with whatever port it resolved), so
+      // groot neither promises nor manages it — see docs/scaffold-flows.md#9.
+      {
+        id: "electron",
+        label: "Electron",
+        path: "apps/desktop",
+        port: null,
+        generator: "@quick-start/create-electron@1",
+      },
     ],
   },
   api: {

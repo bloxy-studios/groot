@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildAddPlan, executeAdd, readRootPackageName, resolveAddScaffold } from "./add.ts";
 import { isHealthy, runDoctor } from "./doctor.ts";
 import { generate } from "./generate.ts";
@@ -46,12 +46,12 @@ async function planFor(
   });
 }
 
-describe.skipIf(!e2e)("full pipeline (real generators — flagship: next + elysia + convex)", () => {
+describe.skipIf(!e2e)("full pipeline (real generators — flagship + electron desktop)", () => {
   test(
     "generate → stitch → verify produces an installed, coherent workspace",
     async () => {
       const plan = await planFor(
-        { web: "next", mobile: "none", desktop: "none", api: "elysia", backend: "convex" },
+        { web: "next", mobile: "none", desktop: "electron", api: "elysia", backend: "convex" },
         "flagship",
         { install: true }, // real root bun install — the whole point of verify
       );
@@ -84,6 +84,23 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship: next + elysi
       expect(existsSync(join(root, "packages/backend/convex/_generated/api.d.ts"))).toBe(true);
       expect(existsSync(join(root, "packages/backend/convex/tsconfig.json"))).toBe(true);
 
+      // Electron grew into apps/desktop from the REAL @quick-start/create-electron.
+      expect(existsSync(join(root, "apps/desktop/electron.vite.config.ts"))).toBe(true);
+      expect(existsSync(join(root, "apps/desktop/package.json"))).toBe(true);
+      expect(existsSync(join(root, "apps/desktop/.git"))).toBe(false);
+      const desktopPkg = JSON.parse(
+        await readFile(join(root, "apps/desktop/package.json"), "utf8"),
+      );
+      expect(desktopPkg.name).toBe("desktop");
+      // turbo caches electron-vite's out/ build dir.
+      const turboAfter = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
+      expect(turboAfter.tasks.build.outputs).toContain("out/**");
+      // Stitch granted bun trust for electron's postinstall BEFORE the install
+      // (electron is NOT on bun's default-trusted list — this run proves the
+      // grant is what makes the runtime download below happen).
+      const rootAfterStitch = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+      expect(rootAfterStitch.trustedDependencies).toContain("electron");
+
       // Stitch: identity, backend link, env plumbing, manifest, lockfile hygiene.
       const stitchedRootPkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
       expect(stitchedRootPkg.name).toBe("flagship");
@@ -105,6 +122,15 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship: next + elysi
       expect(existsSync(join(root, "node_modules"))).toBe(true);
       // Bun links workspace deps inside the depending app's node_modules.
       expect(existsSync(join(root, "apps/web/node_modules/@repo/backend"))).toBe(true);
+      // Electron's postinstall (runtime binary download) ran under bun — via
+      // the stitched trustedDependencies grant (NOT default-trusted; verified
+      // 2026-07-12 on bun 1.3.14 when this failed without the grant). Resolved
+      // from the app dir: bun 1.3's isolated layout keeps the package in the
+      // node_modules/.bun store — there is no top-level node_modules/electron.
+      const electronPkgDir = dirname(
+        Bun.resolveSync("electron/package.json", join(root, "apps/desktop")),
+      );
+      expect(existsSync(join(electronPkgDir, "dist"))).toBe(true);
 
       // The scaffolded packages must TYPECHECK, not just install — `convex dev`
       // runs tsc before pushing functions (caught live: missing @types/node).

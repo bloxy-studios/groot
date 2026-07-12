@@ -6,6 +6,7 @@ import type { AdapterContext } from "../engine/adapter.ts";
 import { buildPlan } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
 import { convexAdapter } from "./convex.ts";
+import { electronAdapter } from "./electron.ts";
 import { elysiaAdapter } from "./elysia.ts";
 import { expoAdapter } from "./expo.ts";
 import { honoAdapter } from "./hono.ts";
@@ -35,6 +36,7 @@ describe("registry", () => {
   test("covers every framework id and agrees on slot", () => {
     expect(Object.keys(ADAPTERS).sort()).toEqual([
       "convex",
+      "electron",
       "elysia",
       "expo",
       "hono",
@@ -235,6 +237,75 @@ describe("tauri (scaffold-flows.md#8)", () => {
     );
     checks = await tauriAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.find((c) => c.name === "apps/desktop dev port")?.status).toBe("warn");
+  });
+});
+
+describe("electron (scaffold-flows.md#9)", () => {
+  const electronPlan: Plan = buildPlan({
+    name: "demo",
+    targetDir: "/work/demo",
+    cliVersion: "1.2.0",
+    selections: { web: "none", mobile: "none", desktop: "electron", api: "none", backend: "none" },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = electronPlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the electron scaffold in the plan");
+
+  test("runs create-electron with a bare name from the scaffold's parent dir, fully silenced", () => {
+    const cmd = electronAdapter.command({ plan: electronPlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "@quick-start/create-electron@1",
+      "desktop",
+      "--template",
+      "react-ts",
+      "--skip",
+    ]);
+    // Same name-not-path contract as create-tauri-app: spawn from the parent.
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("declares no dev port — electron-vite's renderer server is self-wiring", () => {
+    expect(scaffold.port).toBeNull();
+  });
+
+  test("doctor: missing config fails; binary check absent when electron isn't installed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-electron-"));
+    await mkdir(join(root, "apps/desktop"), { recursive: true });
+    const checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/desktop electron-vite config")?.status).toBe(
+      "fail",
+    );
+    expect(checks?.some((c) => c.name === "apps/desktop electron binary")).toBe(false);
+  });
+
+  test("doctor: blocked postinstall warns; downloaded runtime passes", async () => {
+    // Fresh root (Bun.resolveSync caches negative lookups within a process —
+    // irrelevant for real doctor runs, which are one resolution per process).
+    // The fake package sits in the app's OWN node_modules, mirroring bun 1.3's
+    // isolated layout where no top-level node_modules/electron exists.
+    const root = await mkdtemp(join(tmpdir(), "groot-electron-"));
+    await mkdir(join(root, "apps/desktop/node_modules/electron"), { recursive: true });
+    await writeFile(join(root, "apps/desktop/electron.vite.config.ts"), "export default {};\n");
+    await writeFile(
+      join(root, "apps/desktop/node_modules/electron/package.json"),
+      JSON.stringify({ name: "electron", version: "0.0.0-test", main: "index.js" }),
+    );
+    await writeFile(join(root, "apps/desktop/node_modules/electron/index.js"), "");
+
+    let checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/desktop electron-vite config")?.status).toBe(
+      "pass",
+    );
+    const binary = checks?.find((c) => c.name === "apps/desktop electron binary");
+    expect(binary?.status).toBe("warn");
+    expect(binary?.fix).toContain("bun pm trust electron");
+
+    // Runtime downloaded → passes (positive resolution result is path-stable).
+    await mkdir(join(root, "apps/desktop/node_modules/electron/dist"), { recursive: true });
+    checks = await electronAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/desktop electron binary")?.status).toBe("pass");
   });
 });
 

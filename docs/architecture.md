@@ -86,6 +86,7 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `apps/api` (Elysia / Hono) | 3001 | Written into source (`.listen(3001)` / `export default { port: 3001, fetch }`) — these templates have no port flag |
 | `apps/mobile` (Expo / Metro) | 8081 | Metro default (kept) |
 | `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |
+| `apps/desktop` (Electron) | — | electron-vite's renderer dev server is non-strict and self-wiring (it launches Electron with whatever port it resolved); groot declares none |
 | `packages/backend` (Convex) | — | Cloud dev deployment; no local port |
 
 ## Workspace conventions (what groot outputs)

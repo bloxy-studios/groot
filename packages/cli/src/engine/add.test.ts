@@ -106,7 +106,16 @@ describe("frameworkChoice / allFrameworkIds", () => {
 
   test("allFrameworkIds lists every choice and never 'none'", () => {
     const ids = allFrameworkIds();
-    expect(ids.sort()).toEqual(["convex", "elysia", "expo", "hono", "next", "sveltekit", "tauri"]);
+    expect(ids.sort()).toEqual([
+      "convex",
+      "electron",
+      "elysia",
+      "expo",
+      "hono",
+      "next",
+      "sveltekit",
+      "tauri",
+    ]);
   });
 });
 
@@ -149,7 +158,9 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       () => resolveAddScaffold(loaded.manifest, root, "angular", undefined),
       'Unknown scaffold "angular"',
     );
-    expect(error.hint).toContain("next | sveltekit | expo | tauri | elysia | hono | convex");
+    expect(error.hint).toContain(
+      "next | sveltekit | expo | tauri | electron | elysia | hono | convex",
+    );
   });
 
   test("free slot, no --path → the framework's standard destination", async () => {
