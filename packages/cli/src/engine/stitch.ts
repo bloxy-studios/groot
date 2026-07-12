@@ -132,6 +132,7 @@ const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
   sveltekit: "PUBLIC_CONVEX_URL=",
   "tanstack-start": "VITE_CONVEX_URL=",
   astro: "PUBLIC_CONVEX_URL=", // import.meta.env.PUBLIC_* — Astro's client prefix
+  "react-router": "VITE_CONVEX_URL=", // framework mode is Vite-based
 };
 
 /**
@@ -212,6 +213,8 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
   }
   // electron-vite builds main/preload/renderer into out/.
   if (frameworks.has("electron")) outputs.add("out/**");
+  // react-router build → build/ (client + server).
+  if (frameworks.has("react-router")) outputs.add("build/**");
 
   build.outputs = [...outputs];
   tasks.build = build;

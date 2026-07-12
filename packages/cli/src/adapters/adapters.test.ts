@@ -13,6 +13,7 @@ import { expoAdapter } from "./expo.ts";
 import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
+import { reactRouterAdapter } from "./react-router.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { identifierSegment, tauriAdapter } from "./tauri.ts";
@@ -44,6 +45,7 @@ describe("registry", () => {
       "expo",
       "hono",
       "next",
+      "react-router",
       "sveltekit",
       "tanstack-start",
       "tauri",
@@ -216,6 +218,56 @@ describe("tanstack-start (scaffold-flows.md#10)", () => {
     await mkdir(join(bare, "apps/web"), { recursive: true });
     checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: bare, scaffold });
     expect(checks?.find((c) => c.name === "apps/web dev port")?.status).toBe("fail");
+  });
+});
+
+describe("react-router (scaffold-flows.md#12)", () => {
+  const rrPlan: Plan = buildPlan({
+    name: "demo",
+    targetDir: "/work/demo",
+    cliVersion: "1.5.0",
+    selections: {
+      web: "react-router",
+      mobile: "none",
+      desktop: "none",
+      api: "none",
+      backend: "none",
+    },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = rrPlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the react-router scaffold in the plan");
+
+  test("runs create-react-router fully silenced, name-not-path, from the parent dir", () => {
+    const cmd = reactRouterAdapter.command({ plan: rrPlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "create-react-router@8",
+      "web",
+      "--package-manager",
+      "bun",
+      "--no-git-init",
+      "--no-install",
+      "--no-agent-skills",
+      "--yes",
+    ]);
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("declares the Vite default port, shared with sveltekit (same-slot precedent)", () => {
+    expect(scaffold.port).toBe(5173);
+  });
+
+  test("doctor: framework-mode config presence passes and warns when missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-rr-"));
+    await mkdir(join(root, "apps/web"), { recursive: true });
+    let checks = await reactRouterAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web react-router config")?.status).toBe("warn");
+
+    await writeFile(join(root, "apps/web/react-router.config.ts"), "export default {};\n");
+    checks = await reactRouterAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web react-router config")?.status).toBe("pass");
   });
 });
 
