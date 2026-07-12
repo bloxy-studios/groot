@@ -11,6 +11,7 @@ export type Slot = "web" | "mobile" | "desktop" | "api" | "backend";
 export type FrameworkId =
   | "next"
   | "sveltekit"
+  | "tanstack-start"
   | "expo"
   | "tauri"
   | "electron"

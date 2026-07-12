@@ -177,8 +177,14 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
   }
   if (frameworks.has("sveltekit")) outputs.add(".svelte-kit/**");
   // Tauri's `build` is the Vite frontend build (dist/); the Rust build lives in
-  // src-tauri/target (cargo-managed, never a turbo output).
-  if (frameworks.has("elysia") || frameworks.has("hono") || frameworks.has("tauri")) {
+  // src-tauri/target (cargo-managed, never a turbo output). TanStack Start's
+  // 1.x template is plain `vite build` → dist/ (no Nitro .output).
+  if (
+    frameworks.has("elysia") ||
+    frameworks.has("hono") ||
+    frameworks.has("tauri") ||
+    frameworks.has("tanstack-start")
+  ) {
     outputs.add("dist/**");
   }
   // electron-vite builds main/preload/renderer into out/.

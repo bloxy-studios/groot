@@ -13,6 +13,7 @@ import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
+import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { identifierSegment, tauriAdapter } from "./tauri.ts";
 import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "./trunk.ts";
 
@@ -42,6 +43,7 @@ describe("registry", () => {
       "hono",
       "next",
       "sveltekit",
+      "tanstack-start",
       "tauri",
     ]);
     for (const [id, adapter] of Object.entries(ADAPTERS)) {
@@ -131,6 +133,79 @@ describe("sveltekit (scaffold-flows.md#3)", () => {
       "--no-install",
       "--no-dir-check",
     ]);
+  });
+});
+
+describe("tanstack-start (scaffold-flows.md#10)", () => {
+  const tsPlan: Plan = buildPlan({
+    name: "demo",
+    targetDir: "/work/demo",
+    cliVersion: "1.3.0",
+    selections: {
+      web: "tanstack-start",
+      mobile: "none",
+      desktop: "none",
+      api: "none",
+      backend: "none",
+    },
+    options: { install: true, git: true, dirConflict: "error", keepFailed: false, verbose: false },
+  });
+  const scaffold = tsPlan.scaffolds[0];
+  if (scaffold === undefined) throw new Error("expected the tanstack-start scaffold in the plan");
+
+  test("runs tanstack create fully silenced, name-not-path, from the parent dir", () => {
+    const cmd = tanstackStartAdapter.command({ plan: tsPlan, scaffold });
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "@tanstack/cli@0.69",
+      "create",
+      "web",
+      "--framework",
+      "React",
+      "--package-manager",
+      "bun",
+      "--no-git",
+      "--no-install",
+      "--no-examples",
+      "--no-toolchain",
+      "--no-intent",
+      "--yes",
+    ]);
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("doctor: healthy scaffold passes vite config and dev-port checks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-tanstack-"));
+    await mkdir(join(root, "apps/web"), { recursive: true });
+    await writeFile(join(root, "apps/web/vite.config.ts"), "export default {};\n");
+    await writeFile(
+      join(root, "apps/web/package.json"),
+      JSON.stringify({ name: "web", scripts: { dev: "vite dev --port 3000" } }),
+    );
+    const checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    const byName = new Map(checks?.map((check) => [check.name, check]));
+    expect(byName.get("apps/web vite config")?.status).toBe("pass");
+    expect(byName.get("apps/web dev port")?.status).toBe("pass");
+  });
+
+  test("doctor: drifted dev-script port warns; missing package.json fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-tanstack-"));
+    await mkdir(join(root, "apps/web"), { recursive: true });
+    await writeFile(join(root, "apps/web/vite.config.ts"), "export default {};\n");
+    await writeFile(
+      join(root, "apps/web/package.json"),
+      JSON.stringify({ name: "web", scripts: { dev: "vite dev --port 5199" } }),
+    );
+    let checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    const port = checks?.find((c) => c.name === "apps/web dev port");
+    expect(port?.status).toBe("warn");
+    expect(port?.detail).toContain(":3000");
+
+    const bare = await mkdtemp(join(tmpdir(), "groot-tanstack-"));
+    await mkdir(join(bare, "apps/web"), { recursive: true });
+    checks = await tanstackStartAdapter.doctor?.({ workspaceRoot: bare, scaffold });
+    expect(checks?.find((c) => c.name === "apps/web dev port")?.status).toBe("fail");
   });
 });
 

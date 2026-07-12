@@ -13,6 +13,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | Turborepo (trunk) | `bunx create-turbo@2 <dir> -m bun --skip-install --no-git` | yes → suppressed | yes → suppressed | assume fresh dir required |
 | Next.js | `bunx create-next-app@16 … --disable-git --skip-install` | skips inside existing repo; forced off anyway | yes → suppressed | **refuses** ("could conflict") |
 | SvelteKit | `bunx sv@0.16 create … --no-install --no-dir-check` | never | only with `--install` | refuses unless `--no-dir-check` |
+| TanStack Start | `bunx @tanstack/cli@0.69 create <name> --framework React --package-manager bun --no-git --no-install --no-examples --no-toolchain --no-intent --yes` | `--no-git` | `--no-install` | refuses unless `--force` |
 | Expo | `bunx create-expo-app@4 … --no-install` | no flag exists (see caveats) | yes → suppressed | (unverified) |
 | Tauri | `bunx create-tauri-app@4 <name> --template react-ts --manager bun --identifier <id> --yes` | never | never | refuses unless `--force` |
 | Electron | `bunx @quick-start/create-electron@1 <name> --template react-ts --skip` | never | never | overwrite prompt nulled by `--skip` |
@@ -157,6 +158,20 @@ bunx @quick-start/create-electron@1 desktop --template react-ts --skip
 - ⚠️ **Bun 1.3 isolated-layout nuance**: packages live in the `node_modules/.bun` store with symlinks in the *declaring* workspace member — there is **no top-level `node_modules/electron`**. Anything checking electron's install state must resolve from the app directory (groot's doctor/verify use node resolution from `apps/desktop`), not from a hardcoded root path.
 - Build output: `out/` (main/preload/renderer) — added to turbo's `build.outputs`; electron-builder's installers land in `dist/` (not cached).
 - Sources: <https://electron-vite.org/guide/>, <https://www.npmjs.com/package/@quick-start/create-electron>, <https://bun.com/docs/pm/lifecycle>.
+
+## 10. Web: TanStack Start — `@tanstack/cli` (`tanstack create`)
+
+```sh
+bunx @tanstack/cli@0.69 create web --framework React --package-manager bun --no-git --no-install --no-examples --no-toolchain --no-intent --yes
+```
+
+- **Flags (verified 2026-07-12 against the published 0.69.5 source)**: `--framework <React|Solid>` (display names from the framework definitions), `--package-manager bun` (first-class value), `--no-git`, `--no-install`, `--no-examples` (skip demo pages), `--no-toolchain` (skip the eslint/biome overlay — the workspace root owns linting), `--no-intent` (skip TanStack Intent agent files; groot's own agent artifacts arrive with roadmap v1.3), `-y/--yes` (accept remaining defaults), plus `--target-dir`, `-f/--force`, `--json`, `--add-ons`. The deprecated `--tailwind`/`--no-tailwind` are compatibility no-ops — Tailwind is always enabled.
+- ⚠️ **The positional is a NAME, not a path** — same contract as create-tauri-app/create-electron: groot spawns from the scaffold's parent with the bare directory name.
+- **Port 3000 lives in the dev script** (`"dev": "vite dev --port 3000"` in the template's package.json), not in vite.config — same default as Next.js. Single-web workspaces are clean; `groot add tanstack-start --path apps/<name>` next to a Next app trips the standard port-collision warning, and doctor tracks the dev-script/manifest agreement.
+- **Build is plain `vite build` → `dist/`** — the 1.x template has no Nitro/Vinxi (verified: no such deps in the template package.json); `dist/**` is already in turbo's outputs.
+- Template ships TS-first (typescript ^6, vite ^8, react 19), Tailwind, file-based routing with the Start plugin; the scaffolded package.json `name` field is empty — stitch names it from the directory.
+- The CLI is 0.x and fast-moving — pinned to the minor (`@tanstack/cli@0.69`), the sv@0.16 precedent; the drift watch tracks the series automatically.
+- Sources: <https://tanstack.com/start/latest/docs/framework/react/quick-start>, <https://www.npmjs.com/package/@tanstack/cli> (dist/cli.js option table), <https://www.npmjs.com/package/@tanstack/create> (react framework template).
 
 ## Stitching reference
 

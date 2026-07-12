@@ -43,7 +43,17 @@
             "enum": ["web", "mobile", "desktop", "api", "backend"]
           },
           "framework": {
-            "enum": ["next", "sveltekit", "expo", "tauri", "electron", "elysia", "hono", "convex"]
+            "enum": [
+              "next",
+              "sveltekit",
+              "tanstack-start",
+              "expo",
+              "tauri",
+              "electron",
+              "elysia",
+              "hono",
+              "convex"
+            ]
           },
           "path": {
             "description": "Workspace-relative destination of the scaffold.",

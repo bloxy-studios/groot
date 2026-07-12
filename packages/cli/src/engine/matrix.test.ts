@@ -10,6 +10,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
   test("port allocation matches the architecture doc", () => {
     expect(findChoice("web", "next")?.port).toBe(3000);
     expect(findChoice("web", "sveltekit")?.port).toBe(5173);
+    expect(findChoice("web", "tanstack-start")?.port).toBe(3000);
     expect(findChoice("api", "elysia")?.port).toBe(3001);
     expect(findChoice("api", "hono")?.port).toBe(3001);
     expect(findChoice("mobile", "expo")?.port).toBe(8081);
@@ -23,6 +24,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
   test("paths match the slot layout", () => {
     expect(findChoice("web", "next")?.path).toBe("apps/web");
     expect(findChoice("web", "sveltekit")?.path).toBe("apps/web");
+    expect(findChoice("web", "tanstack-start")?.path).toBe("apps/web");
     expect(findChoice("mobile", "expo")?.path).toBe("apps/mobile");
     expect(findChoice("desktop", "tauri")?.path).toBe("apps/desktop");
     expect(findChoice("desktop", "electron")?.path).toBe("apps/desktop");
@@ -33,6 +35,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
   test("generators are pinned to majors; direct-write scaffolds are null", () => {
     expect(findChoice("web", "next")?.generator).toBe("create-next-app@16");
     expect(findChoice("web", "sveltekit")?.generator).toBe("sv@0.16");
+    expect(findChoice("web", "tanstack-start")?.generator).toBe("@tanstack/cli@0.69");
     expect(findChoice("mobile", "expo")?.generator).toBe("create-expo-app@4");
     expect(findChoice("desktop", "tauri")?.generator).toBe("create-tauri-app@4");
     expect(findChoice("desktop", "electron")?.generator).toBe("@quick-start/create-electron@1");
@@ -63,6 +66,6 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     for (const slot of slots) {
       expect(findChoice(slot, "next")).toBeUndefined();
     }
-    expect(MATRIX.web.choices.map((c) => c.id)).toEqual(["next", "sveltekit"]);
+    expect(MATRIX.web.choices.map((c) => c.id)).toEqual(["next", "sveltekit", "tanstack-start"]);
   });
 });

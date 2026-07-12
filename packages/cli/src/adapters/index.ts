@@ -11,11 +11,13 @@ import { expoAdapter } from "./expo.ts";
 import { honoAdapter } from "./hono.ts";
 import { nextAdapter } from "./next.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
+import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { tauriAdapter } from "./tauri.ts";
 
 export const ADAPTERS: Record<FrameworkId, ScaffoldAdapter> = {
   next: nextAdapter,
   sveltekit: sveltekitAdapter,
+  "tanstack-start": tanstackStartAdapter,
   expo: expoAdapter,
   tauri: tauriAdapter,
   electron: electronAdapter,

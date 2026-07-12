@@ -83,6 +83,7 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | --- | --- | --- |
 | `apps/web` (Next.js) | 3000 | `next dev` default (kept) |
 | `apps/web` (SvelteKit) | 5173 | Vite default (kept) |
+| `apps/web` (TanStack Start) | 3000 | The template's own dev script (`vite dev --port 3000`) — same default as Next; `add --path` coexistence rides the collision warning |
 | `apps/api` (Elysia / Hono) | 3001 | Written into source (`.listen(3001)` / `export default { port: 3001, fetch }`) — these templates have no port flag |
 | `apps/mobile` (Expo / Metro) | 8081 | Metro default (kept) |
 | `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |

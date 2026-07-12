@@ -154,9 +154,9 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship + electron de
   );
 });
 
-describe.skipIf(!e2e)("full pipeline (real generators — alt web/api: sveltekit + hono)", () => {
+describe.skipIf(!e2e)("full pipeline (real generators — sveltekit + hono + add tanstack)", () => {
   test(
-    "grows and stitches sveltekit + hono (names + port rewrites applied)",
+    "grows and stitches sveltekit + hono, then adds tanstack-start at apps/landing",
     async () => {
       const plan = await planFor(
         { web: "sveltekit", mobile: "none", desktop: "none", api: "hono", backend: "none" },
@@ -183,6 +183,44 @@ describe.skipIf(!e2e)("full pipeline (real generators — alt web/api: sveltekit
       // Stitch rewrites Bun's default-export port so the API doesn't collide with web.
       const honoIndex = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
       expect(honoIndex).toContain("port: 3001");
+
+      // Grow a SECOND web scaffold via --path: the REAL tanstack create.
+      // sveltekit(5173) + hono(3001) + tanstack(3000) → no port collisions.
+      const loaded = await loadManifest(root);
+      const resolution = await resolveAddScaffold(
+        loaded.manifest,
+        loaded.workspaceRoot,
+        "tanstack-start",
+        "apps/landing",
+      );
+      expect(resolution.warnings).toEqual([]);
+      const addPlan = buildAddPlan(
+        loaded,
+        resolution.scaffold,
+        await readRootPackageName(loaded.workspaceRoot),
+        { install: false, keepFailed: false, verbose: false },
+      );
+      await executeAdd(addPlan, resolution.scaffold, { verbose: false });
+
+      expect(existsSync(join(root, "apps/landing/vite.config.ts"))).toBe(true);
+      expect(existsSync(join(root, "apps/landing/.git"))).toBe(false);
+      const landingPkg = JSON.parse(
+        await readFile(join(root, "apps/landing/package.json"), "utf8"),
+      );
+      expect(landingPkg.name).toBe("landing"); // stitch renames from the generator's choice
+      expect(landingPkg.scripts.dev).toContain("--port 3000"); // template's own dev-script port
+      const grownManifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
+      expect(grownManifest.scaffolds).toHaveLength(3);
+      expect(grownManifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
+        "api",
+        "web",
+        "web",
+      ]);
+
+      // Two web scaffolds, unique ports, healthy workspace.
+      const checks = await runDoctor(await loadManifest(root));
+      const failures = checks.filter((check) => check.status === "fail");
+      expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);
     },
     TIMEOUT_MS,
   );
