@@ -1,5 +1,11 @@
 # create-groot
 
+## 1.7.0
+
+### Minor Changes
+
+- [#69](https://github.com/bloxy-studios/groot/pull/69) [`9b4e6c6`](https://github.com/bloxy-studios/groot/commit/9b4e6c6544bcbbec3b527afaf2f249e024708e79) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - The api slot gets its second generator-backed choice: Fastify, via the official `fastify-cli@8 generate` (ESM TypeScript template, every flag verified in the published 8.0.0 bundle). The generator is fully non-interactive but refuses existing directories and derives the package name through `npm init -y` — an npm call that trips the workspace's bun `devEngines` guard (EBADDEVENGINES) if run in-tree, so groot stages the generate in a disposable directory under the OS tempdir and moves the result into place (the trunk's temp-sibling pattern, generalized as `stagedGeneration`). groot then overlays a bun-native `src/server.ts` modeled on fastify-cli's own eject template (register the autoload app plugin, listen on :3001). The stitch stage swaps the template's Node-centric `fastify start` / `npm run` script chains for the bun set — `dev: bun --watch src/server.ts`, `build: tsc` (dist/ joins turbo's cached outputs), `test: bun test` — marker-gated so hand-rolled scripts are never clobbered. @fastify/autoload ≥ 6 detects bun and loads the .ts plugins/routes natively; bun's node:test shim runs the template's test suite as-is. Doctor gains port-drift and app-plugin checks; the schema's framework enum grows `fastify`; manifest stays version 1.
+
 ## 1.6.0
 
 ### Minor Changes
