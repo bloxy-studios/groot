@@ -121,6 +121,22 @@ describe("publishToGitHub (issue #44 — degrade, never fail)", () => {
   });
 });
 
+describe("ghCreateCommand (printed fallback is copy-paste safe)", () => {
+  test("plain names print bare; metacharacter names are POSIX-quoted", () => {
+    expect(ghCreateCommand("demo", "private")).toBe(
+      "gh repo create demo --private --source=. --remote=origin --push",
+    );
+    // A directory basename can legally contain shell metacharacters — the
+    // printed next step must stay inert (the spawns use argv arrays anyway).
+    expect(ghCreateCommand("demo; touch /tmp/pwn", "private")).toBe(
+      "gh repo create 'demo; touch /tmp/pwn' --private --source=. --remote=origin --push",
+    );
+    expect(ghCreateCommand("it's", "public")).toBe(
+      "gh repo create 'it'\\''s' --public --source=. --remote=origin --push",
+    );
+  });
+});
+
 describe("gitIdentityPresent (the --github ordering fix)", () => {
   test("false with no identity anywhere; true once both halves exist", async () => {
     const home = await mkdtemp(join(tmpdir(), "groot-gh-home-"));

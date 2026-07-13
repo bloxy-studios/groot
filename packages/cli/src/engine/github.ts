@@ -43,9 +43,20 @@ export interface GitHubPublishOptions {
   readonly env?: Record<string, string | undefined>;
 }
 
+/**
+ * POSIX-quote one argument for PRINTED commands. The actual spawns pass argv
+ * arrays and need none of this — but the fallback lines are copy-paste next
+ * steps, and a workspace name is ultimately a directory basename, which can
+ * legally contain shell metacharacters.
+ */
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9._-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 /** The manual invocation printed whenever groot couldn't run it itself. */
 export function ghCreateCommand(name: string, visibility: "private" | "public"): string {
-  return `gh repo create ${name} --${visibility} --source=. --remote=origin --push`;
+  return `gh repo create ${shellQuote(name)} --${visibility} --source=. --remote=origin --push`;
 }
 
 async function run(
