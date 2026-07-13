@@ -56,19 +56,19 @@ Items that need accounts or console access only the owner holds — none of them
 - [ ] macOS notarization — requires an Apple Developer account (owner action; see [maintainers.md](./maintainers.md#release-flow-fully-automated-after-setup)).
 - [ ] npm publish-access hardening — tighten the package's publishing access on npmjs.com (trusted publishing only, no tokens); OIDC releases keep working unchanged.
 
-## v1.1 — Grow wider 🌐 ([milestone](https://github.com/bloxy-studios/groot/milestone/1))
+## v1.1 — Grow wider 🌐 ✅ (2026-07-13) ([milestone](https://github.com/bloxy-studios/groot/milestone/1))
 
 New scaffolds and a new slot, drawn from the A-tier of [expansion.md](./expansion.md) — every adapter ships with verified flags in scaffold-flows.md, stitch patches, doctor checks, and E2E coverage:
 
-- [ ] **Desktop slot** (`apps/desktop`): Tauri v2 (`create-tauri-app`, including its official `--ci` wrap-apps/web mode) and Electron (`@quick-start/create-electron`).
-- [ ] **Web wave**: TanStack Start, React Router (framework mode), Nuxt, Astro, and plain Vite templates.
-- [ ] **API**: Fastify (`fastify-cli generate --lang=ts`, dev script patched to `bun --watch`).
-- [ ] **Mobile**: bare React Native (`@react-native-community/cli` with `--pm bun`) with a metro monorepo stitch.
-- [ ] **Backend**: Supabase (`supabase init`; Docker/login steps deferred to next-steps output).
+- [x] **Desktop slot** (`apps/desktop`): Tauri v2 (`create-tauri-app`, including its official `--ci` wrap-apps/web mode) and Electron (`@quick-start/create-electron`).
+- [x] **Web wave**: TanStack Start, React Router (framework mode), Nuxt, Astro, and plain Vite templates — the web slot finished at seven choices.
+- [x] **API**: Fastify (`fastify-cli generate --lang=ts`, dev script patched to `bun --watch`).
+- [x] **Mobile**: bare React Native (`@react-native-community/cli` with `--pm bun`) with a metro monorepo stitch.
+- [x] **Backend**: Supabase (`supabase init`; Docker/login steps deferred to next-steps output).
 
 ## v1.2 — Git & GitHub powers 🐙 ([milestone](https://github.com/bloxy-studios/groot/milestone/2))
 
-- [ ] `groot init --github` (+ `--public`) — create + push via `gh repo create --source=. --push`, with auth detection and graceful printed fallbacks when gh is absent.
+- [x] `groot init --github` (+ `--public`) — create + push via `gh repo create --source=. --push`, with auth detection and graceful printed fallbacks when gh is absent.
 - [ ] `--ci` — the official Turborepo bun GitHub Actions recipe (SHA-pinned actions, `turbo --affected`), bundled with a `dependabot.yml` covering the bun and github-actions ecosystems.
 - [ ] `--hooks` (opt-in) — lefthook: biome on staged files pre-commit, `turbo lint typecheck --affected` pre-push, installed via the root `prepare` script (bun-safe).
 
