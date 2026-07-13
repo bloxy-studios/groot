@@ -174,9 +174,17 @@ export const reactNativeAdapter: ScaffoldAdapter = {
     const source = await readFile(configPath, "utf8");
     // Both halves are load-bearing: watchFolders without nodeModulesPaths (or
     // vice versa) still can't resolve root-hoisted dependencies — a
-    // half-restored config must warn, not pass. Checked functionally rather
-    // than via the stitch marker so complete hand-rolled configs count too.
-    const wired = source.includes("watchFolders") && source.includes("nodeModulesPaths");
+    // half-restored config must warn, not pass. Mentions inside comments or
+    // dead text must not count either (the token-bound-not-substring rule
+    // this repo keeps relearning): strip comments first, then require each
+    // half as an ACTIVE assignment — a token-bounded `key:` object entry or
+    // `….key =` property write. Checked textually rather than by loading the
+    // config: metro.config.js requires packages that may not be installed
+    // when doctor runs.
+    const stripped = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    const activeAssignment = (key: string): boolean =>
+      new RegExp(`(?<![\\w$])${key}\\s*[:=]`).test(stripped);
+    const wired = activeAssignment("watchFolders") && activeAssignment("nodeModulesPaths");
     return [
       {
         name,

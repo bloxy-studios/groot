@@ -500,6 +500,42 @@ describe("react-native (bare — scaffold-flows.md#16)", () => {
     checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.[0]?.status).toBe("warn");
 
+    // Mentions inside comments or dead text must not fake a healthy config —
+    // the check anchors on ACTIVE assignments, not substrings.
+    await writeFile(
+      join(root, scaffold.path, "metro.config.js"),
+      [
+        "/**",
+        " * TODO: restore watchFolders: [workspaceRoot] and",
+        " * resolver.nodeModulesPaths: [...] — removed while debugging.",
+        " */",
+        "// watchFolders: [workspaceRoot],",
+        "// nodeModulesPaths: [path.resolve(workspaceRoot, 'node_modules')],",
+        "const config = {};",
+        "module.exports = config;",
+        "",
+      ].join("\n"),
+    );
+    checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.[0]?.status).toBe("warn");
+
+    // Property-assignment style counts as active wiring too.
+    await writeFile(
+      join(root, scaffold.path, "metro.config.js"),
+      [
+        "const path = require('path');",
+        "const workspaceRoot = path.resolve(__dirname, '../..');",
+        "const config = {};",
+        "config.watchFolders = [workspaceRoot];",
+        "config.resolver = {};",
+        "config.resolver.nodeModulesPaths = [path.resolve(workspaceRoot, 'node_modules')];",
+        "module.exports = config;",
+        "",
+      ].join("\n"),
+    );
+    checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.[0]?.status).toBe("pass");
+
     // Complete wiring (both halves) → pass — hand-rolled configs count too.
     await writeFile(
       join(root, scaffold.path, "metro.config.js"),
