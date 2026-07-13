@@ -110,6 +110,29 @@ describe("groot init (process-level, non-TTY)", () => {
     expect(stderr).toContain("--github needs a git identity");
   });
 
+  test("--github ignores a caller repo's LOCAL identity — fresh init won't inherit it (Greptile P1)", async () => {
+    // cwd is inside a repo whose identity lives only in .git/config; the new
+    // workspace's fresh `git init` never sees it, so the precondition must
+    // refuse rather than pass here and degrade after generation.
+    const cwd = await scratch();
+    await runGit(cwd, ["init", "-q"]);
+    await runGit(cwd, ["config", "user.name", "Local Only"]);
+    await runGit(cwd, ["config", "user.email", "local@example.com"]);
+    const home = join(cwd, "empty-home");
+    await mkdir(home, { recursive: true });
+    const { stderr, exitCode } = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--dry-run"],
+      {
+        HOME: home,
+        GIT_CONFIG_GLOBAL: join(home, "missing-gitconfig"),
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    );
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--github needs a git identity");
+  });
+
   test("--github merging onto an existing commit-less repo → exit 2 up front (Greptile P1)", async () => {
     // verify skips its git init+commit for pre-existing repos, and
     // `gh repo create --push` hard-errors on zero commits — refuse early.

@@ -7,6 +7,7 @@
  * `--dry-run` stopping after preflight (docs/cli-spec.md#groot-init-dir).
  */
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { defineCommand } from "citty";
@@ -230,19 +231,26 @@ async function runInit(args: {
   //    its init+commit block for pre-existing repos, and `gh repo create
   //    --push` hard-errors on a commit-less one.
   if (args.github) {
-    const gitCwd = existsSync(targetDir) ? targetDir : process.cwd();
-    if (!(await gitIdentityPresent(gitCwd))) {
+    if (existsSync(join(targetDir, ".git"))) {
+      // verify skips its init+commit block for pre-existing repos — the push
+      // rides the commits already there (no new identity needed), so the only
+      // thing to demand is that commits exist at all.
+      if (!(await hasCommits(targetDir))) {
+        throw new GrootError(
+          "--github targets an existing git repository that has no commits.",
+          EXIT.USAGE,
+          "gh repo create --push hard-errors on a commit-less repo — commit something there first, or drop --github.",
+        );
+      }
+    } else if (!(await gitIdentityPresent(tmpdir()))) {
+      // Resolved from a repo-free directory — exactly what the fresh
+      // `git init` in the target will see (system + global config). Checking
+      // from process.cwd() would wrongly accept a caller repo's LOCAL
+      // identity, which does not carry over into the new repository.
       throw new GrootError(
         "--github needs a git identity for the initial commit it pushes.",
         EXIT.USAGE,
         'Set one first: git config --global user.name "Your Name" && git config --global user.email "you@example.com"',
-      );
-    }
-    if (existsSync(join(targetDir, ".git")) && !(await hasCommits(targetDir))) {
-      throw new GrootError(
-        "--github targets an existing git repository that has no commits.",
-        EXIT.USAGE,
-        "gh repo create --push hard-errors on a commit-less repo — commit something there first, or drop --github.",
       );
     }
   }
