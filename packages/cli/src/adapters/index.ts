@@ -9,6 +9,7 @@ import { convexAdapter } from "./convex.ts";
 import { electronAdapter } from "./electron.ts";
 import { elysiaAdapter } from "./elysia.ts";
 import { expoAdapter } from "./expo.ts";
+import { fastifyAdapter } from "./fastify.ts";
 import { honoAdapter } from "./hono.ts";
 import { nextAdapter } from "./next.ts";
 import { nuxtAdapter } from "./nuxt.ts";
@@ -31,5 +32,6 @@ export const ADAPTERS: Record<FrameworkId, ScaffoldAdapter> = {
   electron: electronAdapter,
   elysia: elysiaAdapter,
   hono: honoAdapter,
+  fastify: fastifyAdapter,
   convex: convexAdapter,
 };

@@ -100,6 +100,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
     expect(frameworkChoice("next")?.slot).toBe("web");
     expect(frameworkChoice("expo")?.slot).toBe("mobile");
     expect(frameworkChoice("hono")?.slot).toBe("api");
+    expect(frameworkChoice("fastify")?.slot).toBe("api");
     expect(frameworkChoice("convex")?.slot).toBe("backend");
     expect(frameworkChoice("angular")).toBeUndefined();
   });
@@ -112,6 +113,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
       "electron",
       "elysia",
       "expo",
+      "fastify",
       "hono",
       "next",
       "nuxt",
@@ -164,7 +166,7 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       'Unknown scaffold "angular"',
     );
     expect(error.hint).toContain(
-      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | tauri | electron | elysia | hono | convex",
+      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | tauri | electron | elysia | hono | fastify | convex",
     );
   });
 

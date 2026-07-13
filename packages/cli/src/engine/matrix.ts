@@ -101,6 +101,16 @@ export const MATRIX: Record<Slot, SlotSpec> = {
       // Elysia's own docs) — see docs/scaffold-flows.md#5.
       { id: "elysia", label: "Elysia", path: "apps/api", port: 3001, generator: null },
       { id: "hono", label: "Hono", path: "apps/api", port: 3001, generator: "create-hono@0.19" },
+      // fastify-cli's official `generate` (TS + ESM template); the stitch stage
+      // swaps its Node-centric scripts for bun-native ones and groot overlays a
+      // src/server.ts listener. Port 3001 shared with elysia/hono (same-slot rule).
+      {
+        id: "fastify",
+        label: "Fastify",
+        path: "apps/api",
+        port: 3001,
+        generator: "fastify-cli@8",
+      },
     ],
   },
   backend: {

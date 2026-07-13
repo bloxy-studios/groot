@@ -10,6 +10,7 @@ import { convexAdapter } from "./convex.ts";
 import { electronAdapter } from "./electron.ts";
 import { elysiaAdapter } from "./elysia.ts";
 import { expoAdapter } from "./expo.ts";
+import { fastifyAdapter, fastifyServerTs } from "./fastify.ts";
 import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
@@ -45,6 +46,7 @@ describe("registry", () => {
       "electron",
       "elysia",
       "expo",
+      "fastify",
       "hono",
       "next",
       "nuxt",
@@ -602,6 +604,43 @@ describe("hono (scaffold-flows.md#6)", () => {
     // The install confirmation has no negative flag and aborts the scaffold when
     // unanswered — groot pre-answers it via stdin (verified on create-hono 0.19.4).
     expect(cmd?.stdin).toBe("n\n");
+  });
+});
+
+describe("fastify (scaffold-flows.md#15)", () => {
+  const ctx = ctxFor("fastify", {
+    slot: "api",
+    framework: "fastify",
+    path: "apps/api",
+    generator: "fastify-cli@8",
+    port: 3001,
+  });
+
+  test("spawns the official generate from the parent dir with the bare name", () => {
+    const cmd = fastifyAdapter.command(ctx);
+    expect(cmd?.argv).toEqual(["bunx", "fastify-cli@8", "generate", "api", "--lang=ts", "--esm"]);
+    // generate refuses existing directories and runs `npm init -y` inside its
+    // target (upstream behavior — the package name derives from the basename),
+    // so groot spawns from the parent with the bare name, like vite/tanstack.
+    expect(cmd?.cwd).toBe("/work/demo/apps");
+    // Fully non-interactive (verified in the published 8.0.0 generate.js):
+    // no prompts exist, so no stdin script is needed.
+    expect(cmd?.stdin).toBeUndefined();
+  });
+
+  test("overlays a bun-native server entry listening on the plan port", () => {
+    const files = fastifyAdapter.writeFiles?.(ctx) ?? [];
+    expect(files.map((f) => f.path)).toEqual(["apps/api/src/server.ts"]);
+    const server = files[0]?.contents ?? "";
+    // Registers the generated autoload app plugin — .ts import rides the
+    // template tsconfig's allowImportingTsExtensions.
+    expect(server).toContain('import app from "./app.ts"');
+    // The ` }` bound is the doctor's drift marker (see fastifyAdapter.doctor).
+    expect(server).toContain("port: 3001 }");
+    // The overlay must stay inside the generated dependency set — eject's
+    // close-with-grace is NOT a dependency of the generated app.
+    expect(server).not.toContain("close-with-grace");
+    expect(fastifyServerTs(4000)).toContain("port: 4000 }");
   });
 });
 

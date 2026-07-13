@@ -24,7 +24,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | `--web <choice>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `react-router` \| `nuxt` \| `vite` \| `none` | prompt | Web app in `apps/web` |
 | `--mobile <choice>` | `expo` \| `none` | prompt | Mobile app in `apps/mobile` |
 | `--desktop <choice>` | `tauri` \| `electron` \| `none` | prompt | Desktop app in `apps/desktop` (v1.1) |
-| `--api <choice>` | `elysia` \| `hono` \| `none` | prompt | API app in `apps/api` |
+| `--api <choice>` | `elysia` \| `hono` \| `fastify` \| `none` | prompt | API app in `apps/api` |
 | `--backend <choice>` | `convex` \| `none` | prompt | Backend in `packages/backend` |
 | `--preset <path>` | groot.json file or workspace dir | — | Selections source for slots not fixed by flags — see [Presets](#presets) |
 | `--yes`, `-y` | — | off | Accept defaults for all unanswered prompts |
@@ -81,7 +81,7 @@ Runs the same grow → stitch → verify stages as `init` for just the new scaff
 
 | Flag | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `<scaffold>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `react-router` \| `nuxt` \| `vite` \| `expo` \| `tauri` \| `electron` \| `elysia` \| `hono` \| `convex` | required | Positional: the scaffold to grow |
+| `<scaffold>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `react-router` \| `nuxt` \| `vite` \| `expo` \| `tauri` \| `electron` \| `elysia` \| `hono` \| `fastify` \| `convex` | required | Positional: the scaffold to grow |
 | `--path <dir>` | workspace-relative | the framework's slot path | Fresh directory (absent or empty), a direct child of `apps/` (web/mobile/api) or `packages/` (backend), not claimed by `groot.json` |
 | `--no-install` | — | install on | Skip the root `bun install` after growing |
 | `--keep-failed` | — | off | Keep the new scaffold directory if its generator fails |

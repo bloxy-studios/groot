@@ -270,7 +270,7 @@ export const init = defineCommand({
     },
     mobile: { type: "string", description: "Mobile app: expo | none" },
     desktop: { type: "string", description: "Desktop app: tauri | electron | none" },
-    api: { type: "string", description: "API: elysia | hono | none" },
+    api: { type: "string", description: "API: elysia | hono | fastify | none" },
     backend: { type: "string", description: "Backend: convex | none" },
     preset: {
       type: "string",

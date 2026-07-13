@@ -17,6 +17,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "vite")?.port).toBe(5173);
     expect(findChoice("api", "elysia")?.port).toBe(3001);
     expect(findChoice("api", "hono")?.port).toBe(3001);
+    expect(findChoice("api", "fastify")?.port).toBe(3001);
     expect(findChoice("mobile", "expo")?.port).toBe(8081);
     expect(findChoice("desktop", "tauri")?.port).toBe(1420);
     // electron-vite's renderer dev server is non-strict and self-wiring —
@@ -37,6 +38,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("desktop", "tauri")?.path).toBe("apps/desktop");
     expect(findChoice("desktop", "electron")?.path).toBe("apps/desktop");
     expect(findChoice("api", "hono")?.path).toBe("apps/api");
+    expect(findChoice("api", "fastify")?.path).toBe("apps/api");
     expect(findChoice("backend", "convex")?.path).toBe("packages/backend");
   });
 
@@ -52,6 +54,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("desktop", "tauri")?.generator).toBe("create-tauri-app@4");
     expect(findChoice("desktop", "electron")?.generator).toBe("@quick-start/create-electron@1");
     expect(findChoice("api", "hono")?.generator).toBe("create-hono@0.19");
+    expect(findChoice("api", "fastify")?.generator).toBe("fastify-cli@8");
     // Elysia and Convex are written directly by groot (docs/scaffold-flows.md).
     expect(findChoice("api", "elysia")?.generator).toBeNull();
     expect(findChoice("backend", "convex")?.generator).toBeNull();
