@@ -122,6 +122,52 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
 }
 
 /**
+ * fastify-cli's TypeScript template drives everything through its Node-centric
+ * `fastify start` wrapper and package-manager-invoking script chains
+ * (`npm run build:ts && …` — upstream's wording, not groot's) — neither belongs
+ * in a bun-first workspace. Rewrite each fastify scaffold's scripts wholesale
+ * to run groot's src/server.ts overlay under bun (dev/start), build with tsc
+ * (the template tsconfig already emits dist/, which turbo caches), typecheck,
+ * and test with bun's runner (its node:test shim runs the template's suite —
+ * verified on bun 1.3.14). The rewrite is marker-gated on the template's own
+ * dev script: an already-stitched scaffold is a silent no-op (re-stitches via
+ * `groot add` stay idempotent), and a hand-rolled script set is never
+ * clobbered — it gets a note instead, like the hono port rewrite.
+ * devDependencies are left untouched: ts-node/c8/concurrently go unused under
+ * bun, but removing them would couple groot to the template's internals.
+ */
+export async function stitchFastifyScripts(plan: Plan): Promise<string[]> {
+  const notes: string[] = [];
+  for (const fastify of plan.scaffolds) {
+    if (fastify.framework !== "fastify") continue;
+    const path = join(plan.targetDir, fastify.path, "package.json");
+    if (!existsSync(path)) continue;
+    const pkg = await readJson(path);
+    const scripts = (pkg.scripts ?? {}) as Record<string, string>;
+    const desired: Record<string, string> = {
+      dev: "bun --watch src/server.ts",
+      start: "NODE_ENV=production bun src/server.ts",
+      build: "tsc",
+      test: "bun test",
+      typecheck: "tsc --noEmit",
+    };
+    if (scripts.dev === desired.dev) continue; // already stitched
+    if (!(scripts.dev ?? "").includes("fastify start")) {
+      // Upstream template changed shape — or the user replaced the scripts.
+      // Leave them alone rather than clobbering intent.
+      notes.push(
+        `${fastify.path}/package.json: template dev script not found; bun rewrite skipped`,
+      );
+      continue;
+    }
+    pkg.scripts = desired;
+    await writeJson(path, pkg);
+    notes.push(`${fastify.path}/package.json → bun-native scripts (dev: ${desired.dev})`);
+  }
+  return notes;
+}
+
+/**
  * The client-exposed env var each web framework actually reads — Next.js only
  * exposes NEXT_PUBLIC_*, SvelteKit's $env/static/public requires PUBLIC_*, and
  * Vite-based frameworks (TanStack Start) expose VITE_*. Matches each
@@ -203,10 +249,12 @@ export async function stitchTurboOutputs(plan: Plan): Promise<string | null> {
   if (frameworks.has("sveltekit")) outputs.add(".svelte-kit/**");
   // Tauri's `build` is the Vite frontend build (dist/); the Rust build lives in
   // src-tauri/target (cargo-managed, never a turbo output). TanStack Start's
-  // 1.x template is plain `vite build` → dist/ (no Nitro .output).
+  // 1.x template is plain `vite build` → dist/ (no Nitro .output). Fastify's
+  // stitched `build: tsc` emits dist/ per the template tsconfig's outDir.
   if (
     frameworks.has("elysia") ||
     frameworks.has("hono") ||
+    frameworks.has("fastify") ||
     frameworks.has("tauri") ||
     frameworks.has("tanstack-start") ||
     frameworks.has("astro") ||
@@ -296,6 +344,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchAppNames(plan));
   push(await stitchLockfileHygiene(plan));
   push(await stitchHonoPort(plan));
+  push(await stitchFastifyScripts(plan));
   push(await stitchBackendLinks(plan));
   push(await stitchTurboOutputs(plan));
   push(await stitchRootIdentity(plan));

@@ -73,6 +73,34 @@ async function fixture(selections: Record<Slot, string>): Promise<{ plan: Plan; 
         `${scaffold.path}/src/index.ts`,
         "import { Hono } from 'hono'\nconst app = new Hono()\napp.get('/', (c) => c.text('Hello Hono!'))\nexport default app\n",
       );
+    } else if (scaffold.framework === "fastify") {
+      // The published app-ts-esm template's package.json shape after
+      // `npm init -y` + fastify-cli's merge (fastify-cli 8.0.0 generate.js):
+      // Node-centric `fastify start` dev plus npm-invoking script chains.
+      await write(
+        `${scaffold.path}/package.json`,
+        JSON.stringify(
+          {
+            name: "api",
+            version: "1.0.0",
+            main: "app.ts",
+            type: "module",
+            scripts: {
+              test: "npm run build:ts && tsc -p test/tsconfig.json && FASTIFY_AUTOLOAD_TYPESCRIPT=1 node --test --experimental-test-coverage --loader ts-node/esm test/**/*.ts",
+              start: "npm run build:ts && fastify start -l info dist/app.js",
+              "build:ts": "tsc",
+              "watch:ts": "tsc -w",
+              dev: "fastify start -l info src/app.ts",
+              "dev:start": "fastify start --ignore-watch=.ts$ -w -l info -P dist/app.js",
+            },
+            dependencies: { fastify: "^5.0.0", "fastify-cli": "^8.0.0" },
+            devDependencies: { "ts-node": "^10.9.2", typescript: "^5.9.3" },
+          },
+          null,
+          2,
+        ),
+      );
+      await write(`${scaffold.path}/src/server.ts`, "// groot overlay placeholder\n");
     } else if (scaffold.framework === "convex") {
       await write(
         `${scaffold.path}/package.json`,
@@ -188,6 +216,63 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     );
     const notes = await stitch(plan);
     expect(notes.join("\n")).toContain("marker not found");
+  });
+});
+
+describe("stitchFastifyScripts (bun-first scripts — scaffold-flows.md#15)", () => {
+  const selections: Record<Slot, string> = {
+    web: "none",
+    mobile: "none",
+    desktop: "none",
+    api: "fastify",
+    backend: "none",
+  };
+
+  test("swaps the template's Node-centric scripts for the bun-native set", async () => {
+    const { plan, root } = await fixture(selections);
+    const notes = await stitch(plan);
+    expect(notes.join("\n")).toContain("bun-native scripts");
+
+    const pkg = JSON.parse(await readFile(join(root, "apps/api/package.json"), "utf8"));
+    expect(pkg.scripts).toEqual({
+      dev: "bun --watch src/server.ts",
+      start: "NODE_ENV=production bun src/server.ts",
+      build: "tsc",
+      test: "bun test",
+      typecheck: "tsc --noEmit",
+    });
+    // The npm-invoking template chains are gone wholesale (dev:start, watch:ts …).
+    expect(JSON.stringify(pkg.scripts)).not.toContain("npm run");
+    expect(JSON.stringify(pkg.scripts)).not.toContain("fastify start");
+    // Dependencies are upstream's business — the rewrite must not touch them.
+    expect(pkg.dependencies["fastify-cli"]).toBe("^8.0.0");
+    expect(pkg.devDependencies["ts-node"]).toBe("^10.9.2");
+    expect(pkg.type).toBe("module");
+  });
+
+  test("is idempotent — a second pass is a silent no-op", async () => {
+    const { plan, root } = await fixture(selections);
+    await stitch(plan);
+    const before = await readFile(join(root, "apps/api/package.json"), "utf8");
+    const secondNotes = await stitch(plan);
+    const after = await readFile(join(root, "apps/api/package.json"), "utf8");
+    expect(after).toBe(before);
+    expect(secondNotes.join("\n")).not.toContain("bun-native scripts");
+    expect(secondNotes.join("\n")).not.toContain("bun rewrite skipped");
+  });
+
+  test("degrades gracefully when the dev script isn't template-shaped", async () => {
+    const { plan, root } = await fixture(selections);
+    const path = join(root, "apps/api/package.json");
+    const pkg = JSON.parse(await readFile(path, "utf8"));
+    pkg.scripts = { dev: "node --watch dist/server.js", deploy: "flyctl deploy" };
+    await writeFile(path, JSON.stringify(pkg, null, 2), "utf8");
+
+    const notes = await stitch(plan);
+    expect(notes.join("\n")).toContain("bun rewrite skipped");
+    const untouched = JSON.parse(await readFile(path, "utf8"));
+    expect(untouched.scripts.dev).toBe("node --watch dist/server.js");
+    expect(untouched.scripts.deploy).toBe("flyctl deploy");
   });
 });
 

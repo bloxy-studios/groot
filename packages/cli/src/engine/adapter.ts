@@ -53,6 +53,16 @@ export interface DoctorContext {
 export interface ScaffoldAdapter {
   readonly id: FrameworkId;
   readonly slot: Slot;
+  /**
+   * Run the generator in a disposable directory outside the workspace, then
+   * move `basename(scaffold.path)` into place (engine/generate.ts, the trunk's
+   * temp-sibling pattern generalized). For generators that shell out to npm
+   * mid-generation — fastify-cli's generate runs `npm init -y` — npm's
+   * project-root walk-up would otherwise find the workspace's bun devEngines
+   * declaration (create-turbo's `-m bun` transform) and hard-fail with
+   * EBADDEVENGINES. When set, the command's `cwd` is superseded by the stage.
+   */
+  readonly stagedGeneration?: boolean;
   /** The generator invocation, or null when groot writes the files directly. */
   command(ctx: AdapterContext): GeneratorCommand | null;
   /** Files groot writes itself, relative to the workspace root. */

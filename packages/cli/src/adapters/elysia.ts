@@ -108,21 +108,26 @@ export const elysiaAdapter: ScaffoldAdapter = {
   },
 };
 
-/** Shared port-drift check for API scaffolds: warn (not fail) — drift may be intentional. */
-export async function apiPortCheck(ctx: DoctorContext, marker: string): Promise<DoctorCheck> {
+/**
+ * Shared port-drift check for API scaffolds: warn (not fail) — drift may be
+ * intentional. `file` is the scaffold-relative entry that carries the port
+ * (elysia/hono serve from src/index.ts; fastify from groot's src/server.ts).
+ */
+export async function apiPortCheck(
+  ctx: DoctorContext,
+  marker: string,
+  file = "src/index.ts",
+): Promise<DoctorCheck> {
   const name = `${ctx.scaffold.path} dev port`;
   try {
-    const source = await readFile(
-      join(ctx.workspaceRoot, ctx.scaffold.path, "src/index.ts"),
-      "utf8",
-    );
+    const source = await readFile(join(ctx.workspaceRoot, ctx.scaffold.path, file), "utf8");
     const matches = source.includes(marker);
     return {
       name,
       status: matches ? "pass" : "warn",
       detail: matches
-        ? `src/index.ts serves on :${ctx.scaffold.port}`
-        : `src/index.ts no longer matches groot.json's port :${ctx.scaffold.port}`,
+        ? `${file} serves on :${ctx.scaffold.port}`
+        : `${file} no longer matches groot.json's port :${ctx.scaffold.port}`,
       ...(matches
         ? {}
         : { fix: "If the change is intentional, update the port in groot.json to match." }),
@@ -131,8 +136,8 @@ export async function apiPortCheck(ctx: DoctorContext, marker: string): Promise<
     return {
       name,
       status: "fail",
-      detail: "src/index.ts missing",
-      fix: `Restore ${ctx.scaffold.path}/src/index.ts or remove the scaffold from groot.json.`,
+      detail: `${file} missing`,
+      fix: `Restore ${ctx.scaffold.path}/${file} or remove the scaffold from groot.json.`,
     };
   }
 }

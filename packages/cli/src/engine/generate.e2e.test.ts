@@ -350,9 +350,9 @@ describe.skipIf(!e2e)(
   },
 );
 
-describe.skipIf(!e2e)("scenario 4: nuxt web + add vite (real generators)", () => {
+describe.skipIf(!e2e)("scenario 4: nuxt web + add vite + add fastify (real generators)", () => {
   test(
-    "plants a nuxt workspace, then grows a vite SPA at apps/landing",
+    "plants a nuxt workspace, then grows a vite SPA and a fastify api",
     async () => {
       const plan = await planFor(
         { web: "nuxt", mobile: "none", desktop: "none", api: "none", backend: "none" },
@@ -398,8 +398,51 @@ describe.skipIf(!e2e)("scenario 4: nuxt web + add vite (real generators)", () =>
       );
       expect(landingPkg.name).toBe("landing");
 
+      // The REAL fastify-cli generate grows the api slot — nuxt(3000) +
+      // vite(5173) + fastify(3001), no collisions.
+      const loaded2 = await loadManifest(root);
+      const fastifyRes = await resolveAddScaffold(
+        loaded2.manifest,
+        loaded2.workspaceRoot,
+        "fastify",
+        undefined,
+      );
+      expect(fastifyRes.warnings).toEqual([]);
+      const fastifyPlan = buildAddPlan(
+        loaded2,
+        fastifyRes.scaffold,
+        await readRootPackageName(loaded2.workspaceRoot),
+        { install: false, keepFailed: false, verbose: false },
+      );
+      await executeAdd(fastifyPlan, fastifyRes.scaffold, { verbose: false });
+
+      // The template structure landed: autoload app plugin, routes, plugins.
+      expect(existsSync(join(root, "apps/api/src/app.ts"))).toBe(true);
+      expect(existsSync(join(root, "apps/api/src/routes/root.ts"))).toBe(true);
+      // fastify-cli ships __gitignore, renamed on copy by generify.
+      expect(existsSync(join(root, "apps/api/.gitignore"))).toBe(true);
+      expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
+      // groot's bun-native server entry overlays the template.
+      const server = await readFile(join(root, "apps/api/src/server.ts"), "utf8");
+      expect(server).toContain("port: 3001 }");
+      // `npm init -y` named the package from the basename; stitch keeps "api".
+      const apiPkg = JSON.parse(await readFile(join(root, "apps/api/package.json"), "utf8"));
+      expect(apiPkg.name).toBe("api");
+      expect(apiPkg.dependencies["fastify-cli"]).toBeDefined();
+      // Stitch swapped the Node-centric template scripts for the bun set.
+      expect(apiPkg.scripts.dev).toBe("bun --watch src/server.ts");
+      expect(JSON.stringify(apiPkg.scripts)).not.toContain("npm run");
+      // Fastify's tsc build lands in dist/, which turbo now caches.
+      const turboFinal = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
+      expect(turboFinal.tasks.build.outputs).toContain("dist/**");
+
       const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-      expect(manifest.scaffolds).toHaveLength(2);
+      expect(manifest.scaffolds).toHaveLength(3);
+      expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
+        "api",
+        "web",
+        "web",
+      ]);
       const checks = await runDoctor(await loadManifest(root));
       const failures = checks.filter((check) => check.status === "fail");
       expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);

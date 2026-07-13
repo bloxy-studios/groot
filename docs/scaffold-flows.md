@@ -23,6 +23,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | Electron | `bunx @quick-start/create-electron@1 <name> --template react-ts --skip` | never | never | overwrite prompt nulled by `--skip` |
 | Elysia | *(none — groot writes files directly)* | — | — | — |
 | Hono | `bunx create-hono@0.19 … --template bun` | never | only with `-i` | **interactive confirm, no bypass** → must target fresh dir |
+| Fastify | `bunx fastify-cli@8 generate <name> --lang=ts --esm` | never | never (but shells out to `npm init -y`) | **refuses** ("directory already exists") |
 | Convex | *(files written directly, incl. vendored `_generated` stubs)* | — | — | — |
 
 ## 1. Turborepo trunk — `create-turbo`
@@ -231,6 +232,22 @@ bunx create-vite@9 web --template react-ts --no-interactive --no-immediate
 - **Port 5173** is the Vite default — shared with SvelteKit/React Router per the same-slot rule.
 - Build: `vite build` → `dist/` (already in turbo's outputs). Convex env: `VITE_CONVEX_URL`.
 - Sources: <https://vite.dev/guide/>, <https://www.npmjs.com/package/create-vite> (dist/index.js option table + templates).
+
+## 15. API: Fastify — `fastify-cli generate`
+
+```sh
+bunx fastify-cli@8 generate api --lang=ts --esm
+```
+
+- **Fully non-interactive** (verified 2026-07-13 in the published 8.0.0 bundle — `generate.js`, `cli.js`): no prompts, no install, no git init, no lockfile. The package ships a single bin named `fastify` (≠ package name) — bunx's single-bin fallback covers it, the same case `@tanstack/cli` → `tanstack` already proves in this matrix.
+- **Refuses existing directories** (`directory <dir> already exists`, exit 1) and creates its own leaf dir — groot spawns from the scaffold's parent with the bare basename, the name-not-path pattern.
+- ⚠️ **Shells out to `npm init -y` inside the target** (upstream behavior — the only generator in the matrix with a hard npm dependency at generate time; GitHub runners and dev machines with Node have it). That's also where the package name comes from: the directory basename. The template's scripts/deps are then merged into the resulting package.json.
+- ⚠️ **That npm call cannot run inside a groot workspace** (caught live in e2e scenario 4, 2026-07-13): npm resolves its project root by walking up from cwd, finds the bun-declared workspace root (create-turbo's `-m bun` transform writes `devEngines`), and hard-fails with `EBADDEVENGINES` — the same guard scaffold-flows §7 documents for Convex's npx step, but fatal here. groot therefore runs this generator **staged**: generated in a disposable directory under the OS tempdir (neutral ancestry), then moved into `apps/api` — the trunk's temp-sibling pattern, generalized as `ScaffoldAdapter.stagedGeneration`. The same guard is why the stitched scripts must be bun-invoking: the template's own `npm run …` chains would trip it at runtime too.
+- `--lang=ts --esm` pins the ESM TypeScript template (`templates/app-ts-esm`): an @fastify/autoload app plugin (`src/app.ts`, `forceESM: true`) with `src/plugins/` + `src/routes/` and a node:test suite. Ships `__gitignore`, renamed to `.gitignore` on copy (generify's `__` → `.` convention, verified in generify 4.2.0). Its tsconfig sets `outDir: dist`, `allowImportingTsExtensions` + `rewriteRelativeImportExtensions` — so groot's server entry can import `./app.ts` directly while `tsc` still emits clean JS.
+- **The template serves through the Node-centric `fastify start` wrapper** — groot instead overlays `src/server.ts` (modeled on fastify-cli's own eject template: register the app plugin, listen on :3001) and the stitch stage swaps the scripts wholesale for the bun set: `dev: bun --watch src/server.ts`, `start`, `build: tsc` (→ `dist/`, turbo-cached), `test: bun test`, `typecheck`. The rewrite is marker-gated on the template's own dev script; hand-rolled scripts are never clobbered. Template devDependencies stay as-is (ts-node/c8/concurrently go unused under bun — harmless, and removing them would couple groot to template internals).
+- **@fastify/autoload ≥ 6 detects bun natively** (`'Bun' in globalThis`, `lib/runtime.js`) and loads the `.ts` plugins/routes with no compile step or env var. Bun's node:test shim runs the template's test suite (`test`/`t.after`/`node:assert` verified locally on bun 1.3.14).
+- **Port 3001**, shared with elysia/hono per the same-slot rule; the port lives in groot's `src/server.ts` (doctor watches the `port: 3001 }` marker there).
+- Sources: <https://github.com/fastify/fastify-cli> (generate.js, args.js, templates/), <https://www.npmjs.com/package/fastify-cli> (published 8.0.0 bundle), <https://github.com/fastify/fastify-autoload> (lib/runtime.js bun detection).
 
 ## Stitching reference
 

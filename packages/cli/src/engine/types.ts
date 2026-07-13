@@ -21,6 +21,7 @@ export type FrameworkId =
   | "electron"
   | "elysia"
   | "hono"
+  | "fastify"
   | "convex";
 
 /** The explicit "skip this slot" choice. */
