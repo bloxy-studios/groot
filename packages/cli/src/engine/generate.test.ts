@@ -8,6 +8,7 @@ import {
   cleanupTrunkExamples,
   growScaffold,
   moveDirContents,
+  runStagedGenerator,
   scrubGeneratorGit,
   writeFileSpecs,
 } from "./generate.ts";
@@ -120,6 +121,50 @@ describe("scrubGeneratorGit", () => {
   test("no-op when the generator created nothing", async () => {
     const dir = await scratch();
     expect(await scrubGeneratorGit(dir, false)).toBe(false);
+  });
+});
+
+describe("runStagedGenerator (npm-shelling generators — scaffold-flows.md#15)", () => {
+  test("runs the command in a temp stage and moves the named output into place", async () => {
+    const base = await scratch();
+    const dest = join(base, "ws", "apps", "api");
+    await mkdir(join(base, "ws", "apps"), { recursive: true });
+    await runStagedGenerator(
+      {
+        // Stands in for a generator that creates <name>/ inside its cwd —
+        // cwd below must be superseded by the staging directory.
+        argv: [
+          "bun",
+          "-e",
+          'const fs = require("node:fs"); fs.mkdirSync("api"); fs.writeFileSync("api/marker.txt", "grown");',
+        ],
+        cwd: join(base, "never-used"),
+        label: "staging test generator",
+      },
+      "api",
+      dest,
+      { verbose: false },
+    );
+    expect(await readFile(join(dest, "marker.txt"), "utf8")).toBe("grown");
+  });
+
+  test("a generator that produces no output → EXIT.GENERATOR, dest untouched", async () => {
+    const base = await scratch();
+    const dest = join(base, "ws", "apps", "api");
+    await mkdir(join(base, "ws", "apps"), { recursive: true });
+    let caught: GrootError | undefined;
+    try {
+      await runStagedGenerator(
+        { argv: ["bun", "-e", "0"], cwd: base, label: "no-op generator" },
+        "api",
+        dest,
+        { verbose: false },
+      );
+    } catch (error) {
+      caught = error instanceof GrootError ? error : undefined;
+    }
+    expect(caught?.exitCode).toBe(EXIT.GENERATOR);
+    expect(existsSync(dest)).toBe(false);
   });
 });
 

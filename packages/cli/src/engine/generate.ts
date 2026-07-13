@@ -8,11 +8,12 @@
  * --keep-failed was passed.
  */
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { cp, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { ADAPTERS } from "../adapters/index.ts";
 import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "../adapters/trunk.ts";
-import type { FileSpec } from "./adapter.ts";
+import type { FileSpec, GeneratorCommand } from "./adapter.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { runCommand } from "./run.ts";
 import type { Plan, PlannedScaffold } from "./types.ts";
@@ -92,6 +93,49 @@ export interface GenerateOptions {
 }
 
 /**
+ * Run a generator in a disposable staging directory under the OS tempdir,
+ * then move its output into the scaffold path.
+ *
+ * This exists for generators that shell out to npm mid-generation —
+ * fastify-cli's generate runs `npm init -y` inside its target
+ * (docs/scaffold-flows.md#15). npm resolves its project root by walking up
+ * from cwd, so inside a groot workspace it finds the bun-declared root
+ * (create-turbo's `-m bun` writes devEngines) and hard-fails with
+ * EBADDEVENGINES. The OS tempdir gives those generators a neutral ancestry —
+ * the trunk's temp-sibling pattern, generalized.
+ *
+ * The command must create `name` (the scaffold path's basename) inside its
+ * cwd, which the engine supersedes with the stage. The move prefers rename and
+ * falls back to a copy for cross-device temp mounts.
+ */
+export async function runStagedGenerator(
+  command: GeneratorCommand,
+  name: string,
+  destDir: string,
+  options: Pick<GenerateOptions, "verbose">,
+): Promise<void> {
+  const stage = await mkdtemp(join(tmpdir(), "groot-stage-"));
+  try {
+    await runCommand({ ...command, cwd: stage }, { verbose: options.verbose });
+    const grown = join(stage, name);
+    if (!existsSync(grown)) {
+      throw new GrootError(
+        `The generator finished but produced no "${name}" directory in its staging area`,
+        EXIT.GENERATOR,
+        "Re-run with --verbose to stream the full generator output.",
+      );
+    }
+    try {
+      await rename(grown, destDir);
+    } catch {
+      await cp(grown, destDir, { recursive: true });
+    }
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}
+
+/**
  * Grow one scaffold via its adapter: generator command → direct file writes →
  * post-commands. `generate` runs this for every scaffold in the plan; `groot add`
  * runs it for just the new one (no trunk).
@@ -118,7 +162,11 @@ export async function growScaffold(
   const command = adapter.command(ctx);
   if (command !== null) {
     report(command.label);
-    await runCommand(command, { verbose: options.verbose });
+    if (adapter.stagedGeneration) {
+      await runStagedGenerator(command, basename(scaffold.path), scaffoldDir, options);
+    } else {
+      await runCommand(command, { verbose: options.verbose });
+    }
   }
 
   const files = adapter.writeFiles?.(ctx);

@@ -8,9 +8,11 @@
  * inside the target (the package name derives from the directory basename —
  * upstream behavior), merges the template's scripts/deps into package.json,
  * and exits. No install, no git init, no lockfile. It refuses existing
- * directories outright, so groot spawns from the scaffold's parent with the
- * bare basename — the name-not-path pattern, which also keeps the npm-derived
- * package name path-free.
+ * directories outright, so groot passes the bare basename — which also keeps
+ * the npm-derived package name path-free. That npm call is why this adapter
+ * sets stagedGeneration: inside the workspace, npm's walk-up would trip the
+ * bun devEngines guard (EBADDEVENGINES) — the engine stages the generate under
+ * the OS tempdir and moves the result in.
  *
  * groot pins the ESM TypeScript template (`--lang=ts --esm`): every groot
  * scaffold is ESM, and this template's tsconfig (`allowImportingTsExtensions` +
@@ -69,12 +71,18 @@ try {
 export const fastifyAdapter: ScaffoldAdapter = {
   id: "fastify",
   slot: "api",
+  // generate shells out to `npm init -y`, and npm's project-root walk-up
+  // hard-fails on the workspace's bun devEngines declaration (EBADDEVENGINES —
+  // caught live in e2e scenario 4). Staging runs it under the OS tempdir with
+  // a neutral ancestry, then the engine moves the output into apps/api.
+  stagedGeneration: true,
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {
       argv: ["bunx", "fastify-cli@8", "generate", name, "--lang=ts", "--esm"],
       // generate refuses existing directories and derives the package name via
-      // `npm init -y` in its cwd — spawn from the parent with the bare basename.
+      // `npm init -y` — the bare basename keeps that name path-free. The cwd
+      // is superseded by the staging directory (see stagedGeneration).
       cwd: join(ctx.plan.targetDir, dirname(ctx.scaffold.path)),
       label: `Growing ${ctx.scaffold.path} (Fastify)`,
     };

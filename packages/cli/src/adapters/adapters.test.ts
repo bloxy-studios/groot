@@ -626,6 +626,9 @@ describe("fastify (scaffold-flows.md#15)", () => {
     // Fully non-interactive (verified in the published 8.0.0 generate.js):
     // no prompts exist, so no stdin script is needed.
     expect(cmd?.stdin).toBeUndefined();
+    // generate shells out to `npm init -y`; unstaged, npm's walk-up trips the
+    // workspace's bun devEngines guard (EBADDEVENGINES — caught live in e2e).
+    expect(fastifyAdapter.stagedGeneration).toBe(true);
   });
 
   test("overlays a bun-native server entry listening on the plan port", () => {
