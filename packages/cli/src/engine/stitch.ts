@@ -168,6 +168,62 @@ export async function stitchFastifyScripts(plan: Plan): Promise<string[]> {
 }
 
 /**
+ * Bare React Native's metro only watches and resolves inside the app
+ * directory — in a bun workspace that breaks at runtime ("Unable to resolve
+ * module …") because dependencies hoist to the root node_modules and shared
+ * packages live outside the app. Rewrite the template's empty config object
+ * (`const config = {};` — verified in @react-native-community/template
+ * 0.86.0) into the standard monorepo wiring: watch the workspace root,
+ * resolve from both the app's and the root's node_modules. Expo needs none
+ * of this (auto-configured since SDK 52 — see adapters/expo.ts).
+ *
+ * Same triple-state contract as the other template patches: already-stitched
+ * scaffolds are silent no-ops, an unrecognized shape gets a note instead of a
+ * clobber.
+ */
+export async function stitchMetroMonorepo(plan: Plan): Promise<string[]> {
+  const notes: string[] = [];
+  for (const scaffold of plan.scaffolds) {
+    if (scaffold.framework !== "react-native") continue;
+    const path = join(plan.targetDir, scaffold.path, "metro.config.js");
+    if (!existsSync(path)) continue;
+    const source = await readFile(path, "utf8");
+    if (source.includes("groot: monorepo wiring")) continue; // already stitched
+    const marker = "const config = {};";
+    if (!source.includes(marker)) {
+      // Upstream template changed shape — or the user replaced the config.
+      notes.push(
+        `${scaffold.path}/metro.config.js: template marker not found; monorepo wiring skipped`,
+      );
+      continue;
+    }
+    // apps/mobile → "../.." — climb the scaffold path back to the workspace root.
+    const toRoot = scaffold.path
+      .split("/")
+      .map(() => "..")
+      .join("/");
+    const wiring = `const path = require('path');
+
+// groot: monorepo wiring — metro must watch the workspace root and resolve
+// modules from both the app's and the workspace's node_modules (bun hoists).
+const workspaceRoot = path.resolve(__dirname, '${toRoot}');
+
+const config = {
+  watchFolders: [workspaceRoot],
+  resolver: {
+    nodeModulesPaths: [
+      path.resolve(__dirname, 'node_modules'),
+      path.resolve(workspaceRoot, 'node_modules'),
+    ],
+  },
+};`;
+    await writeFile(path, source.replace(marker, wiring), "utf8");
+    notes.push(`${scaffold.path}/metro.config.js → workspace watchFolders + module resolution`);
+  }
+  return notes;
+}
+
+/**
  * The client-exposed env var each web framework actually reads — Next.js only
  * exposes NEXT_PUBLIC_*, SvelteKit's $env/static/public requires PUBLIC_*, and
  * Vite-based frameworks (TanStack Start) expose VITE_*. Matches each
@@ -181,6 +237,18 @@ const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
   "react-router": "VITE_CONVEX_URL=", // framework mode is Vite-based
   nuxt: "NUXT_PUBLIC_CONVEX_URL=", // runtimeConfig.public via NUXT_PUBLIC_*
   vite: "VITE_CONVEX_URL=",
+};
+
+/**
+ * Mobile counterpart: Expo exposes EXPO_PUBLIC_* to the app at build time;
+ * bare React Native ships no public-env mechanism, so it gets the plain
+ * CONVEX_URL= placeholder (users wire it via their env lib of choice).
+ * Exact-line membership below keeps it from being swallowed by the longer
+ * *_CONVEX_URL= names it is a substring of.
+ */
+const CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
+  expo: "EXPO_PUBLIC_CONVEX_URL=",
+  "react-native": "CONVEX_URL=",
 };
 
 /**
@@ -209,7 +277,7 @@ export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
     envLines.push(
       scaffold.slot === "web"
         ? (CONVEX_URL_ENV_BY_WEB_FRAMEWORK[scaffold.framework] ?? "VITE_CONVEX_URL=")
-        : "EXPO_PUBLIC_CONVEX_URL=",
+        : (CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK[scaffold.framework] ?? "EXPO_PUBLIC_CONVEX_URL="),
     );
   }
 
@@ -345,6 +413,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchLockfileHygiene(plan));
   push(await stitchHonoPort(plan));
   push(await stitchFastifyScripts(plan));
+  push(await stitchMetroMonorepo(plan));
   push(await stitchBackendLinks(plan));
   push(await stitchTurboOutputs(plan));
   push(await stitchRootIdentity(plan));

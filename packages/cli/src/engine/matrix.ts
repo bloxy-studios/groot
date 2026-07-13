@@ -68,6 +68,16 @@ export const MATRIX: Record<Slot, SlotSpec> = {
         port: 8081,
         generator: "create-expo-app@4",
       },
+      // Official RN CLI init (community template). Metro default 8081, shared
+      // with Expo per the same-slot rule — add --path coexistence rides the
+      // port-collision warning. The stitch stage wires metro for the monorepo.
+      {
+        id: "react-native",
+        label: "React Native (bare)",
+        path: "apps/mobile",
+        port: 8081,
+        generator: "@react-native-community/cli@20",
+      },
     ],
   },
   desktop: {

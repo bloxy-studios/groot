@@ -101,6 +101,40 @@ async function fixture(selections: Record<Slot, string>): Promise<{ plan: Plan; 
         ),
       );
       await write(`${scaffold.path}/src/server.ts`, "// groot overlay placeholder\n");
+    } else if (scaffold.framework === "react-native") {
+      // Post-init shape: placeholders already replaced (HelloWorld -> mobile),
+      // metro.config.js as shipped by @react-native-community/template 0.86.0.
+      await write(
+        `${scaffold.path}/package.json`,
+        JSON.stringify(
+          {
+            name: "mobile",
+            version: "0.0.1",
+            private: true,
+            scripts: { start: "react-native start", test: "jest" },
+            dependencies: { "react-native": "0.86.0", react: "19.2.3" },
+          },
+          null,
+          2,
+        ),
+      );
+      await write(
+        `${scaffold.path}/metro.config.js`,
+        [
+          "const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');",
+          "",
+          "/**",
+          " * Metro configuration",
+          " * https://reactnative.dev/docs/metro",
+          " *",
+          " * @type {import('@react-native/metro-config').MetroConfig}",
+          " */",
+          "const config = {};",
+          "",
+          "module.exports = mergeConfig(getDefaultConfig(__dirname), config);",
+          "",
+        ].join("\n"),
+      );
     } else if (scaffold.framework === "convex") {
       await write(
         `${scaffold.path}/package.json`,
@@ -276,6 +310,55 @@ describe("stitchFastifyScripts (bun-first scripts — scaffold-flows.md#15)", ()
   });
 });
 
+describe("stitchMetroMonorepo (bare RN workspaces — scaffold-flows.md#16)", () => {
+  const selections: Record<Slot, string> = {
+    web: "none",
+    mobile: "react-native",
+    desktop: "none",
+    api: "none",
+    backend: "none",
+  };
+
+  test("rewrites the template's empty config into workspace wiring", async () => {
+    const { plan, root } = await fixture(selections);
+    const notes = await stitch(plan);
+    expect(notes.join("\n")).toContain("workspace watchFolders");
+
+    const metro = await readFile(join(root, "apps/mobile/metro.config.js"), "utf8");
+    expect(metro).toContain("groot: monorepo wiring");
+    expect(metro).toContain("watchFolders: [workspaceRoot]");
+    expect(metro).toContain("path.resolve(__dirname, '../..')"); // apps/mobile → root
+    expect(metro).toContain("path.resolve(workspaceRoot, 'node_modules')");
+    // The template's merge line survives — only the empty config was replaced.
+    expect(metro).toContain("mergeConfig(getDefaultConfig(__dirname), config)");
+    expect(metro).not.toContain("const config = {};");
+  });
+
+  test("is idempotent — a second pass changes nothing and stays silent", async () => {
+    const { plan, root } = await fixture(selections);
+    await stitch(plan);
+    const before = await readFile(join(root, "apps/mobile/metro.config.js"), "utf8");
+    const secondNotes = await stitch(plan);
+    const after = await readFile(join(root, "apps/mobile/metro.config.js"), "utf8");
+    expect(after).toBe(before);
+    expect(secondNotes.join("\n")).not.toContain("watchFolders");
+    expect(secondNotes.join("\n")).not.toContain("wiring skipped");
+  });
+
+  test("degrades gracefully when the template shape changed", async () => {
+    const { plan, root } = await fixture(selections);
+    await writeFile(
+      join(root, "apps/mobile/metro.config.js"),
+      "module.exports = { resolver: { unstable_enableSymlinks: true } };\n",
+      "utf8",
+    );
+    const notes = await stitch(plan);
+    expect(notes.join("\n")).toContain("monorepo wiring skipped");
+    const metro = await readFile(join(root, "apps/mobile/metro.config.js"), "utf8");
+    expect(metro).toContain("unstable_enableSymlinks"); // untouched
+  });
+});
+
 describe("stitchTrustedDependencies (bun lifecycle — scaffold-flows.md#9)", () => {
   test("electron workspaces get the root trust grant, idempotently", async () => {
     const { plan, root } = await fixture({
@@ -307,6 +390,32 @@ describe("stitchTrustedDependencies (bun lifecycle — scaffold-flows.md#9)", ()
     expect(await stitchTrustedDependencies(plan)).toBeNull();
     const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
     expect("trustedDependencies" in pkg).toBe(false);
+  });
+});
+
+describe("stitchBackendLinks — mobile env naming (scaffold-flows.md#7)", () => {
+  test("bare RN gets plain CONVEX_URL=, never swallowed by the longer names", async () => {
+    const { plan, root } = await fixture({
+      web: "next",
+      mobile: "react-native",
+      desktop: "none",
+      api: "none",
+      backend: "convex",
+    });
+    await stitch(plan);
+    const env = await readFile(join(root, ".env.example"), "utf8");
+    // CONVEX_URL= is a substring of NEXT_PUBLIC_CONVEX_URL= — the exact-line
+    // membership must still append it as its own line (anchored asserts).
+    expect(env).toMatch(/^NEXT_PUBLIC_CONVEX_URL=/m);
+    expect(env).toMatch(/^CONVEX_URL=/m);
+    expect(env).not.toMatch(/^EXPO_PUBLIC_CONVEX_URL=/m);
+    // And the RN app is linked to the backend like any frontend.
+    const pkg = JSON.parse(await readFile(join(root, "apps/mobile/package.json"), "utf8"));
+    expect(pkg.dependencies["@repo/backend"]).toBe("workspace:*");
+    // Idempotent: a second stitch appends nothing.
+    await stitch(plan);
+    const envAfter = await readFile(join(root, ".env.example"), "utf8");
+    expect(envAfter.match(/^CONVEX_URL=/gm)).toHaveLength(1);
   });
 });
 

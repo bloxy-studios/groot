@@ -13,6 +13,7 @@ import { fastifyAdapter } from "./fastify.ts";
 import { honoAdapter } from "./hono.ts";
 import { nextAdapter } from "./next.ts";
 import { nuxtAdapter } from "./nuxt.ts";
+import { reactNativeAdapter } from "./react-native.ts";
 import { reactRouterAdapter } from "./react-router.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
@@ -28,6 +29,7 @@ export const ADAPTERS: Record<FrameworkId, ScaffoldAdapter> = {
   nuxt: nuxtAdapter,
   vite: viteAdapter,
   expo: expoAdapter,
+  "react-native": reactNativeAdapter,
   tauri: tauriAdapter,
   electron: electronAdapter,
   elysia: elysiaAdapter,

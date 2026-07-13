@@ -19,6 +19,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | Nuxt | `bunx create-nuxt@3 <name> --template minimal --packageManager bun --no-gitInit --no-install --no-modules` | `--no-gitInit` | `--no-install` | `--force` to override |
 | Vite | `bunx create-vite@9 <name> --template react-ts --no-interactive --no-immediate` | never | `--no-immediate` | `--overwrite` to clear |
 | Expo | `bunx create-expo-app@4 … --no-install` | no flag exists (see caveats) | yes → suppressed | (unverified) |
+| React Native (bare) | `bunx @react-native-community/cli@20 init <name> --pm bun --skip-install --install-pods false --skip-git-init --replace-directory false` | `--skip-git-init` | `--skip-install` | prompts unless `--replace-directory` (groot targets fresh dirs, staged) |
 | Tauri | `bunx create-tauri-app@4 <name> --template react-ts --manager bun --identifier <id> --yes` | never | never | refuses unless `--force` |
 | Electron | `bunx @quick-start/create-electron@1 <name> --template react-ts --skip` | never | never | overwrite prompt nulled by `--skip` |
 | Elysia | *(none — groot writes files directly)* | — | — | — |
@@ -133,7 +134,7 @@ packages/backend/
 - ⚠️ **The vendored `convex/tsconfig.json` declares `"types": ["node"]`** — the generated package.json must therefore carry `@types/node` (pin tracks the upstream template), or `convex dev`'s built-in typecheck fails with TS2688. Caught in a live v0.2.0 run; the E2E now typechecks scaffolded packages, not just installs them.
 - ⚠️ **Known upstream quirk (verified 2026-07-10, cosmetic)**: `convex dev`'s optional "Set up Convex AI files?" step installs agent skills via `npx`, which trips npm's `devEngines` guard inside the bun-declared workspace (`EBADDEVENGINES: required { name: 'bun' }`). The guard is working as intended; Convex prints a manual retry command and continues — deployment provisioning and `.env.local` are unaffected.
 - The one unavoidable interactive step — `bunx convex dev --until-success` (login, deployment provisioning, `.env.local`) — is **never run by groot**; it's printed as the first "next step".
-- Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive the Convex URL via `.env` plumbing, named per framework: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router, Vite), `NUXT_PUBLIC_CONVEX_URL` (Nuxt), `EXPO_PUBLIC_CONVEX_URL` (Expo).
+- Consumption pattern: apps depend on `"@repo/backend": "workspace:*"` and deep-import `@repo/backend/convex/_generated/api` (no `exports` map — deliberate, matching the reference repo). Frontends receive the Convex URL via `.env` plumbing, named per framework: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router, Vite), `NUXT_PUBLIC_CONVEX_URL` (Nuxt), `EXPO_PUBLIC_CONVEX_URL` (Expo), `CONVEX_URL` (bare React Native — no public-env mechanism, left to the user's env lib).
 - Sources: <https://docs.convex.dev/cli/reference/codegen>, <https://docs.convex.dev/cli>, <https://github.com/get-convex/templates> (stub strategy), <https://github.com/get-convex/turbo-expo-nextjs-clerk-convex-monorepo>, <https://docs.convex.dev/production/project-configuration>.
 
 ## 8. Desktop: Tauri — `create-tauri-app`
@@ -248,6 +249,22 @@ bunx fastify-cli@8 generate api --lang=ts --esm
 - **@fastify/autoload ≥ 6 detects bun natively** (`'Bun' in globalThis`, `lib/runtime.js`) and loads the `.ts` plugins/routes with no compile step or env var. Bun's node:test shim runs the template's test suite (`test`/`t.after`/`node:assert` verified locally on bun 1.3.14).
 - **Port 3001**, shared with elysia/hono per the same-slot rule; the port lives in groot's `src/server.ts` (doctor watches the `port: 3001 }` marker there).
 - Sources: <https://github.com/fastify/fastify-cli> (generate.js, args.js, templates/), <https://www.npmjs.com/package/fastify-cli> (published 8.0.0 bundle), <https://github.com/fastify/fastify-autoload> (lib/runtime.js bun detection).
+
+## 16. Mobile: React Native (bare) — `@react-native-community/cli init`
+
+```sh
+bunx @react-native-community/cli@20 init mobile --pm bun --skip-install --install-pods false --skip-git-init --replace-directory false
+```
+
+- **Fully non-interactive with these flags on a fresh target** (verified 2026-07-13 in the published 20.2.0 bundle — commands/init/*.js): the positional is validated (`/^[$A-Z_][0-9A-Z_$]*$/i`, no java keywords, no "helloworld" — `mobile` passes), the react-native version and matching `@react-native-community/template` resolve via plain registry **fetches**, and with `--pm bun` the template installs via **bun** (`bun init -y` + `bun add --exact`) into the CLI's own tempdir before being copied into the target. Single bin `rnc-cli` (≠ package name) — bunx's single-bin fallback, same as `@tanstack/cli` and `fastify-cli`.
+- ⚠️ **The registry-URL lookup shells npm** (`npm config get registry --workspaces=false --include-workspace-root`, tools/npm.js): inside a groot workspace that call hard-fails with `EBADDEVENGINES` (create-turbo's `-m bun` writes `devEngines`; reproduced 2026-07-13 — exit 1). The CLI's try/catch swallows it and falls back to the hardcoded default registry, so in-tree init *survives by courtesy* — groot runs it **staged** (`ScaffoldAdapter.stagedGeneration`) instead, which both dodges the guard and lets the user's real registry config apply.
+- **Placeholder pipeline** (editTemplate.js): `HelloWorld` → project name (case-preserving + lowercase pass) across file contents and names; `_gitignore`/`_watchmanconfig`/`_bundle`/… → dotfiles (`UNDERSCORED_DOTFILES`). The android applicationId / iOS target become `com.mobile` / `mobile` — override with `--package-name` is available but groot keeps the default. package.json name lands as `mobile`, so the app-rename stitch is a no-op.
+- **Pods / SDKs stay out of generate**: CocoaPods runs only on darwin AND only inside the (skipped) install step — `--install-pods false` is belt-and-braces; Xcode/CocoaPods/Android SDK are the user's build-time next steps, never groot's.
+- **Git**: `--skip-git-init`; init also auto-skips when it detects an enclosing repo (`git rev-parse` on the project folder).
+- **Metro is not monorepo-aware in the bare template** (unlike Expo ≥ SDK 52): the shipped `metro.config.js` is `mergeConfig(getDefaultConfig(__dirname), {})` with a literal `const config = {};` — groot's stitch rewrites that marker into `watchFolders: [workspaceRoot]` + `resolver.nodeModulesPaths` for the app and the workspace root, and the doctor watches the wiring persistently. Scripts stay untouched — they're package-manager-neutral (`react-native start`, `jest`).
+- ⚠️ **`add --path` basenames must satisfy the CLI's name rules** (the veto runs at resolve time, before anything generates): JS-identifier shape — `apps/rn-app` has a dash and would crash init — plus no java keywords, `react`/`react-native`, or anything containing `helloworld`.
+- **Port 8081** is the Metro default, shared with Expo per the same-slot rule; `add --path` coexistence rides the port-collision warning (the issue's original "port shift" idea predates the same-slot precedent set by the web wave).
+- Sources: <https://github.com/react-native-community/cli> (build/commands/init/*.js, build/tools/npm.js, build/tools/packageManager.js in the published 20.2.0 bundle), <https://www.npmjs.com/package/@react-native-community/template> (template.config.js, template/metro.config.js, 0.86.0), <https://reactnative.dev/docs/metro>.
 
 ## Stitching reference
 

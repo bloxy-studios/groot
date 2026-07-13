@@ -17,6 +17,7 @@ export type FrameworkId =
   | "nuxt"
   | "vite"
   | "expo"
+  | "react-native"
   | "tauri"
   | "electron"
   | "elysia"

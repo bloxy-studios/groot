@@ -99,6 +99,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
   test("maps ids to their slots", () => {
     expect(frameworkChoice("next")?.slot).toBe("web");
     expect(frameworkChoice("expo")?.slot).toBe("mobile");
+    expect(frameworkChoice("react-native")?.slot).toBe("mobile");
     expect(frameworkChoice("hono")?.slot).toBe("api");
     expect(frameworkChoice("fastify")?.slot).toBe("api");
     expect(frameworkChoice("convex")?.slot).toBe("backend");
@@ -117,6 +118,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
       "hono",
       "next",
       "nuxt",
+      "react-native",
       "react-router",
       "sveltekit",
       "tanstack-start",
@@ -166,8 +168,31 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       'Unknown scaffold "angular"',
     );
     expect(error.hint).toContain(
-      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | tauri | electron | elysia | hono | fastify | convex",
+      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | react-native | tauri | electron | elysia | hono | fastify | convex",
     );
+  });
+
+  test("react-native --path with a generator-invalid basename → EXIT.USAGE up front", async () => {
+    // The RN CLI derives native identifiers from the basename and rejects
+    // non-JS-identifier names — groot must refuse before generating, not crash
+    // mid-grow (Greptile P1 on #71).
+    const { root, loaded } = await workspace([entryFor("expo")]);
+    await expectUsage(
+      () => resolveAddScaffold(loaded.manifest, root, "react-native", "apps/rn-app"),
+      "not a valid React Native project name",
+    );
+    await expectUsage(
+      () => resolveAddScaffold(loaded.manifest, root, "react-native", "apps/class"),
+      "reserved by the React Native CLI",
+    );
+    // A valid identifier basename sails through (mobile occupied → warnings on port only).
+    const resolution = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "react-native",
+      "apps/companion",
+    );
+    expect(resolution.scaffold.path).toBe("apps/companion");
   });
 
   test("free slot, no --path → the framework's standard destination", async () => {

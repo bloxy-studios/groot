@@ -19,6 +19,8 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("api", "hono")?.port).toBe(3001);
     expect(findChoice("api", "fastify")?.port).toBe(3001);
     expect(findChoice("mobile", "expo")?.port).toBe(8081);
+    // Metro default, shared with Expo — same-slot alternatives share ports.
+    expect(findChoice("mobile", "react-native")?.port).toBe(8081);
     expect(findChoice("desktop", "tauri")?.port).toBe(1420);
     // electron-vite's renderer dev server is non-strict and self-wiring —
     // groot declares no port for it (docs/scaffold-flows.md#9).
@@ -35,6 +37,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "nuxt")?.path).toBe("apps/web");
     expect(findChoice("web", "vite")?.path).toBe("apps/web");
     expect(findChoice("mobile", "expo")?.path).toBe("apps/mobile");
+    expect(findChoice("mobile", "react-native")?.path).toBe("apps/mobile");
     expect(findChoice("desktop", "tauri")?.path).toBe("apps/desktop");
     expect(findChoice("desktop", "electron")?.path).toBe("apps/desktop");
     expect(findChoice("api", "hono")?.path).toBe("apps/api");
@@ -51,6 +54,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("web", "nuxt")?.generator).toBe("create-nuxt@3");
     expect(findChoice("web", "vite")?.generator).toBe("create-vite@9");
     expect(findChoice("mobile", "expo")?.generator).toBe("create-expo-app@4");
+    expect(findChoice("mobile", "react-native")?.generator).toBe("@react-native-community/cli@20");
     expect(findChoice("desktop", "tauri")?.generator).toBe("create-tauri-app@4");
     expect(findChoice("desktop", "electron")?.generator).toBe("@quick-start/create-electron@1");
     expect(findChoice("api", "hono")?.generator).toBe("create-hono@0.19");

@@ -7,6 +7,7 @@
  */
 import { readFile, rm } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { ADAPTERS } from "../adapters/index.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { growScaffold } from "./generate.ts";
 import type { LoadedManifest } from "./manifest.ts";
@@ -127,6 +128,13 @@ export async function resolveAddScaffold(
       EXIT.USAGE,
       `Pass --path ${expectedTop}/<name>.`,
     );
+  }
+  // Some generators derive identifiers from the path's basename and reject
+  // names their rules don't allow — refuse those up front instead of letting
+  // the generator crash mid-grow (bare RN validates JS-identifier names).
+  const pathVeto = ADAPTERS[meta.id].validatePath?.(path);
+  if (pathVeto != null) {
+    throw new GrootError(pathVeto, EXIT.USAGE, "Pick a different --path.");
   }
   const claimant = manifest.scaffolds.find((scaffold) => scaffold.path === path);
   if (claimant !== undefined) {
