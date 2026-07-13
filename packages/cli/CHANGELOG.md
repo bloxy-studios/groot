@@ -1,5 +1,11 @@
 # create-groot
 
+## 1.9.0
+
+### Minor Changes
+
+- [#73](https://github.com/bloxy-studios/groot/pull/73) [`762a77a`](https://github.com/bloxy-studios/groot/commit/762a77a1b1b5bc6957cebea5aa69e434b11d97d6) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - The backend slot doubles and the v1.1 wave completes: Supabase joins Convex, via the official `supabase init` run as a postCommand inside groot's package shell (init has no directory argument — it writes `supabase/config.toml` into its cwd). Every fact verified in the cli monorepo's Go sources and by running the published 2.109.1 binary: init is non-interactive by default in 2.x (the IDE prompts moved behind an opt-in `--interactive` flag that also requires a TTY), pins WORKDIR to avoid parent-project walk-up, and shells nothing — the npm wrapper is a 3-file shim over platform binaries shipped as optionalDependencies, so neither the EBADDEVENGINES staging class nor bun's postinstall trust list applies. groot's shell ships `@repo/backend` with `dev: supabase start` / `stop` / `typegen` scripts, the CLI pinned as a devDependency, and a `database.types.ts` placeholder matching `gen types` output for an empty schema — apps deep-importing the Database type typecheck before Docker ever runs (the Convex vendored-stubs pattern). The stitch renames config.toml's cwd-derived `project_id` to the workspace name (it names Docker containers — two groot workspaces would collide as "backend"), and backend env plumbing is now per-backend: Supabase frontends get `<prefix>SUPABASE_URL=` + `<prefix>SUPABASE_ANON_KEY=` pairs named exactly like the Convex lines, bare React Native unprefixed. Docker, login/link, and real typegen stay deferred to next-steps output. Doctor gains config and types checks; the schema enum grows `supabase`; manifest stays version 1.
+
 ## 1.8.0
 
 ### Minor Changes
