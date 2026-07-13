@@ -1,6 +1,6 @@
 {
   "name": "create-groot",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "🌱 Plant a bun-first Turborepo and grow it: web, mobile, API and Convex backend from one command.",
   "keywords": [
     "bun",

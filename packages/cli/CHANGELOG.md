@@ -1,5 +1,11 @@
 # create-groot
 
+## 1.10.0
+
+### Minor Changes
+
+- [#75](https://github.com/bloxy-studios/groot/pull/75) [`642165f`](https://github.com/bloxy-studios/groot/commit/642165f524c72b2a2b3c833be1cd27ab39fb12a7) Thanks [@bloxy-studios](https://github.com/bloxy-studios)! - Milestone v1.2 opens: `groot init --github` (+ `--public`) creates and pushes your repository the moment the workspace is planted — `gh repo create <name> --private|--public --source=. --remote=origin --push` after verify's initial commit, with every flag and failure mode verified against the published gh sources and the real 2.96.0 binary. The ordering fix makes the hard preconditions usage errors _before anything generates_: `--github` conflicts with `--no-git`, `--public` requires `--github`, and the git identity must exist up front (gh's `--push` hard-errors on a commit-less repo, so the identity downgrade plain init applies becomes a refusal here). Everything after generation degrades instead of failing: gh missing from PATH, gh unauthenticated (`auth status` exit 1, create exit 4), or a failed create each print the reason and the exact manual commands (`gh auth login`, the full `gh repo create …` invocation) as numbered next steps — the workspace is valid either way, so the run exits 0. The plan summary, dry-run output, and next-steps report all carry the GitHub line; publishing logic lives in a new engine module with hermetic fake-gh tests (PATH shims, no network).
+
 ## 1.9.0
 
 ### Minor Changes
