@@ -172,14 +172,18 @@ export const reactNativeAdapter: ScaffoldAdapter = {
       ];
     }
     const source = await readFile(configPath, "utf8");
-    const wired = source.includes(METRO_MONOREPO_MARKER) || source.includes("watchFolders");
+    // Both halves are load-bearing: watchFolders without nodeModulesPaths (or
+    // vice versa) still can't resolve root-hoisted dependencies — a
+    // half-restored config must warn, not pass. Checked functionally rather
+    // than via the stitch marker so complete hand-rolled configs count too.
+    const wired = source.includes("watchFolders") && source.includes("nodeModulesPaths");
     return [
       {
         name,
         status: wired ? "pass" : "warn",
         detail: wired
-          ? "metro.config.js carries the workspace wiring"
-          : "metro.config.js has no workspace wiring (watchFolders / nodeModulesPaths)",
+          ? "metro.config.js carries the workspace wiring (watchFolders + nodeModulesPaths)"
+          : "metro.config.js is missing workspace wiring (needs BOTH watchFolders and resolver.nodeModulesPaths)",
         ...(wired
           ? {}
           : {

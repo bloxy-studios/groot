@@ -491,10 +491,28 @@ describe("react-native (bare — scaffold-flows.md#16)", () => {
     checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.[0]?.status).toBe("warn");
 
-    // Stitched config → pass.
+    // Half-restored wiring (watchFolders without nodeModulesPaths) still can't
+    // resolve root-hoisted deps — must warn, not pass, marker or no marker.
     await writeFile(
       join(root, scaffold.path, "metro.config.js"),
-      `// ${METRO_MONOREPO_MARKER}\nconst config = { watchFolders: [] };\nmodule.exports = config;\n`,
+      `// ${METRO_MONOREPO_MARKER}\nconst config = { watchFolders: [__dirname] };\nmodule.exports = config;\n`,
+    );
+    checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.[0]?.status).toBe("warn");
+
+    // Complete wiring (both halves) → pass — hand-rolled configs count too.
+    await writeFile(
+      join(root, scaffold.path, "metro.config.js"),
+      [
+        "const path = require('path');",
+        "const workspaceRoot = path.resolve(__dirname, '../..');",
+        "const config = {",
+        "  watchFolders: [workspaceRoot],",
+        "  resolver: { nodeModulesPaths: [path.resolve(workspaceRoot, 'node_modules')] },",
+        "};",
+        "module.exports = config;",
+        "",
+      ].join("\n"),
     );
     checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
     expect(checks?.[0]?.status).toBe("pass");
