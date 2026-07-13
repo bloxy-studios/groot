@@ -32,6 +32,8 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | `--json` | — | off | With `--dry-run`: machine-readable plan on stdout |
 | `--no-install` | — | install on | Skip root `bun install` |
 | `--no-git` | — | git on | Skip `git init` + initial commit |
+| `--github` | — | off | After the initial commit: create + push a GitHub repository via `gh` (see [GitHub publishing](#github-publishing)) |
+| `--public` | — | off | With `--github`: make the created repository public (private otherwise) |
 | `--dir-conflict <policy>` | `error` \| `merge` \| `increment` | `error` | Non-empty target directory policy |
 | `--keep-failed` | — | off | Don't delete the target dir if a generator fails |
 | `--verbose` | — | off | Stream generator output instead of spinners |
@@ -40,6 +42,13 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 ### Defaults (`--yes` with no selection flags)
 
 `--web next --mobile none --api none --backend convex` — a Next.js app wired to a Convex backend: groot's flagship pairing.
+
+### GitHub publishing
+
+`--github` runs after verify's initial commit: `Bun.which("gh")` → `gh auth status` → `gh repo create <name> --private|--public --source=. --remote=origin --push` (every flag verified against the published gh sources and the 2.96.0 binary; non-interactive `gh repo create` requires exactly one visibility flag, and `--push` hard-errors on a repo with zero commits).
+
+- **Hard preconditions, checked before anything is generated** (usage errors, exit 2): `--github` conflicts with `--no-git`, `--public` requires `--github`, and a git identity (`user.name` + `user.email`) must exist — the initial commit is what gets pushed, so the missing-identity downgrade plain init applies becomes an error here.
+- **Everything after generation degrades, never fails**: gh absent from PATH, gh unauthenticated (`gh auth status` exits 1), or a failed create (unauthenticated `gh repo create` exits 4) each print the reason plus the manual commands (`gh auth login`, the exact `gh repo create …` invocation) as next steps — the workspace is already valid, so the run exits 0.
 
 ### Presets
 

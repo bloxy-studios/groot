@@ -37,6 +37,42 @@ async function scratch(): Promise<string> {
 }
 
 describe("groot init (process-level, non-TTY)", () => {
+  test("--public without --github → exit 2 with the pairing hint", async () => {
+    const cwd = await scratch();
+    const { stderr, exitCode } = await runCli(cwd, [
+      "init",
+      "app",
+      "--yes",
+      "--public",
+      "--dry-run",
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--public only applies together with --github");
+  });
+
+  test("--github with --no-git → exit 2 (the push needs the initial commit)", async () => {
+    const cwd = await scratch();
+    const { stderr, exitCode } = await runCli(cwd, [
+      "init",
+      "app",
+      "--yes",
+      "--github",
+      "--no-git",
+      "--dry-run",
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--github needs the initial commit");
+  });
+
+  test("--github shows in the dry-run plan summary (private by default, public opt-in)", async () => {
+    const cwd = await scratch();
+    const priv = await runCli(cwd, ["init", "app", "--yes", "--github", "--dry-run"]);
+    expect(priv.exitCode).toBe(0);
+    expect(priv.stdout).toContain("github     create private repo + push");
+    const pub = await runCli(cwd, ["init", "app", "--yes", "--github", "--public", "--dry-run"]);
+    expect(pub.stdout).toContain("github     create public repo + push");
+  });
+
   test("prompts are never attempted without a TTY — exits 2 with the flag hint", async () => {
     const cwd = await scratch();
     const { stderr, exitCode } = await runCli(cwd, ["init", "my-app"]);

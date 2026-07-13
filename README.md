@@ -89,6 +89,7 @@ bunx create-groot@latest init my-app \
 | --- | --- |
 | `groot init [dir]` | Plant a new workspace — interactive, or fully flag-driven (`--dry-run --json` for agents) |
 | `groot add <scaffold>` | Grow an existing workspace: `groot add hono`, `groot add sveltekit --path apps/marketing` |
+| `groot init my-app --github` | Plant, then create + push a private GitHub repo via `gh` (`--public` for public); absent/unauthenticated gh degrades to printed steps |
 | `groot doctor` | Health checks with suggested fixes — ports, lockfiles, manifests, per-framework invariants |
 
 The full contract — every flag, exit code, and the `groot.json` manifest schema — lives in [docs/cli-spec.md](./docs/cli-spec.md); [docs/stability.md](./docs/stability.md) defines what's covered by semver (binding since v1.0). Running groot in CI or from an agent? Recipes in [docs/ci.md](./docs/ci.md).

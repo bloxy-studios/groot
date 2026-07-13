@@ -73,7 +73,7 @@ Stitch operations (each implemented as a pure, unit-tested transform):
 
 ### 5. Verify
 
-Structural workspace checks (every `package.json` parses, package names are unique), then `bun install` at the root (unless `--no-install`), then `git init` + initial commit (unless `--no-git`; a missing git identity downgrades the commit to a printed hint, never a failure), then a summary report with next steps — including the deferred `convex dev` login step when Convex was selected. Deeper per-package checks (`tsc --noEmit`-level via turbo, boot probes) arrive with `groot doctor` (v0.3), which also exposes this stage standalone.
+Structural workspace checks (every `package.json` parses, package names are unique), then `bun install` at the root (unless `--no-install`), then `git init` + initial commit (unless `--no-git`; a missing git identity downgrades the commit to a printed hint, never a failure), then a summary report with next steps — including the deferred `convex dev` login step when Convex was selected. With `--github`, a post-verify step creates and pushes the repository via `gh repo create --source=. --push` (auth-checked first; absent/unauthenticated gh degrades to printed fallback commands, never a failure — docs/cli-spec.md#github-publishing). Deeper per-package checks (`tsc --noEmit`-level via turbo, boot probes) arrive with `groot doctor` (v0.3), which also exposes this stage standalone.
 
 ## Port allocation
 
