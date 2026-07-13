@@ -63,6 +63,15 @@ export interface ScaffoldAdapter {
    * EBADDEVENGINES. When set, the command's `cwd` is superseded by the stage.
    */
   readonly stagedGeneration?: boolean;
+  /**
+   * Veto a proposed scaffold path before any planning or generation happens
+   * (`groot add --path`). Some generators derive identifiers from the path's
+   * last segment and reject names their rules don't allow — bare React
+   * Native's init validates the project name as a JS identifier, so
+   * `--path apps/rn-app` would crash mid-generate instead of failing fast.
+   * Return a complete error message to refuse, or null to accept.
+   */
+  validatePath?(path: string): string | null;
   /** The generator invocation, or null when groot writes the files directly. */
   command(ctx: AdapterContext): GeneratorCommand | null;
   /** Files groot writes itself, relative to the workspace root. */

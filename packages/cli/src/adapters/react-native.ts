@@ -42,12 +42,94 @@ import type {
 /** Marker the stitch writes into metro.config.js — the doctor watches for it. */
 export const METRO_MONOREPO_MARKER = "groot: monorepo wiring";
 
+/**
+ * init's project-name rules, mirrored from the published 20.2.0 bundle
+ * (commands/init/validate.js) so `groot add --path` refuses up front what the
+ * generator would crash on mid-generate: JS-identifier shape, no java
+ * keywords (the name becomes the android package segment), no "react" /
+ * "react-native", nothing containing "helloworld" (the template placeholder).
+ */
+const RN_NAME_REGEX = /^[$A-Z_][0-9A-Z_$]*$/i;
+const JAVA_KEYWORDS = [
+  "abstract",
+  "continue",
+  "for",
+  "new",
+  "switch",
+  "assert",
+  "default",
+  "goto",
+  "package",
+  "synchronized",
+  "boolean",
+  "do",
+  "if",
+  "private",
+  "this",
+  "break",
+  "double",
+  "implements",
+  "protected",
+  "throw",
+  "byte",
+  "else",
+  "import",
+  "public",
+  "throws",
+  "case",
+  "enum",
+  "instanceof",
+  "return",
+  "transient",
+  "catch",
+  "extends",
+  "int",
+  "short",
+  "try",
+  "char",
+  "final",
+  "interface",
+  "static",
+  "void",
+  "class",
+  "finally",
+  "long",
+  "strictfp",
+  "volatile",
+  "const",
+  "float",
+  "native",
+  "super",
+  "while",
+];
+const RN_RESERVED_NAMES = new Set(["react", "react-native", ...JAVA_KEYWORDS]);
+
+/** The generator-rule error for a proposed basename, or null when it passes. */
+export function reactNativeNameError(name: string): string | null {
+  if (!RN_NAME_REGEX.test(name)) {
+    return `"${name}" is not a valid React Native project name — the RN CLI derives the native project identifiers from it and only allows letters, digits, "$" and "_" (not starting with a digit).`;
+  }
+  if (RN_RESERVED_NAMES.has(name.toLowerCase())) {
+    return `"${name}" is reserved by the React Native CLI (java keywords, "react" and "react-native" can't name a project).`;
+  }
+  if (/helloworld/i.test(name)) {
+    return `"${name}" contains "HelloWorld", the RN template's placeholder — the CLI refuses it.`;
+  }
+  return null;
+}
+
 export const reactNativeAdapter: ScaffoldAdapter = {
   id: "react-native",
   slot: "mobile",
   // init's registry lookup shells npm, which trips the workspace's bun
   // devEngines guard in-tree (EBADDEVENGINES) — stage it under the OS tempdir.
   stagedGeneration: true,
+  validatePath(path: string): string | null {
+    const error = reactNativeNameError(basename(path));
+    return error === null
+      ? null
+      : `${path}: ${error} Pick a --path whose last segment is a valid name, e.g. apps/companion.`;
+  },
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {

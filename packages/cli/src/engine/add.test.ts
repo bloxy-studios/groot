@@ -172,6 +172,29 @@ describe("resolveAddScaffold — occupancy matrix", () => {
     );
   });
 
+  test("react-native --path with a generator-invalid basename → EXIT.USAGE up front", async () => {
+    // The RN CLI derives native identifiers from the basename and rejects
+    // non-JS-identifier names — groot must refuse before generating, not crash
+    // mid-grow (Greptile P1 on #71).
+    const { root, loaded } = await workspace([entryFor("expo")]);
+    await expectUsage(
+      () => resolveAddScaffold(loaded.manifest, root, "react-native", "apps/rn-app"),
+      "not a valid React Native project name",
+    );
+    await expectUsage(
+      () => resolveAddScaffold(loaded.manifest, root, "react-native", "apps/class"),
+      "reserved by the React Native CLI",
+    );
+    // A valid identifier basename sails through (mobile occupied → warnings on port only).
+    const resolution = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "react-native",
+      "apps/companion",
+    );
+    expect(resolution.scaffold.path).toBe("apps/companion");
+  });
+
   test("free slot, no --path → the framework's standard destination", async () => {
     const { root, loaded } = await workspace([entryFor("next")]);
     const { scaffold, warnings } = await resolveAddScaffold(

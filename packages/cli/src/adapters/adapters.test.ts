@@ -15,7 +15,7 @@ import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
 import { nuxtAdapter } from "./nuxt.ts";
-import { METRO_MONOREPO_MARKER, reactNativeAdapter } from "./react-native.ts";
+import { METRO_MONOREPO_MARKER, reactNativeAdapter, reactNativeNameError } from "./react-native.ts";
 import { reactRouterAdapter } from "./react-router.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
@@ -459,6 +459,19 @@ describe("react-native (bare — scaffold-flows.md#16)", () => {
     expect(cmd?.stdin).toBeUndefined();
     // Metro wiring comes from the stitch stage, not generate-time overlays.
     expect(reactNativeAdapter.writeFiles).toBeUndefined();
+  });
+
+  test("vetoes add --path basenames the RN CLI would reject mid-generate", () => {
+    // Rules mirrored from the published validate.js — JS-identifier shape,
+    // java keywords (android package segments), template placeholder.
+    expect(reactNativeAdapter.validatePath?.("apps/mobile")).toBeNull();
+    expect(reactNativeAdapter.validatePath?.("apps/companion")).toBeNull();
+    expect(reactNativeAdapter.validatePath?.("apps/rn-app")).toContain("not a valid React Native");
+    expect(reactNativeAdapter.validatePath?.("apps/2fast")).toContain("not a valid React Native");
+    expect(reactNativeAdapter.validatePath?.("apps/class")).toContain("reserved");
+    expect(reactNativeAdapter.validatePath?.("apps/react")).toContain("reserved");
+    expect(reactNativeAdapter.validatePath?.("apps/HelloWorldApp")).toContain("HelloWorld");
+    expect(reactNativeNameError("mobile")).toBeNull();
   });
 
   test("doctor warns when metro.config.js lost the workspace wiring", async () => {
