@@ -47,6 +47,8 @@ describe("stability contract: command surface", () => {
         "json",
         "install",
         "git",
+        "github",
+        "public",
         "dir-conflict",
         "keep-failed",
         "verbose",

@@ -6,7 +6,9 @@
  * (workspace coherence patches) → verify (structure + install + git), with
  * `--dry-run` stopping after preflight (docs/cli-spec.md#groot-init-dir).
  */
-import { basename, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { defineCommand } from "citty";
 import pc from "picocolors";
@@ -14,6 +16,12 @@ import pkg from "../../package.json";
 import { bannerText } from "../banner.ts";
 import { EXIT, GrootError } from "../engine/errors.ts";
 import { generate } from "../engine/generate.ts";
+import {
+  type GitHubPublishResult,
+  ghCreateCommand,
+  gitIdentityPresent,
+  publishToGitHub,
+} from "../engine/github.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
 import {
   applyYesDefaults,
@@ -87,12 +95,28 @@ async function runInit(args: {
   json: boolean;
   install: boolean;
   git: boolean;
+  github: boolean;
+  public: boolean;
   dirConflict: string;
   keepFailed: boolean;
   verbose: boolean;
 }): Promise<void> {
   if (args.json && !args.dryRun) {
     throw new GrootError("--json currently requires --dry-run", EXIT.USAGE);
+  }
+  if (args.public && !args.github) {
+    throw new GrootError(
+      "--public only applies together with --github.",
+      EXIT.USAGE,
+      "Add --github to create and push the repository, or drop --public.",
+    );
+  }
+  if (args.github && !args.git) {
+    throw new GrootError(
+      "--github needs the initial commit that --no-git skips.",
+      EXIT.USAGE,
+      "Drop --no-git (gh repo create --push hard-errors on a repo with no commits).",
+    );
   }
   const dirConflict = parseDirConflict(args.dirConflict);
 
@@ -189,12 +213,52 @@ async function runInit(args: {
     (args.json ? console.error : console.log)(`${pc.yellow("●")} ${note}`);
   }
 
+  // Composed once so every summary (dry-run, prompt confirm, plain) shows it.
+  const githubSummaryLine = args.github
+    ? `github     create ${args.public ? "public" : "private"} repo + push initial commit (gh)`
+    : undefined;
+  const planSummary =
+    githubSummaryLine === undefined
+      ? describePlan(plan)
+      : `${describePlan(plan)}\n${githubSummaryLine}`;
+
+  // The ordering fix (issue #44): --github publishes the initial commit that
+  // verify creates, so its preconditions are usage errors BEFORE anything is
+  // generated (and before the dry-run preview returns — both are read-only):
+  // 1. the target must not already be a git repository — verify only inits
+  //    and commits repos it creates, so the generated workspace would sit as
+  //    uncommitted working-tree changes while `gh repo create --push` pushed
+  //    the OLD history and reported success (and auto-committing into a
+  //    user's pre-existing repo would sweep up state that isn't groot's);
+  // 2. a git identity must exist for fresh targets, resolved from a repo-free
+  //    directory — exactly the system+global view the new `git init` gets; a
+  //    caller repo's LOCAL identity does not carry over.
+  if (args.github) {
+    if (existsSync(join(targetDir, ".git"))) {
+      throw new GrootError(
+        "--github can't publish into a pre-existing git repository.",
+        EXIT.USAGE,
+        `Plant without --github, commit the workspace yourself, then run: ${ghCreateCommand(
+          plan.name,
+          args.public ? "public" : "private",
+        )}`,
+      );
+    }
+    if (!(await gitIdentityPresent(tmpdir()))) {
+      throw new GrootError(
+        "--github needs a git identity for the initial commit it pushes.",
+        EXIT.USAGE,
+        'Set one first: git config --global user.name "Your Name" && git config --global user.email "you@example.com"',
+      );
+    }
+  }
+
   if (args.dryRun) {
     if (args.json) {
       console.log(JSON.stringify(planToManifest(plan), null, 2));
     } else {
       console.log();
-      console.log(describePlan(plan));
+      console.log(planSummary);
       console.log();
       console.log(`${pc.yellow("●")} dry run — nothing was written.`);
     }
@@ -202,7 +266,7 @@ async function runInit(args: {
   }
 
   if (wantsPrompts) {
-    p.note(describePlan(plan), "Your plan");
+    p.note(planSummary, "Your plan");
     const confirmed = await p.confirm({ message: "Plant it?" });
     if (p.isCancel(confirmed) || !confirmed) {
       p.cancel("Cancelled — nothing was written.");
@@ -211,7 +275,7 @@ async function runInit(args: {
     p.outro("Planting…");
   } else {
     console.log();
-    console.log(describePlan(plan));
+    console.log(planSummary);
     console.log();
   }
 
@@ -223,19 +287,41 @@ async function runInit(args: {
   await stitch(plan, { onStep: step });
   const verifyNotes = await verify(plan, { verbose: args.verbose, onStep: step });
 
-  printNextSteps(plan, verifyNotes);
+  // After the initial commit: detect gh → auth → create + push. Degrades to
+  // printed fallback steps, never a failure — the workspace itself is valid.
+  let github: GitHubPublishResult | undefined;
+  if (args.github) {
+    step("Publishing to GitHub");
+    github = await publishToGitHub({
+      name: plan.name,
+      targetDir: plan.targetDir,
+      visibility: args.public ? "public" : "private",
+    });
+  }
+
+  printNextSteps(plan, verifyNotes, github);
 }
 
-function printNextSteps(plan: Plan, verifyNotes: string[]): void {
+function printNextSteps(plan: Plan, verifyNotes: string[], github?: GitHubPublishResult): void {
   const rel = relative(process.cwd(), plan.targetDir) || ".";
   console.log();
   console.log(pc.green(pc.bold("🌳 I am groot — your workspace is planted.")));
   const gitNote = verifyNotes.find((note) => note.includes("commit skipped"));
   if (gitNote !== undefined) console.log(`${pc.yellow("●")} ${gitNote}`);
+  if (github !== undefined) {
+    console.log(
+      github.status === "created"
+        ? `${pc.green("✓")} GitHub: ${github.url ?? github.note}`
+        : `${pc.yellow("●")} ${github.note}`,
+    );
+  }
   console.log();
   console.log("Next steps:");
   const steps: string[] = [`cd ${rel}`];
   if (!plan.options.install) steps.push("bun install");
+  if (github !== undefined && github.status !== "created") {
+    steps.push(...github.fallback);
+  }
   if (plan.scaffolds.some((scaffold) => scaffold.framework === "convex")) {
     steps.push(
       "bun run --cwd packages/backend setup   # Convex login + dev deployment (interactive)",
@@ -301,6 +387,16 @@ export const init = defineCommand({
     },
     install: { type: "boolean", default: true, negativeDescription: "Skip root bun install" },
     git: { type: "boolean", default: true, negativeDescription: "Skip git init + initial commit" },
+    github: {
+      type: "boolean",
+      default: false,
+      description: "After the initial commit: create + push a GitHub repo via gh (private)",
+    },
+    public: {
+      type: "boolean",
+      default: false,
+      description: "With --github: make the created repository public",
+    },
     "dir-conflict": {
       type: "string",
       default: "error",
@@ -333,6 +429,8 @@ export const init = defineCommand({
         json: args.json,
         install: args.install,
         git: args.git,
+        github: args.github,
+        public: args.public,
         dirConflict: args["dir-conflict"],
         keepFailed: args["keep-failed"],
         verbose: args.verbose,

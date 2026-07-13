@@ -6,20 +6,30 @@
  * form to init. Dry runs only: no generator ever executes here.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MANIFEST_SCHEMA_URL, MANIFEST_VERSION } from "../engine/types.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
 
+/** Run git in a directory, throwing on failure (test setup only). */
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "pipe" });
+  if ((await proc.exited) !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${await new Response(proc.stderr).text()}`);
+  }
+}
+
 /** Run the CLI from source with piped (non-TTY) stdio; capture everything. */
 async function runCli(
   cwd: string,
   args: string[],
+  env?: Record<string, string | undefined>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn([process.execPath, CLI_ENTRY, ...args], {
     cwd,
+    env: env === undefined ? process.env : { ...process.env, ...env },
     stdout: "pipe",
     stderr: "pipe",
     stdin: new TextEncoder().encode(""),
@@ -37,6 +47,130 @@ async function scratch(): Promise<string> {
 }
 
 describe("groot init (process-level, non-TTY)", () => {
+  test("--public without --github → exit 2 with the pairing hint", async () => {
+    const cwd = await scratch();
+    const { stderr, exitCode } = await runCli(cwd, [
+      "init",
+      "app",
+      "--yes",
+      "--public",
+      "--dry-run",
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--public only applies together with --github");
+  });
+
+  test("--github with --no-git → exit 2 (the push needs the initial commit)", async () => {
+    const cwd = await scratch();
+    const { stderr, exitCode } = await runCli(cwd, [
+      "init",
+      "app",
+      "--yes",
+      "--github",
+      "--no-git",
+      "--dry-run",
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--github needs the initial commit");
+  });
+
+  test("--github shows in the dry-run plan summary (private by default, public opt-in)", async () => {
+    const cwd = await scratch();
+    // The identity precondition runs even on dry runs (truthful preview) —
+    // provide one via an isolated global config so runners without git
+    // identity behave like configured machines.
+    const gitConfig = join(cwd, "gitconfig");
+    await writeFile(gitConfig, "[user]\n\tname = T\n\temail = t@example.com\n");
+    const env = { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" };
+    const priv = await runCli(cwd, ["init", "app", "--yes", "--github", "--dry-run"], env);
+    expect(priv.exitCode).toBe(0);
+    expect(priv.stdout).toContain("github     create private repo + push");
+    const pub = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--public", "--dry-run"],
+      env,
+    );
+    expect(pub.stdout).toContain("github     create public repo + push");
+  });
+
+  test("--github without a git identity → exit 2 up front, even on a dry run", async () => {
+    const cwd = await scratch();
+    const home = join(cwd, "empty-home");
+    await mkdir(home, { recursive: true });
+    const { stderr, exitCode } = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--dry-run"],
+      {
+        HOME: home,
+        GIT_CONFIG_GLOBAL: join(home, "missing-gitconfig"),
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    );
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--github needs a git identity");
+  });
+
+  test("--github ignores a caller repo's LOCAL identity — fresh init won't inherit it (Greptile P1)", async () => {
+    // cwd is inside a repo whose identity lives only in .git/config; the new
+    // workspace's fresh `git init` never sees it, so the precondition must
+    // refuse rather than pass here and degrade after generation.
+    const cwd = await scratch();
+    await runGit(cwd, ["init", "-q"]);
+    await runGit(cwd, ["config", "user.name", "Local Only"]);
+    await runGit(cwd, ["config", "user.email", "local@example.com"]);
+    const home = join(cwd, "empty-home");
+    await mkdir(home, { recursive: true });
+    const { stderr, exitCode } = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--dry-run"],
+      {
+        HOME: home,
+        GIT_CONFIG_GLOBAL: join(home, "missing-gitconfig"),
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    );
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--github needs a git identity");
+  });
+
+  test("--github refuses any pre-existing repo target — stale history must not ship (Greptile P1)", async () => {
+    // verify only inits + commits repos it creates: with a pre-existing .git,
+    // the generated files would sit uncommitted while gh pushed the OLD
+    // history and reported success. Refused up front, commits or no commits.
+    const cwd = await scratch();
+    const gitConfig = join(cwd, "gitconfig");
+    await writeFile(gitConfig, "[user]\n\tname = T\n\temail = t@example.com\n");
+    const env = { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" };
+    const flags = ["--yes", "--github", "--dir-conflict", "merge", "--dry-run"];
+
+    const bare = join(cwd, "bare-repo");
+    await mkdir(bare, { recursive: true });
+    await runGit(bare, ["init", "-q"]);
+    const noCommits = await runCli(cwd, ["init", "bare-repo", ...flags], env);
+    expect(noCommits.exitCode).toBe(2);
+    expect(noCommits.stderr).toContain("pre-existing git repository");
+
+    const committed = join(cwd, "committed-repo");
+    await mkdir(committed, { recursive: true });
+    await runGit(committed, ["init", "-q"]);
+    await runGit(committed, [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "existing history",
+    ]);
+    const withCommits = await runCli(cwd, ["init", "committed-repo", ...flags], env);
+    expect(withCommits.exitCode).toBe(2);
+    expect(withCommits.stderr).toContain("pre-existing git repository");
+    // The manual path is spelled out.
+    expect(withCommits.stderr).toContain("gh repo create committed-repo --private");
+  });
+
   test("prompts are never attempted without a TTY — exits 2 with the flag hint", async () => {
     const cwd = await scratch();
     const { stderr, exitCode } = await runCli(cwd, ["init", "my-app"]);
