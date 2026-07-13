@@ -52,6 +52,7 @@
               "nuxt",
               "vite",
               "expo",
+              "react-native",
               "tauri",
               "electron",
               "elysia",

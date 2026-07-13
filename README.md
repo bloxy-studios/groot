@@ -26,7 +26,7 @@ groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) mo
 | Slot        | Options at v1.1                          | Where it lands        |
 | ----------- | ---------------------------------------- | --------------------- |
 | 🌐 Web      | **Next.js** · SvelteKit · TanStack Start · Astro · React Router · Nuxt · Vite | `apps/web` |
-| 📱 Mobile   | **Expo**                                 | `apps/mobile`         |
+| 📱 Mobile   | **Expo** · React Native (bare)           | `apps/mobile`         |
 | 🖥️ Desktop | **Tauri** · Electron                     | `apps/desktop`        |
 | ⚡ API      | **Elysia** · Hono · Fastify              | `apps/api`            |
 | 🗄️ Backend | **Convex** (default)                     | `packages/backend`    |

@@ -15,6 +15,7 @@ import { honoAdapter } from "./hono.ts";
 import { ADAPTERS } from "./index.ts";
 import { nextAdapter } from "./next.ts";
 import { nuxtAdapter } from "./nuxt.ts";
+import { METRO_MONOREPO_MARKER, reactNativeAdapter } from "./react-native.ts";
 import { reactRouterAdapter } from "./react-router.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
@@ -50,6 +51,7 @@ describe("registry", () => {
       "hono",
       "next",
       "nuxt",
+      "react-native",
       "react-router",
       "sveltekit",
       "tanstack-start",
@@ -419,6 +421,70 @@ describe("expo (scaffold-flows.md#4)", () => {
     expect(cmd?.argv).toContain("default@sdk-57");
     expect(cmd?.argv).toContain("--no-install");
     expect(cmd?.argv).toContain("--yes");
+  });
+});
+
+describe("react-native (bare — scaffold-flows.md#16)", () => {
+  const ctx = ctxFor("react-native", {
+    slot: "mobile",
+    framework: "react-native",
+    path: "apps/mobile",
+    generator: "@react-native-community/cli@20",
+    port: 8081,
+  });
+
+  test("runs the official init staged, with every side effect flagged off", () => {
+    const cmd = reactNativeAdapter.command(ctx);
+    expect(cmd?.argv).toEqual([
+      "bunx",
+      "@react-native-community/cli@20",
+      "init",
+      "mobile", // positional = directory + native project name after placeholder replacement
+      "--pm",
+      "bun",
+      "--skip-install",
+      "--install-pods",
+      "false",
+      "--skip-git-init",
+      "--replace-directory",
+      "false",
+    ]);
+    // init's registry lookup shells `npm config get registry`, which
+    // hard-fails on the workspace's bun devEngines declaration in-tree
+    // (EBADDEVENGINES, verified empirically) — staging gives it a neutral
+    // ancestry AND lets the user's real registry config apply.
+    expect(reactNativeAdapter.stagedGeneration).toBe(true);
+    // Fully non-interactive with these flags on a fresh target (verified in
+    // the published 20.2.0 bundle) — no prompts, so no stdin script.
+    expect(cmd?.stdin).toBeUndefined();
+    // Metro wiring comes from the stitch stage, not generate-time overlays.
+    expect(reactNativeAdapter.writeFiles).toBeUndefined();
+  });
+
+  test("doctor warns when metro.config.js lost the workspace wiring", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-rn-doctor-"));
+    const scaffold = ctx.scaffold;
+    await mkdir(join(root, scaffold.path), { recursive: true });
+
+    // Missing config → fail.
+    let checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.[0]?.status).toBe("fail");
+
+    // Template-fresh config without wiring → warn (stitch not applied).
+    await writeFile(
+      join(root, scaffold.path, "metro.config.js"),
+      "const config = {};\nmodule.exports = config;\n",
+    );
+    checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.[0]?.status).toBe("warn");
+
+    // Stitched config → pass.
+    await writeFile(
+      join(root, scaffold.path, "metro.config.js"),
+      `// ${METRO_MONOREPO_MARKER}\nconst config = { watchFolders: [] };\nmodule.exports = config;\n`,
+    );
+    checks = await reactNativeAdapter.doctor?.({ workspaceRoot: root, scaffold });
+    expect(checks?.[0]?.status).toBe("pass");
   });
 });
 

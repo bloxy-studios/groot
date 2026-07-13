@@ -268,7 +268,7 @@ export const init = defineCommand({
       description:
         "Web app: next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | none",
     },
-    mobile: { type: "string", description: "Mobile app: expo | none" },
+    mobile: { type: "string", description: "Mobile app: expo | react-native | none" },
     desktop: { type: "string", description: "Desktop app: tauri | electron | none" },
     api: { type: "string", description: "API: elysia | hono | fastify | none" },
     backend: { type: "string", description: "Backend: convex | none" },

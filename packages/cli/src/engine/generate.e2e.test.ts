@@ -252,7 +252,7 @@ describe.skipIf(!e2e)("full pipeline (real generators — sveltekit + hono + add
 });
 
 describe.skipIf(!e2e)(
-  "scenario 3: grow an existing workspace (add elysia → convex → react-router → tauri)",
+  "scenario 3: grow an existing workspace (add elysia → convex → react-router → tauri → react-native)",
   () => {
     test(
       "adds run the pipeline for just the new scaffold and doctor stays healthy",
@@ -323,18 +323,45 @@ describe.skipIf(!e2e)(
         );
         expect(desktopPkg.name).toBe("desktop"); // stitchAppNames covers new slots
 
+        // Mobile slot: the REAL @react-native-community/cli init, staged
+        // (its registry lookup shells npm, which would trip the workspace's
+        // bun devEngines guard in-tree — EBADDEVENGINES).
+        await addOnce("react-native");
+        expect(existsSync(join(root, "apps/mobile/App.tsx"))).toBe(true);
+        expect(existsSync(join(root, "apps/mobile/android"))).toBe(true);
+        expect(existsSync(join(root, "apps/mobile/ios"))).toBe(true);
+        // _gitignore renamed on copy (UNDERSCORED_DOTFILES in editTemplate).
+        expect(existsSync(join(root, "apps/mobile/.gitignore"))).toBe(true);
+        expect(existsSync(join(root, "apps/mobile/.git"))).toBe(false);
+        // HelloWorld placeholders became the bare name — no rename stitch needed.
+        const mobilePkg = JSON.parse(
+          await readFile(join(root, "apps/mobile/package.json"), "utf8"),
+        );
+        expect(mobilePkg.name).toBe("mobile");
+        // Stitch wired metro for the monorepo and linked the Convex backend.
+        const metro = await readFile(join(root, "apps/mobile/metro.config.js"), "utf8");
+        expect(metro).toContain("groot: monorepo wiring");
+        expect(metro).toContain("watchFolders: [workspaceRoot]");
+        expect(mobilePkg.dependencies["@repo/backend"]).toBe("workspace:*");
+        // Bare RN gets the plain CONVEX_URL= placeholder (no public-env
+        // mechanism) — exact-line append, next's line still there once.
+        const envExample = await readFile(join(root, ".env.example"), "utf8");
+        expect(envExample).toMatch(/^CONVEX_URL=/m);
+        expect(envExample.match(/^NEXT_PUBLIC_CONVEX_URL=/gm)).toHaveLength(1);
+
         // No add left a nested repo inside its scaffold (engine scrub).
         expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
         expect(existsSync(join(root, "packages/backend/.git"))).toBe(false);
         expect(existsSync(join(root, "apps/desktop/.git"))).toBe(false);
 
-        // groot.json grew to five scaffolds and kept its provenance.
+        // groot.json grew to six scaffolds and kept its provenance.
         const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-        expect(manifest.scaffolds).toHaveLength(5);
+        expect(manifest.scaffolds).toHaveLength(6);
         expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
           "api",
           "backend",
           "desktop",
+          "mobile",
           "web",
           "web",
         ]);
