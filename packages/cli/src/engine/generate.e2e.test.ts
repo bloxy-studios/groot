@@ -377,103 +377,148 @@ describe.skipIf(!e2e)(
   },
 );
 
-describe.skipIf(!e2e)("scenario 4: nuxt web + add vite + add fastify (real generators)", () => {
-  test(
-    "plants a nuxt workspace, then grows a vite SPA and a fastify api",
-    async () => {
-      const plan = await planFor(
-        { web: "nuxt", mobile: "none", desktop: "none", api: "none", backend: "none" },
-        "vueshop",
-      );
-      await generate(plan, { verbose: false });
-      await stitch(plan);
-      await verify(plan, { verbose: false });
-      const root = plan.targetDir;
+describe.skipIf(!e2e)(
+  "scenario 4: nuxt web + add vite + add fastify + add supabase (real generators)",
+  () => {
+    test(
+      "plants a nuxt workspace, then grows a vite SPA, a fastify api, and a supabase backend",
+      async () => {
+        const plan = await planFor(
+          { web: "nuxt", mobile: "none", desktop: "none", api: "none", backend: "none" },
+          "vueshop",
+        );
+        await generate(plan, { verbose: false });
+        await stitch(plan);
+        await verify(plan, { verbose: false });
+        const root = plan.targetDir;
 
-      // The REAL create-nuxt grew apps/web (template via the nuxt/starter registry).
-      expect(existsSync(join(root, "apps/web/nuxt.config.ts"))).toBe(true);
-      expect(existsSync(join(root, "apps/web/.git"))).toBe(false);
-      const webPkg = JSON.parse(await readFile(join(root, "apps/web/package.json"), "utf8"));
-      expect(webPkg.name).toBe("web");
-      // nuxt build → .output/ is turbo-cached.
-      const turbo = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
-      expect(turbo.tasks.build.outputs).toContain(".output/**");
+        // The REAL create-nuxt grew apps/web (template via the nuxt/starter registry).
+        expect(existsSync(join(root, "apps/web/nuxt.config.ts"))).toBe(true);
+        expect(existsSync(join(root, "apps/web/.git"))).toBe(false);
+        const webPkg = JSON.parse(await readFile(join(root, "apps/web/package.json"), "utf8"));
+        expect(webPkg.name).toBe("web");
+        // nuxt build → .output/ is turbo-cached.
+        const turbo = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
+        expect(turbo.tasks.build.outputs).toContain(".output/**");
 
-      // The REAL create-vite grows a second web scaffold — nuxt(3000) + vite(5173).
-      const loaded = await loadManifest(root);
-      const resolution = await resolveAddScaffold(
-        loaded.manifest,
-        loaded.workspaceRoot,
-        "vite",
-        "apps/landing",
-      );
-      expect(resolution.warnings).toEqual([]);
-      const addPlan = buildAddPlan(
-        loaded,
-        resolution.scaffold,
-        await readRootPackageName(loaded.workspaceRoot),
-        { install: false, keepFailed: false, verbose: false },
-      );
-      await executeAdd(addPlan, resolution.scaffold, { verbose: false });
+        // The REAL create-vite grows a second web scaffold — nuxt(3000) + vite(5173).
+        const loaded = await loadManifest(root);
+        const resolution = await resolveAddScaffold(
+          loaded.manifest,
+          loaded.workspaceRoot,
+          "vite",
+          "apps/landing",
+        );
+        expect(resolution.warnings).toEqual([]);
+        const addPlan = buildAddPlan(
+          loaded,
+          resolution.scaffold,
+          await readRootPackageName(loaded.workspaceRoot),
+          { install: false, keepFailed: false, verbose: false },
+        );
+        await executeAdd(addPlan, resolution.scaffold, { verbose: false });
 
-      expect(existsSync(join(root, "apps/landing/vite.config.ts"))).toBe(true);
-      // create-vite ships _gitignore renamed on copy — the real file must exist.
-      expect(existsSync(join(root, "apps/landing/.gitignore"))).toBe(true);
-      expect(existsSync(join(root, "apps/landing/.git"))).toBe(false);
-      const landingPkg = JSON.parse(
-        await readFile(join(root, "apps/landing/package.json"), "utf8"),
-      );
-      expect(landingPkg.name).toBe("landing");
+        expect(existsSync(join(root, "apps/landing/vite.config.ts"))).toBe(true);
+        // create-vite ships _gitignore renamed on copy — the real file must exist.
+        expect(existsSync(join(root, "apps/landing/.gitignore"))).toBe(true);
+        expect(existsSync(join(root, "apps/landing/.git"))).toBe(false);
+        const landingPkg = JSON.parse(
+          await readFile(join(root, "apps/landing/package.json"), "utf8"),
+        );
+        expect(landingPkg.name).toBe("landing");
 
-      // The REAL fastify-cli generate grows the api slot — nuxt(3000) +
-      // vite(5173) + fastify(3001), no collisions.
-      const loaded2 = await loadManifest(root);
-      const fastifyRes = await resolveAddScaffold(
-        loaded2.manifest,
-        loaded2.workspaceRoot,
-        "fastify",
-        undefined,
-      );
-      expect(fastifyRes.warnings).toEqual([]);
-      const fastifyPlan = buildAddPlan(
-        loaded2,
-        fastifyRes.scaffold,
-        await readRootPackageName(loaded2.workspaceRoot),
-        { install: false, keepFailed: false, verbose: false },
-      );
-      await executeAdd(fastifyPlan, fastifyRes.scaffold, { verbose: false });
+        // The REAL fastify-cli generate grows the api slot — nuxt(3000) +
+        // vite(5173) + fastify(3001), no collisions.
+        const loaded2 = await loadManifest(root);
+        const fastifyRes = await resolveAddScaffold(
+          loaded2.manifest,
+          loaded2.workspaceRoot,
+          "fastify",
+          undefined,
+        );
+        expect(fastifyRes.warnings).toEqual([]);
+        const fastifyPlan = buildAddPlan(
+          loaded2,
+          fastifyRes.scaffold,
+          await readRootPackageName(loaded2.workspaceRoot),
+          { install: false, keepFailed: false, verbose: false },
+        );
+        await executeAdd(fastifyPlan, fastifyRes.scaffold, { verbose: false });
 
-      // The template structure landed: autoload app plugin, routes, plugins.
-      expect(existsSync(join(root, "apps/api/src/app.ts"))).toBe(true);
-      expect(existsSync(join(root, "apps/api/src/routes/root.ts"))).toBe(true);
-      // fastify-cli ships __gitignore, renamed on copy by generify.
-      expect(existsSync(join(root, "apps/api/.gitignore"))).toBe(true);
-      expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
-      // groot's bun-native server entry overlays the template.
-      const server = await readFile(join(root, "apps/api/src/server.ts"), "utf8");
-      expect(server).toContain("port: 3001 }");
-      // `npm init -y` named the package from the basename; stitch keeps "api".
-      const apiPkg = JSON.parse(await readFile(join(root, "apps/api/package.json"), "utf8"));
-      expect(apiPkg.name).toBe("api");
-      expect(apiPkg.dependencies["fastify-cli"]).toBeDefined();
-      // Stitch swapped the Node-centric template scripts for the bun set.
-      expect(apiPkg.scripts.dev).toBe("bun --watch src/server.ts");
-      expect(JSON.stringify(apiPkg.scripts)).not.toContain("npm run");
-      // Fastify's tsc build lands in dist/, which turbo now caches.
-      const turboFinal = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
-      expect(turboFinal.tasks.build.outputs).toContain("dist/**");
+        // The template structure landed: autoload app plugin, routes, plugins.
+        expect(existsSync(join(root, "apps/api/src/app.ts"))).toBe(true);
+        expect(existsSync(join(root, "apps/api/src/routes/root.ts"))).toBe(true);
+        // fastify-cli ships __gitignore, renamed on copy by generify.
+        expect(existsSync(join(root, "apps/api/.gitignore"))).toBe(true);
+        expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
+        // groot's bun-native server entry overlays the template.
+        const server = await readFile(join(root, "apps/api/src/server.ts"), "utf8");
+        expect(server).toContain("port: 3001 }");
+        // `npm init -y` named the package from the basename; stitch keeps "api".
+        const apiPkg = JSON.parse(await readFile(join(root, "apps/api/package.json"), "utf8"));
+        expect(apiPkg.name).toBe("api");
+        expect(apiPkg.dependencies["fastify-cli"]).toBeDefined();
+        // Stitch swapped the Node-centric template scripts for the bun set.
+        expect(apiPkg.scripts.dev).toBe("bun --watch src/server.ts");
+        expect(JSON.stringify(apiPkg.scripts)).not.toContain("npm run");
+        // Fastify's tsc build lands in dist/, which turbo now caches.
+        const turboFinal = JSON.parse(await readFile(join(root, "turbo.json"), "utf8"));
+        expect(turboFinal.tasks.build.outputs).toContain("dist/**");
 
-      const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-      expect(manifest.scaffolds).toHaveLength(3);
-      expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
-        "api",
-        "web",
-        "web",
-      ]);
-      const checks = await runDoctor(await loadManifest(root));
-      const failures = checks.filter((check) => check.status === "fail");
-      expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);
-    },
-    TIMEOUT_MS,
-  );
-});
+        // Backend slot: groot's package shell + the REAL `supabase init` as a
+        // postCommand (fully non-interactive in 2.x — no prompts, no Docker).
+        const loaded3 = await loadManifest(root);
+        const supabaseRes = await resolveAddScaffold(
+          loaded3.manifest,
+          loaded3.workspaceRoot,
+          "supabase",
+          undefined,
+        );
+        expect(supabaseRes.warnings).toEqual([]);
+        const supabasePlan = buildAddPlan(
+          loaded3,
+          supabaseRes.scaffold,
+          await readRootPackageName(loaded3.workspaceRoot),
+          { install: false, keepFailed: false, verbose: false },
+        );
+        await executeAdd(supabasePlan, supabaseRes.scaffold, { verbose: false });
+
+        // The official init wrote its config inside groot's package shell…
+        const config = await readFile(join(root, "packages/backend/supabase/config.toml"), "utf8");
+        // …and the stitch renamed the cwd-derived project_id to the workspace
+        // name ("distinguish different Supabase projects on the same host").
+        expect(config).toMatch(/^project_id = "vueshop"$/m);
+        expect(config).not.toMatch(/^project_id = "backend"$/m);
+        const backendPkg = JSON.parse(
+          await readFile(join(root, "packages/backend/package.json"), "utf8"),
+        );
+        expect(backendPkg.name).toBe("@repo/backend");
+        expect(backendPkg.devDependencies.supabase).toBeDefined();
+        // The typegen placeholder ships so apps typecheck before Docker exists.
+        expect(existsSync(join(root, "packages/backend/database.types.ts"))).toBe(true);
+        // Cross-wiring landed on the EXISTING frontends: workspace dep + the
+        // per-framework URL/ANON_KEY pairs (exact-line, anchored).
+        const webPkgFinal = JSON.parse(await readFile(join(root, "apps/web/package.json"), "utf8"));
+        expect(webPkgFinal.dependencies["@repo/backend"]).toBe("workspace:*");
+        const envExample = await readFile(join(root, ".env.example"), "utf8");
+        expect(envExample).toMatch(/^NUXT_PUBLIC_SUPABASE_URL=$/m);
+        expect(envExample).toMatch(/^NUXT_PUBLIC_SUPABASE_ANON_KEY=$/m);
+        expect(envExample).toMatch(/^VITE_SUPABASE_URL=$/m);
+        expect(envExample).toMatch(/^VITE_SUPABASE_ANON_KEY=$/m);
+
+        const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
+        expect(manifest.scaffolds).toHaveLength(4);
+        expect(manifest.scaffolds.map((s: { slot: string }) => s.slot).sort()).toEqual([
+          "api",
+          "backend",
+          "web",
+          "web",
+        ]);
+        const checks = await runDoctor(await loadManifest(root));
+        const failures = checks.filter((check) => check.status === "fail");
+        expect(isHealthy(checks), JSON.stringify(failures, null, 2)).toBe(true);
+      },
+      TIMEOUT_MS,
+    );
+  },
+);

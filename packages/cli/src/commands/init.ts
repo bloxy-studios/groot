@@ -241,6 +241,12 @@ function printNextSteps(plan: Plan, verifyNotes: string[]): void {
       "bun run --cwd packages/backend setup   # Convex login + dev deployment (interactive)",
     );
   }
+  const supabase = plan.scaffolds.find((scaffold) => scaffold.framework === "supabase");
+  if (supabase !== undefined) {
+    steps.push(
+      `bun run --cwd ${supabase.path} dev   # supabase start — local stack, needs Docker running`,
+    );
+  }
   const tauri = plan.scaffolds.find((scaffold) => scaffold.framework === "tauri");
   if (tauri !== undefined) {
     steps.push(
@@ -271,7 +277,7 @@ export const init = defineCommand({
     mobile: { type: "string", description: "Mobile app: expo | react-native | none" },
     desktop: { type: "string", description: "Desktop app: tauri | electron | none" },
     api: { type: "string", description: "API: elysia | hono | fastify | none" },
-    backend: { type: "string", description: "Backend: convex | none" },
+    backend: { type: "string", description: "Backend: convex | supabase | none" },
     preset: {
       type: "string",
       description:

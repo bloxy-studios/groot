@@ -23,7 +23,8 @@ export type FrameworkId =
   | "elysia"
   | "hono"
   | "fastify"
-  | "convex";
+  | "convex"
+  | "supabase";
 
 /** The explicit "skip this slot" choice. */
 export const NONE = "none" as const;

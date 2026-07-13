@@ -129,6 +129,17 @@ export const MATRIX: Record<Slot, SlotSpec> = {
       // Convex files are written directly, including vendored _generated stubs
       // (codegen requires a configured deployment — see docs/scaffold-flows.md#7).
       { id: "convex", label: "Convex", path: "packages/backend", port: null, generator: null },
+      // Official `supabase init` runs as a postCommand inside groot's package
+      // shell. No declared port: the local stack is Docker-managed on
+      // config.toml's 54321+ block and never started by groot — the electron
+      // precedent (docs/scaffold-flows.md#17).
+      {
+        id: "supabase",
+        label: "Supabase",
+        path: "packages/backend",
+        port: null,
+        generator: "supabase@2",
+      },
     ],
   },
 };

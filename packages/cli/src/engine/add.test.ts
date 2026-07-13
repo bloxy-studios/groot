@@ -103,6 +103,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
     expect(frameworkChoice("hono")?.slot).toBe("api");
     expect(frameworkChoice("fastify")?.slot).toBe("api");
     expect(frameworkChoice("convex")?.slot).toBe("backend");
+    expect(frameworkChoice("supabase")?.slot).toBe("backend");
     expect(frameworkChoice("angular")).toBeUndefined();
   });
 
@@ -120,6 +121,7 @@ describe("frameworkChoice / allFrameworkIds", () => {
       "nuxt",
       "react-native",
       "react-router",
+      "supabase",
       "sveltekit",
       "tanstack-start",
       "tauri",
@@ -168,7 +170,7 @@ describe("resolveAddScaffold — occupancy matrix", () => {
       'Unknown scaffold "angular"',
     );
     expect(error.hint).toContain(
-      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | react-native | tauri | electron | elysia | hono | fastify | convex",
+      "next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | react-native | tauri | electron | elysia | hono | fastify | convex | supabase",
     );
   });
 

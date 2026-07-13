@@ -29,7 +29,7 @@ groot is a scaffolding CLI that **plants a [Turborepo](https://turborepo.com) mo
 | 📱 Mobile   | **Expo** · React Native (bare)           | `apps/mobile`         |
 | 🖥️ Desktop | **Tauri** · Electron                     | `apps/desktop`        |
 | ⚡ API      | **Elysia** · Hono · Fastify              | `apps/api`            |
-| 🗄️ Backend | **Convex** (default)                     | `packages/backend`    |
+| 🗄️ Backend | **Convex** (default) · Supabase          | `packages/backend`    |
 
 Everything runs on **Bun** — the workspace groot creates uses `bun install`, `bun run`, and Turborepo tasks end to end.
 

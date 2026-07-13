@@ -96,6 +96,11 @@ function printNextSteps(plan: Plan, scaffold: PlannedScaffold): void {
       `bun run --cwd ${scaffold.path} setup   # Convex login + dev deployment (interactive)`,
     );
   }
+  if (scaffold.framework === "supabase") {
+    steps.push(
+      `bun run --cwd ${scaffold.path} dev   # supabase start — local stack, needs Docker running`,
+    );
+  }
   if (scaffold.framework === "tauri") {
     steps.push(
       `bun run --cwd ${scaffold.path} tauri dev   # needs Rust — install via https://rustup.rs`,
@@ -117,7 +122,7 @@ export const add = defineCommand({
       type: "positional",
       required: true,
       description:
-        "Scaffold to grow: next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | react-native | tauri | electron | elysia | hono | fastify | convex",
+        "Scaffold to grow: next | sveltekit | tanstack-start | astro | react-router | nuxt | vite | expo | react-native | tauri | electron | elysia | hono | fastify | convex | supabase",
     },
     path: {
       type: "string",
