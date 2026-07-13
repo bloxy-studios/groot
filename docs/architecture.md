@@ -68,7 +68,7 @@ Stitch operations (each implemented as a pure, unit-tested transform):
 | Port allocation | Deterministic dev ports written into each app (flag or source, per adapter) — see table below |
 | turbo.json | Root tasks (`dev`, `build`, `lint`, `check-types`) with correct `outputs` per framework |
 | Shared TS config | `packages/typescript-config` kept from the trunk. In v0.2 apps keep their generated standalone tsconfigs (they work as-is); rewiring them to shared extends arrives with `groot add`/`doctor` (v0.3), where breakage can be detected and fixed |
-| Env plumbing | `.env.example` entries per scaffold, named for what each framework exposes to the client: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router, Vite), `NUXT_PUBLIC_CONVEX_URL` (Nuxt), `EXPO_PUBLIC_CONVEX_URL` (Expo), `CONVEX_URL` (bare React Native — no public-env mechanism, wired by the user's env lib) |
+| Env plumbing | `.env.example` entries per scaffold, named for what each framework exposes to the client: `NEXT_PUBLIC_CONVEX_URL` (Next), `PUBLIC_CONVEX_URL` (SvelteKit, Astro), `VITE_CONVEX_URL` (TanStack Start, React Router, Vite), `NUXT_PUBLIC_CONVEX_URL` (Nuxt), `EXPO_PUBLIC_CONVEX_URL` (Expo), `CONVEX_URL` (bare React Native — no public-env mechanism, wired by the user's env lib). Supabase backends write the same-prefixed `*SUPABASE_URL` + `*SUPABASE_ANON_KEY` pairs |
 | groot.json | Manifest recording what was scaffolded, by which generator version — the contract for `groot add`/`doctor` |
 
 ### 5. Verify
@@ -95,12 +95,14 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |
 | `apps/desktop` (Electron) | — | electron-vite's renderer dev server is non-strict and self-wiring (it launches Electron with whatever port it resolved); groot declares none |
 | `packages/backend` (Convex) | — | Cloud dev deployment; no local port |
+| `packages/backend` (Supabase) | — | Local stack is Docker-managed on config.toml's 54321+ block, never started by groot — no declared port |
 
 ## Workspace conventions (what groot outputs)
 
 - **Bun end-to-end**: `bun install`, `bun run dev` (→ `turbo run dev`), single `bun.lock`.
 - **`@repo/*` namespace** for shared packages, `workspace:*` protocol for internal deps — matching Turborepo's official examples so upstream docs stay applicable.
 - **Convex consumption**: apps depend on `"@repo/backend": "workspace:*"` and import `@repo/backend/convex/_generated/api` (deep imports; the backend package intentionally has no `exports` map). `convex/_generated` is committed, per Convex's own recommendation.
+- **Supabase consumption**: the same `workspace:*` link, importing `@repo/backend/database.types` (the `supabase gen types` output; groot ships an empty-schema placeholder so everything typechecks before Docker runs). Env pairs per frontend: `<prefix>SUPABASE_URL` + `<prefix>SUPABASE_ANON_KEY`, prefixed exactly like the Convex names above (bare React Native unprefixed).
 - **Expo in workspaces**: Expo ≥ SDK 52 auto-configures Metro for monorepos — groot does *not* write legacy `metro.config.js` workspace hacks.
 
 ## Adapter contract

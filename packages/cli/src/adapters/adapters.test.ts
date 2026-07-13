@@ -17,6 +17,7 @@ import { nextAdapter } from "./next.ts";
 import { nuxtAdapter } from "./nuxt.ts";
 import { METRO_MONOREPO_MARKER, reactNativeAdapter, reactNativeNameError } from "./react-native.ts";
 import { reactRouterAdapter } from "./react-router.ts";
+import { supabaseAdapter } from "./supabase.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { identifierSegment, tauriAdapter } from "./tauri.ts";
@@ -53,6 +54,7 @@ describe("registry", () => {
       "nuxt",
       "react-native",
       "react-router",
+      "supabase",
       "sveltekit",
       "tanstack-start",
       "tauri",
@@ -887,5 +889,84 @@ describe("convex (direct-write + offline codegen — scaffold-flows.md#7)", () =
     for (const file of files) {
       expect(file.contents).not.toMatch(/\b(npx|npm |yarn |pnpm )/);
     }
+  });
+});
+
+describe("supabase (package shell + official init — scaffold-flows.md#17)", () => {
+  const ctx = ctxFor("supabase", {
+    slot: "backend",
+    framework: "supabase",
+    path: "packages/backend",
+    generator: "supabase@2",
+    port: null,
+  });
+
+  test("writes the package shell, then runs init as a postCommand inside it", () => {
+    // No generate-stage command: the shell must exist first, because
+    // `supabase init` has no directory argument — it writes ./supabase in cwd.
+    expect(supabaseAdapter.command(ctx)).toBeNull();
+    const posts = supabaseAdapter.postCommands?.(ctx) ?? [];
+    expect(posts.map((p) => p.argv)).toEqual([["bunx", "supabase@2", "init"]]);
+    expect(posts[0]?.cwd).toBe("/work/demo/packages/backend");
+    // Non-interactive by default in 2.x — the IDE prompts moved behind an
+    // opt-in --interactive flag that also requires a TTY (verified in
+    // cmd/init.go AND by running the real 2.109.1 binary non-TTY).
+    expect(posts[0]?.stdin).toBeUndefined();
+    // The npm wrapper has NO postinstall (platform binaries ship as
+    // optionalDependencies), so no trustedDependencies grant is involved.
+    expect(supabaseAdapter.stagedGeneration).toBeUndefined();
+  });
+
+  test("package shell: @repo name, bun-native scripts, CLI pinned as a devDependency", () => {
+    const files = supabaseAdapter.writeFiles?.(ctx) ?? [];
+    expect(files.map((f) => f.path).sort()).toEqual([
+      "packages/backend/.env.example",
+      "packages/backend/README.md",
+      "packages/backend/database.types.ts",
+      "packages/backend/package.json",
+      "packages/backend/tsconfig.json",
+    ]);
+    const pkg = JSON.parse(files.find((f) => f.path.endsWith("package.json"))?.contents ?? "{}");
+    expect(pkg.name).toBe("@repo/backend");
+    expect(pkg.scripts.dev).toBe("supabase start");
+    expect(pkg.scripts.typegen).toContain("gen types typescript --local");
+    expect(pkg.devDependencies.supabase).toBeDefined();
+  });
+
+  test("ships a typegen-shaped Database placeholder so apps typecheck pre-Docker", () => {
+    const files = supabaseAdapter.writeFiles?.(ctx) ?? [];
+    const types = files.find((f) => f.path.endsWith("database.types.ts"))?.contents ?? "";
+    expect(types).toContain("export type Database =");
+    expect(types).toContain("export type Json =");
+    const readme = files.find((f) => f.path.endsWith("README.md"))?.contents ?? "";
+    expect(readme).toContain("@repo/backend/database.types");
+    expect(readme).toContain("supabase start");
+    // No secrets vendored: the local anon key is printed by `supabase start`,
+    // never baked into scaffolds.
+    const env = files.find((f) => f.path.endsWith(".env.example"))?.contents ?? "";
+    expect(env).toMatch(/^SUPABASE_ANON_KEY=$/m);
+  });
+
+  test("every written file carries bun-first guidance (no npm/npx/yarn/pnpm)", () => {
+    const files = supabaseAdapter.writeFiles?.(ctx) ?? [];
+    for (const file of files) {
+      expect(file.contents).not.toMatch(/\b(npx|npm |yarn |pnpm )/);
+    }
+  });
+
+  test("doctor: config fail / types warn ladder", async () => {
+    const root = await mkdtemp(join(tmpdir(), "groot-supa-doctor-"));
+    const scaffold = ctx.scaffold;
+    await mkdir(join(root, scaffold.path), { recursive: true });
+
+    // Nothing on disk → config fail + types warn.
+    let checks = (await supabaseAdapter.doctor?.({ workspaceRoot: root, scaffold })) ?? [];
+    expect(checks.map((c) => c.status)).toEqual(["fail", "warn"]);
+
+    await mkdir(join(root, scaffold.path, "supabase"), { recursive: true });
+    await writeFile(join(root, scaffold.path, "supabase", "config.toml"), 'project_id = "demo"\n');
+    await writeFile(join(root, scaffold.path, "database.types.ts"), "export type Database = {};\n");
+    checks = (await supabaseAdapter.doctor?.({ workspaceRoot: root, scaffold })) ?? [];
+    expect(checks.map((c) => c.status)).toEqual(["pass", "pass"]);
   });
 });

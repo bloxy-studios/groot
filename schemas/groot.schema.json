@@ -58,7 +58,8 @@
               "elysia",
               "hono",
               "fastify",
-              "convex"
+              "convex",
+              "supabase"
             ]
           },
           "path": {

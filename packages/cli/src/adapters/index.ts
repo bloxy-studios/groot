@@ -15,6 +15,7 @@ import { nextAdapter } from "./next.ts";
 import { nuxtAdapter } from "./nuxt.ts";
 import { reactNativeAdapter } from "./react-native.ts";
 import { reactRouterAdapter } from "./react-router.ts";
+import { supabaseAdapter } from "./supabase.ts";
 import { sveltekitAdapter } from "./sveltekit.ts";
 import { tanstackStartAdapter } from "./tanstack-start.ts";
 import { tauriAdapter } from "./tauri.ts";
@@ -36,4 +37,5 @@ export const ADAPTERS: Record<FrameworkId, ScaffoldAdapter> = {
   hono: honoAdapter,
   fastify: fastifyAdapter,
   convex: convexAdapter,
+  supabase: supabaseAdapter,
 };

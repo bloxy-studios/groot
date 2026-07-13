@@ -10,7 +10,7 @@ import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { EXIT, GrootError } from "./errors.ts";
 import { planToManifest } from "./plan.ts";
-import type { FrameworkId, Plan } from "./types.ts";
+import type { FrameworkId, Plan, PlannedScaffold } from "./types.ts";
 
 /** Lockfiles a generator may have left inside its scaffold directory. */
 const NESTED_LOCKFILES = [
@@ -224,6 +224,40 @@ const config = {
 }
 
 /**
+ * `supabase init` derives config.toml's project_id from its cwd's basename —
+ * "backend" for every groot workspace, but the field exists to "distinguish
+ * different Supabase projects on the same host" (their words: Docker
+ * containers are named after it), so two groot workspaces would collide.
+ * Rewrite it to the workspace name. Triple-state like the other template
+ * patches: already-stitched → silent, unexpected shape → note, never a
+ * clobber. Anchored on the exact default line — the substring rule.
+ */
+export async function stitchSupabaseProjectId(plan: Plan): Promise<string[]> {
+  const notes: string[] = [];
+  for (const scaffold of plan.scaffolds) {
+    if (scaffold.framework !== "supabase") continue;
+    const path = join(plan.targetDir, scaffold.path, "supabase/config.toml");
+    if (!existsSync(path)) continue;
+    // Docker-safe subset of the workspace name (project_id names containers).
+    const projectId = plan.name.replace(/[^A-Za-z0-9_-]/g, "-");
+    const source = await readFile(path, "utf8");
+    const stitched = new RegExp(`^project_id = "${projectId}"$`, "m");
+    if (stitched.test(source)) continue; // already stitched
+    const defaultLine = new RegExp(`^project_id = "${basename(scaffold.path)}"$`, "m");
+    if (!defaultLine.test(source)) {
+      // Upstream default changed shape — or the user renamed it. Leave it.
+      notes.push(
+        `${scaffold.path}/supabase/config.toml: default project_id not found; rename skipped`,
+      );
+      continue;
+    }
+    await writeFile(path, source.replace(defaultLine, `project_id = "${projectId}"`), "utf8");
+    notes.push(`${scaffold.path}/supabase/config.toml → project_id "${projectId}"`);
+  }
+  return notes;
+}
+
+/**
  * The client-exposed env var each web framework actually reads — Next.js only
  * exposes NEXT_PUBLIC_*, SvelteKit's $env/static/public requires PUBLIC_*, and
  * Vite-based frameworks (TanStack Start) expose VITE_*. Matches each
@@ -252,8 +286,56 @@ const CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK: Partial<Record<FrameworkId, string>> =
 };
 
 /**
- * Wire frontends to the Convex backend: workspace dependency + env placeholders
- * (docs/architecture.md — consumption via deep imports of convex/_generated).
+ * Supabase clients need TWO values (URL + anon key) and every quickstart
+ * prefixes both with the same client-exposure mechanism — so this maps
+ * framework → prefix rather than full lines. Same sources as the Convex
+ * naming above (Next exposes NEXT_PUBLIC_*, SvelteKit/Astro PUBLIC_*,
+ * Vite-based frameworks VITE_*, Nuxt runtimeConfig.public via NUXT_PUBLIC_*,
+ * Expo EXPO_PUBLIC_*; bare React Native has no public-env mechanism → no
+ * prefix, like its CONVEX_URL= line).
+ */
+const SUPABASE_ENV_PREFIX_BY_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
+  next: "NEXT_PUBLIC_",
+  sveltekit: "PUBLIC_",
+  "tanstack-start": "VITE_",
+  astro: "PUBLIC_",
+  "react-router": "VITE_",
+  nuxt: "NUXT_PUBLIC_",
+  vite: "VITE_",
+  expo: "EXPO_PUBLIC_",
+  "react-native": "",
+};
+
+/** The `.env.example` lines a frontend needs for the workspace's backend. */
+export function backendEnvLines(
+  backendFramework: FrameworkId,
+  scaffold: Pick<PlannedScaffold, "slot" | "framework">,
+): string[] {
+  if (backendFramework === "supabase") {
+    const prefix =
+      SUPABASE_ENV_PREFIX_BY_FRAMEWORK[scaffold.framework] ??
+      (scaffold.slot === "web" ? "VITE_" : "EXPO_PUBLIC_");
+    return [`${prefix}SUPABASE_URL=`, `${prefix}SUPABASE_ANON_KEY=`];
+  }
+  return [
+    scaffold.slot === "web"
+      ? (CONVEX_URL_ENV_BY_WEB_FRAMEWORK[scaffold.framework] ?? "VITE_CONVEX_URL=")
+      : (CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK[scaffold.framework] ?? "EXPO_PUBLIC_CONVEX_URL="),
+  ];
+}
+
+/** The one-line provenance header written when `.env.example` is first created. */
+const ENV_EXAMPLE_HEADER_BY_BACKEND: Partial<Record<FrameworkId, string>> = {
+  convex: "# Convex deployment URL — written to packages/backend/.env.local by `bun run setup`.\n",
+  supabase:
+    "# Supabase API URL + anon key — `bun run dev` in the backend package (supabase start) prints the local values.\n",
+};
+
+/**
+ * Wire frontends to the workspace backend: workspace dependency + env
+ * placeholders named for what each backend's clients read (docs/architecture.md
+ * — Convex is consumed via deep imports of convex/_generated, Supabase via the
+ * generated Database types).
  */
 export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
   const backend = plan.scaffolds.find((s) => s.slot === "backend");
@@ -274,17 +356,14 @@ export async function stitchBackendLinks(plan: Plan): Promise<string[]> {
       await writeJson(path, pkg);
       notes.push(`${scaffold.path} → depends on ${backendName} (workspace:*)`);
     }
-    envLines.push(
-      scaffold.slot === "web"
-        ? (CONVEX_URL_ENV_BY_WEB_FRAMEWORK[scaffold.framework] ?? "VITE_CONVEX_URL=")
-        : (CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK[scaffold.framework] ?? "EXPO_PUBLIC_CONVEX_URL="),
-    );
+    envLines.push(...backendEnvLines(backend.framework, scaffold));
   }
 
   if (envLines.length > 0) {
     const envPath = join(plan.targetDir, ".env.example");
     const header =
-      "# Convex deployment URL — written to packages/backend/.env.local by `bun run setup`.\n";
+      ENV_EXAMPLE_HEADER_BY_BACKEND[backend.framework] ??
+      "# Backend connection placeholders written by groot.\n";
     const existing = existsSync(envPath) ? await readFile(envPath, "utf8") : "";
     // Exact-line membership: a substring test would let NEXT_PUBLIC_CONVEX_URL=
     // swallow SvelteKit's PUBLIC_CONVEX_URL= in mixed-web workspaces. The Set
@@ -414,6 +493,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchHonoPort(plan));
   push(await stitchFastifyScripts(plan));
   push(await stitchMetroMonorepo(plan));
+  push(await stitchSupabaseProjectId(plan));
   push(await stitchBackendLinks(plan));
   push(await stitchTurboOutputs(plan));
   push(await stitchRootIdentity(plan));

@@ -135,6 +135,31 @@ async function fixture(selections: Record<Slot, string>): Promise<{ plan: Plan; 
           "",
         ].join("\n"),
       );
+    } else if (scaffold.framework === "supabase") {
+      // Post-generate shape: groot's package shell + the real init's output
+      // (config.toml project_id defaults to the cwd basename — verified by
+      // running the 2.109.1 binary).
+      await write(
+        `${scaffold.path}/package.json`,
+        JSON.stringify(
+          { name: "@repo/backend", private: true, devDependencies: { supabase: "^2.109.1" } },
+          null,
+          2,
+        ),
+      );
+      await write(
+        `${scaffold.path}/supabase/config.toml`,
+        [
+          "# A string used to distinguish different Supabase projects on the same host. Defaults to the",
+          "# working directory name when running `supabase init`.",
+          'project_id = "backend"',
+          "",
+          "[api]",
+          "enabled = true",
+          "port = 54321",
+          "",
+        ].join("\n"),
+      );
     } else if (scaffold.framework === "convex") {
       await write(
         `${scaffold.path}/package.json`,
@@ -356,6 +381,73 @@ describe("stitchMetroMonorepo (bare RN workspaces — scaffold-flows.md#16)", ()
     expect(notes.join("\n")).toContain("monorepo wiring skipped");
     const metro = await readFile(join(root, "apps/mobile/metro.config.js"), "utf8");
     expect(metro).toContain("unstable_enableSymlinks"); // untouched
+  });
+});
+
+describe("stitchSupabaseProjectId (host uniqueness — scaffold-flows.md#17)", () => {
+  const selections: Record<Slot, string> = {
+    web: "none",
+    mobile: "none",
+    desktop: "none",
+    api: "none",
+    backend: "supabase",
+  };
+
+  test("renames the cwd-derived default to the workspace name, idempotently", async () => {
+    const { plan, root } = await fixture(selections);
+    const notes = await stitch(plan);
+    expect(notes.join("\n")).toContain('project_id "demo"');
+
+    const config = await readFile(join(root, "packages/backend/supabase/config.toml"), "utf8");
+    expect(config).toMatch(/^project_id = "demo"$/m);
+    expect(config).not.toMatch(/^project_id = "backend"$/m);
+    // The rest of the file is untouched.
+    expect(config).toContain("port = 54321");
+
+    const before = config;
+    const secondNotes = await stitch(plan);
+    expect(await readFile(join(root, "packages/backend/supabase/config.toml"), "utf8")).toBe(
+      before,
+    );
+    expect(secondNotes.join("\n")).not.toContain("project_id");
+  });
+
+  test("degrades gracefully when the user renamed project_id themselves", async () => {
+    const { plan, root } = await fixture(selections);
+    const path = join(root, "packages/backend/supabase/config.toml");
+    await writeFile(path, 'project_id = "my-custom-name"\n', "utf8");
+    const notes = await stitch(plan);
+    expect(notes.join("\n")).toContain("rename skipped");
+    expect(await readFile(path, "utf8")).toContain('project_id = "my-custom-name"');
+  });
+});
+
+describe("stitchBackendLinks — supabase env naming (scaffold-flows.md#17)", () => {
+  test("each frontend gets prefixed URL + ANON_KEY pairs; bare RN gets the plain pair", async () => {
+    const { plan, root } = await fixture({
+      web: "next",
+      mobile: "react-native",
+      desktop: "none",
+      api: "none",
+      backend: "supabase",
+    });
+    await stitch(plan);
+    const env = await readFile(join(root, ".env.example"), "utf8");
+    // Two lines per frontend — and the plain SUPABASE_URL= must not be
+    // swallowed by NEXT_PUBLIC_SUPABASE_URL= (exact-line membership).
+    expect(env).toMatch(/^NEXT_PUBLIC_SUPABASE_URL=$/m);
+    expect(env).toMatch(/^NEXT_PUBLIC_SUPABASE_ANON_KEY=$/m);
+    expect(env).toMatch(/^SUPABASE_URL=$/m);
+    expect(env).toMatch(/^SUPABASE_ANON_KEY=$/m);
+    expect(env).not.toContain("CONVEX_URL");
+    // Workspace dep lands exactly like convex's.
+    const webPkg = JSON.parse(await readFile(join(root, "apps/web/package.json"), "utf8"));
+    expect(webPkg.dependencies["@repo/backend"]).toBe("workspace:*");
+    // Idempotent: each line appended exactly once across a second stitch.
+    await stitch(plan);
+    const envAfter = await readFile(join(root, ".env.example"), "utf8");
+    expect(envAfter.match(/^SUPABASE_URL=$/gm)).toHaveLength(1);
+    expect(envAfter.match(/^NEXT_PUBLIC_SUPABASE_URL=$/gm)).toHaveLength(1);
   });
 });
 

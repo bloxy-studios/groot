@@ -26,6 +26,7 @@ Version snapshot at verification: create-turbo 2.10.4 · Next.js 16.2.10 · sv 0
 | Hono | `bunx create-hono@0.19 … --template bun` | never | only with `-i` | **interactive confirm, no bypass** → must target fresh dir |
 | Fastify | `bunx fastify-cli@8 generate <name> --lang=ts --esm` | never | never (but shells out to `npm init -y`) | **refuses** ("directory already exists") |
 | Convex | *(files written directly, incl. vendored `_generated` stubs)* | — | — | — |
+| Supabase | `bunx supabase@2 init` (postCommand inside groot's package shell) | never | never | **errors** on existing config (exit 1; `--force` exists, groot targets fresh dirs) |
 
 ## 1. Turborepo trunk — `create-turbo`
 
@@ -265,6 +266,21 @@ bunx @react-native-community/cli@20 init mobile --pm bun --skip-install --instal
 - ⚠️ **`add --path` basenames must satisfy the CLI's name rules** (the veto runs at resolve time, before anything generates): JS-identifier shape — `apps/rn-app` has a dash and would crash init — plus no java keywords, `react`/`react-native`, or anything containing `helloworld`.
 - **Port 8081** is the Metro default, shared with Expo per the same-slot rule; `add --path` coexistence rides the port-collision warning (the issue's original "port shift" idea predates the same-slot precedent set by the web wave).
 - Sources: <https://github.com/react-native-community/cli> (build/commands/init/*.js, build/tools/npm.js, build/tools/packageManager.js in the published 20.2.0 bundle), <https://www.npmjs.com/package/@react-native-community/template> (template.config.js, template/metro.config.js, 0.86.0), <https://reactnative.dev/docs/metro>.
+
+## 17. Backend: Supabase — package shell + `supabase init`
+
+```sh
+bunx supabase@2 init   # postCommand, cwd = packages/backend (after groot's writeFiles)
+```
+
+- **Non-interactive by default in 2.x** (verified 2026-07-13 in the cli monorepo's Go sources AND by running the published 2.109.1 linux-x64 binary non-TTY): the old IDE prompts moved behind an opt-in `--interactive` flag that additionally requires a TTY (`cmd/init.go`), and init pins `WORKDIR` to `.` specifically to avoid walking up to a parent project. No install, no git init, no lockfile — it's a Go binary that shells nothing, so the EBADDEVENGINES staging class does not apply.
+- **Writes exactly `supabase/config.toml`** into its cwd (no directory argument exists — hence the postCommand-inside-the-shell layout), plus `supabase/.gitignore` when an enclosing git repo exists (contained inside the scaffold either way — empirically: fresh dir → config only; git repo → both). Re-running errors with exit 1 (`--force` to overwrite); groot's fresh-dir planning never hits it.
+- **The npm wrapper is a 3-file shim** that exec's a platform binary shipped as `optionalDependencies` (`@supabase/cli-<platform>`, 8 targets): **no postinstall**, so bun's lifecycle-script trust list (the electron lesson) is never involved. Single bin name matches the package name.
+- **`project_id` defaults to the cwd basename** — `"backend"` for every groot workspace, but the field exists to "distinguish different Supabase projects on the same host" (Docker containers are named after it). The stitch renames it to the workspace name, anchored on the exact default line, triple-state like every template patch.
+- **groot's package shell** (writeFiles, before init runs): `package.json` (`@repo/backend`, `dev: supabase start` · `stop` · `typegen` · `typecheck`; the CLI pinned as a devDependency), a `database.types.ts` **placeholder matching `gen types` output for an empty schema** (the Convex vendored-stubs pattern — apps deep-importing `@repo/backend/database.types` typecheck before Docker ever runs), tsconfig, README, `.env.example` (values left empty — `supabase start` prints them; no keys are ever vendored).
+- **Docker, login, and real codegen stay out of generate**: `supabase start` (local stack), `supabase login` / `link` (cloud), and `bun run typegen` are next-steps output — the Convex login pattern.
+- Env plumbing: two lines per frontend, `<prefix>SUPABASE_URL=` + `<prefix>SUPABASE_ANON_KEY=`, prefixed per framework exactly like the Convex names (§7); bare React Native gets the unprefixed pair.
+- Sources: <https://github.com/supabase/cli> (apps/cli-go/cmd/init.go, apps/cli-go/internal/init/init.go), <https://www.npmjs.com/package/supabase> (published 2.109.1 shim + optionalDependencies), plus a live run of the 2.109.1 binary (fresh dir / git repo / re-run / --force).
 
 ## Stitching reference
 

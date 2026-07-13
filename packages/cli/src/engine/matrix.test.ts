@@ -26,6 +26,9 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     // groot declares no port for it (docs/scaffold-flows.md#9).
     expect(findChoice("desktop", "electron")?.port).toBeNull();
     expect(findChoice("backend", "convex")?.port).toBeNull();
+    // Supabase's local ports (54321+) are Docker-managed via config.toml —
+    // groot declares none (the electron precedent).
+    expect(findChoice("backend", "supabase")?.port).toBeNull();
   });
 
   test("paths match the slot layout", () => {
@@ -43,6 +46,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     expect(findChoice("api", "hono")?.path).toBe("apps/api");
     expect(findChoice("api", "fastify")?.path).toBe("apps/api");
     expect(findChoice("backend", "convex")?.path).toBe("packages/backend");
+    expect(findChoice("backend", "supabase")?.path).toBe("packages/backend");
   });
 
   test("generators are pinned to majors; direct-write scaffolds are null", () => {
@@ -62,6 +66,7 @@ describe("scaffold matrix (normative — docs/architecture.md)", () => {
     // Elysia and Convex are written directly by groot (docs/scaffold-flows.md).
     expect(findChoice("api", "elysia")?.generator).toBeNull();
     expect(findChoice("backend", "convex")?.generator).toBeNull();
+    expect(findChoice("backend", "supabase")?.generator).toBe("supabase@2");
   });
 
   test("--yes defaults are valid choices (flagship pairing: next + convex)", () => {
