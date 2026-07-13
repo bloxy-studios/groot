@@ -133,22 +133,42 @@ describe("groot init (process-level, non-TTY)", () => {
     expect(stderr).toContain("--github needs a git identity");
   });
 
-  test("--github merging onto an existing commit-less repo → exit 2 up front (Greptile P1)", async () => {
-    // verify skips its git init+commit for pre-existing repos, and
-    // `gh repo create --push` hard-errors on zero commits — refuse early.
+  test("--github refuses any pre-existing repo target — stale history must not ship (Greptile P1)", async () => {
+    // verify only inits + commits repos it creates: with a pre-existing .git,
+    // the generated files would sit uncommitted while gh pushed the OLD
+    // history and reported success. Refused up front, commits or no commits.
     const cwd = await scratch();
-    const target = join(cwd, "app");
-    await mkdir(target, { recursive: true });
-    await runGit(target, ["init", "-q"]);
     const gitConfig = join(cwd, "gitconfig");
     await writeFile(gitConfig, "[user]\n\tname = T\n\temail = t@example.com\n");
-    const { stderr, exitCode } = await runCli(
-      cwd,
-      ["init", "app", "--yes", "--github", "--dir-conflict", "merge", "--dry-run"],
-      { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" },
-    );
-    expect(exitCode).toBe(2);
-    expect(stderr).toContain("existing git repository that has no commits");
+    const env = { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" };
+    const flags = ["--yes", "--github", "--dir-conflict", "merge", "--dry-run"];
+
+    const bare = join(cwd, "bare-repo");
+    await mkdir(bare, { recursive: true });
+    await runGit(bare, ["init", "-q"]);
+    const noCommits = await runCli(cwd, ["init", "bare-repo", ...flags], env);
+    expect(noCommits.exitCode).toBe(2);
+    expect(noCommits.stderr).toContain("pre-existing git repository");
+
+    const committed = join(cwd, "committed-repo");
+    await mkdir(committed, { recursive: true });
+    await runGit(committed, ["init", "-q"]);
+    await runGit(committed, [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "existing history",
+    ]);
+    const withCommits = await runCli(cwd, ["init", "committed-repo", ...flags], env);
+    expect(withCommits.exitCode).toBe(2);
+    expect(withCommits.stderr).toContain("pre-existing git repository");
+    // The manual path is spelled out.
+    expect(withCommits.stderr).toContain("gh repo create committed-repo --private");
   });
 
   test("prompts are never attempted without a TTY — exits 2 with the flag hint", async () => {

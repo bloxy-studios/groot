@@ -18,8 +18,8 @@ import { EXIT, GrootError } from "../engine/errors.ts";
 import { generate } from "../engine/generate.ts";
 import {
   type GitHubPublishResult,
+  ghCreateCommand,
   gitIdentityPresent,
-  hasCommits,
   publishToGitHub,
 } from "../engine/github.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
@@ -222,31 +222,29 @@ async function runInit(args: {
       ? describePlan(plan)
       : `${describePlan(plan)}\n${githubSummaryLine}`;
 
-  // The ordering fix (issue #44): --github hard-requires the commit it will
-  // push, so its preconditions are usage errors BEFORE anything is generated
-  // (and before the dry-run preview returns — both checks are read-only):
-  // 1. a git identity, since verify's missing-identity downgrade would strand
-  //    a valid-but-unpushable workspace against gh's zero-commit hard error;
-  // 2. when merging onto an existing .git, at least one commit — verify skips
-  //    its init+commit block for pre-existing repos, and `gh repo create
-  //    --push` hard-errors on a commit-less one.
+  // The ordering fix (issue #44): --github publishes the initial commit that
+  // verify creates, so its preconditions are usage errors BEFORE anything is
+  // generated (and before the dry-run preview returns — both are read-only):
+  // 1. the target must not already be a git repository — verify only inits
+  //    and commits repos it creates, so the generated workspace would sit as
+  //    uncommitted working-tree changes while `gh repo create --push` pushed
+  //    the OLD history and reported success (and auto-committing into a
+  //    user's pre-existing repo would sweep up state that isn't groot's);
+  // 2. a git identity must exist for fresh targets, resolved from a repo-free
+  //    directory — exactly the system+global view the new `git init` gets; a
+  //    caller repo's LOCAL identity does not carry over.
   if (args.github) {
     if (existsSync(join(targetDir, ".git"))) {
-      // verify skips its init+commit block for pre-existing repos — the push
-      // rides the commits already there (no new identity needed), so the only
-      // thing to demand is that commits exist at all.
-      if (!(await hasCommits(targetDir))) {
-        throw new GrootError(
-          "--github targets an existing git repository that has no commits.",
-          EXIT.USAGE,
-          "gh repo create --push hard-errors on a commit-less repo — commit something there first, or drop --github.",
-        );
-      }
-    } else if (!(await gitIdentityPresent(tmpdir()))) {
-      // Resolved from a repo-free directory — exactly what the fresh
-      // `git init` in the target will see (system + global config). Checking
-      // from process.cwd() would wrongly accept a caller repo's LOCAL
-      // identity, which does not carry over into the new repository.
+      throw new GrootError(
+        "--github can't publish into a pre-existing git repository.",
+        EXIT.USAGE,
+        `Plant without --github, commit the workspace yourself, then run: ${ghCreateCommand(
+          plan.name,
+          args.public ? "public" : "private",
+        )}`,
+      );
+    }
+    if (!(await gitIdentityPresent(tmpdir()))) {
       throw new GrootError(
         "--github needs a git identity for the initial commit it pushes.",
         EXIT.USAGE,

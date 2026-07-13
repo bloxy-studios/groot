@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ghCreateCommand, gitIdentityPresent, hasCommits, publishToGitHub } from "./github.ts";
+import { ghCreateCommand, gitIdentityPresent, publishToGitHub } from "./github.ts";
 
 /**
  * Hermetic gh: a shim script on a controlled PATH whose behavior is driven by
@@ -118,30 +118,6 @@ describe("publishToGitHub (issue #44 — degrade, never fail)", () => {
     });
     const invocations = (await readFile(log, "utf8")).trim().split("\n");
     expect(invocations).toEqual(["auth status"]);
-  });
-});
-
-describe("hasCommits (the merge-onto-existing-repo precondition)", () => {
-  test("false right after git init; true once a commit exists", async () => {
-    const dir = await scratchRepoDir();
-    const git = async (args: string[]) => {
-      const proc = Bun.spawn(["git", ...args], { cwd: dir, stdout: "ignore", stderr: "ignore" });
-      await proc.exited;
-    };
-    await git(["init", "-q"]);
-    expect(await hasCommits(dir)).toBe(false);
-    await git([
-      "-c",
-      "user.name=t",
-      "-c",
-      "user.email=t@t",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "init",
-    ]);
-    expect(await hasCommits(dir)).toBe(true);
   });
 });
 
