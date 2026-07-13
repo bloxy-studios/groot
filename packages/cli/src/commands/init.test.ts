@@ -6,20 +6,30 @@
  * form to init. Dry runs only: no generator ever executes here.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MANIFEST_SCHEMA_URL, MANIFEST_VERSION } from "../engine/types.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
 
+/** Run git in a directory, throwing on failure (test setup only). */
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "pipe" });
+  if ((await proc.exited) !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${await new Response(proc.stderr).text()}`);
+  }
+}
+
 /** Run the CLI from source with piped (non-TTY) stdio; capture everything. */
 async function runCli(
   cwd: string,
   args: string[],
+  env?: Record<string, string | undefined>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn([process.execPath, CLI_ENTRY, ...args], {
     cwd,
+    env: env === undefined ? process.env : { ...process.env, ...env },
     stdout: "pipe",
     stderr: "pipe",
     stdin: new TextEncoder().encode(""),
@@ -66,11 +76,56 @@ describe("groot init (process-level, non-TTY)", () => {
 
   test("--github shows in the dry-run plan summary (private by default, public opt-in)", async () => {
     const cwd = await scratch();
-    const priv = await runCli(cwd, ["init", "app", "--yes", "--github", "--dry-run"]);
+    // The identity precondition runs even on dry runs (truthful preview) —
+    // provide one via an isolated global config so runners without git
+    // identity behave like configured machines.
+    const gitConfig = join(cwd, "gitconfig");
+    await writeFile(gitConfig, "[user]\n\tname = T\n\temail = t@example.com\n");
+    const env = { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" };
+    const priv = await runCli(cwd, ["init", "app", "--yes", "--github", "--dry-run"], env);
     expect(priv.exitCode).toBe(0);
     expect(priv.stdout).toContain("github     create private repo + push");
-    const pub = await runCli(cwd, ["init", "app", "--yes", "--github", "--public", "--dry-run"]);
+    const pub = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--public", "--dry-run"],
+      env,
+    );
     expect(pub.stdout).toContain("github     create public repo + push");
+  });
+
+  test("--github without a git identity → exit 2 up front, even on a dry run", async () => {
+    const cwd = await scratch();
+    const home = join(cwd, "empty-home");
+    await mkdir(home, { recursive: true });
+    const { stderr, exitCode } = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--dry-run"],
+      {
+        HOME: home,
+        GIT_CONFIG_GLOBAL: join(home, "missing-gitconfig"),
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    );
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--github needs a git identity");
+  });
+
+  test("--github merging onto an existing commit-less repo → exit 2 up front (Greptile P1)", async () => {
+    // verify skips its git init+commit for pre-existing repos, and
+    // `gh repo create --push` hard-errors on zero commits — refuse early.
+    const cwd = await scratch();
+    const target = join(cwd, "app");
+    await mkdir(target, { recursive: true });
+    await runGit(target, ["init", "-q"]);
+    const gitConfig = join(cwd, "gitconfig");
+    await writeFile(gitConfig, "[user]\n\tname = T\n\temail = t@example.com\n");
+    const { stderr, exitCode } = await runCli(
+      cwd,
+      ["init", "app", "--yes", "--github", "--dir-conflict", "merge", "--dry-run"],
+      { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" },
+    );
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("existing git repository that has no commits");
   });
 
   test("prompts are never attempted without a TTY — exits 2 with the flag hint", async () => {

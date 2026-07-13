@@ -7,7 +7,7 @@
  * `--dry-run` stopping after preflight (docs/cli-spec.md#groot-init-dir).
  */
 import { existsSync } from "node:fs";
-import { basename, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { defineCommand } from "citty";
 import pc from "picocolors";
@@ -15,7 +15,12 @@ import pkg from "../../package.json";
 import { bannerText } from "../banner.ts";
 import { EXIT, GrootError } from "../engine/errors.ts";
 import { generate } from "../engine/generate.ts";
-import { type GitHubPublishResult, gitIdentityPresent, publishToGitHub } from "../engine/github.ts";
+import {
+  type GitHubPublishResult,
+  gitIdentityPresent,
+  hasCommits,
+  publishToGitHub,
+} from "../engine/github.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
 import {
   applyYesDefaults,
@@ -216,6 +221,32 @@ async function runInit(args: {
       ? describePlan(plan)
       : `${describePlan(plan)}\n${githubSummaryLine}`;
 
+  // The ordering fix (issue #44): --github hard-requires the commit it will
+  // push, so its preconditions are usage errors BEFORE anything is generated
+  // (and before the dry-run preview returns — both checks are read-only):
+  // 1. a git identity, since verify's missing-identity downgrade would strand
+  //    a valid-but-unpushable workspace against gh's zero-commit hard error;
+  // 2. when merging onto an existing .git, at least one commit — verify skips
+  //    its init+commit block for pre-existing repos, and `gh repo create
+  //    --push` hard-errors on a commit-less one.
+  if (args.github) {
+    const gitCwd = existsSync(targetDir) ? targetDir : process.cwd();
+    if (!(await gitIdentityPresent(gitCwd))) {
+      throw new GrootError(
+        "--github needs a git identity for the initial commit it pushes.",
+        EXIT.USAGE,
+        'Set one first: git config --global user.name "Your Name" && git config --global user.email "you@example.com"',
+      );
+    }
+    if (existsSync(join(targetDir, ".git")) && !(await hasCommits(targetDir))) {
+      throw new GrootError(
+        "--github targets an existing git repository that has no commits.",
+        EXIT.USAGE,
+        "gh repo create --push hard-errors on a commit-less repo — commit something there first, or drop --github.",
+      );
+    }
+  }
+
   if (args.dryRun) {
     if (args.json) {
       console.log(JSON.stringify(planToManifest(plan), null, 2));
@@ -226,21 +257,6 @@ async function runInit(args: {
       console.log(`${pc.yellow("●")} dry run — nothing was written.`);
     }
     return;
-  }
-
-  // The ordering fix (issue #44): --github hard-requires the initial commit,
-  // so a missing git identity is a usage error here — NOT the downgrade-to-hint
-  // plain init applies. gh repo create --push hard-errors on zero commits;
-  // failing before anything is generated beats a valid-but-unpushed workspace.
-  if (
-    args.github &&
-    !(await gitIdentityPresent(existsSync(targetDir) ? targetDir : process.cwd()))
-  ) {
-    throw new GrootError(
-      "--github needs a git identity for the initial commit it pushes.",
-      EXIT.USAGE,
-      'Set one first: git config --global user.name "Your Name" && git config --global user.email "you@example.com"',
-    );
   }
 
   if (wantsPrompts) {

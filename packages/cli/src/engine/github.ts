@@ -79,6 +79,20 @@ export async function gitIdentityPresent(
   return true;
 }
 
+/**
+ * True when `cwd` sits in a git work tree with at least one commit. The
+ * second --github precondition: merging into an existing `.git` makes verify
+ * skip its init+commit block, and `gh repo create --push` hard-errors on a
+ * commit-less repo — refuse up front instead of degrading after generation.
+ */
+export async function hasCommits(
+  cwd: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<boolean> {
+  const { exitCode } = await run(["git", "rev-parse", "--verify", "HEAD"], cwd, env);
+  return exitCode === 0;
+}
+
 /** Create the GitHub repository and push the initial commit. Never throws. */
 export async function publishToGitHub(options: GitHubPublishOptions): Promise<GitHubPublishResult> {
   const env = options.env ?? process.env;
