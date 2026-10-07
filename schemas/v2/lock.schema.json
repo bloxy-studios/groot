@@ -1,0 +1,224 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "lockVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "generatedBy": {
+      "type": "string"
+    },
+    "generators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "package": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "integrity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tarball": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "npm-registry",
+              "unresolved"
+            ]
+          },
+          "usedBy": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "."
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "package",
+          "range",
+          "version",
+          "integrity",
+          "tarball",
+          "resolvedAt",
+          "source",
+          "usedBy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "recipes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "recipeVersion": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "appliedBy": {
+            "type": "string",
+            "pattern": "^op_[0-9a-z]{8,40}$"
+          },
+          "appliedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "dependencies": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                },
+                "ownership": {
+                  "type": "string",
+                  "enum": [
+                    "file",
+                    "region",
+                    "keys"
+                  ]
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "ownership",
+                "parts",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "capability",
+          "recipe",
+          "recipeVersion",
+          "target",
+          "appliedBy",
+          "appliedAt",
+          "dependencies",
+          "artifacts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "context": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+          },
+          "ownership": {
+            "type": "string",
+            "enum": [
+              "file",
+              "region",
+              "keys"
+            ]
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "ownership",
+          "parts",
+          "sha256"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "$schema",
+    "lockVersion",
+    "generatedBy",
+    "generators",
+    "recipes",
+    "context"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/lock.schema.json",
+  "title": "groot.lock.json",
+  "description": "Exact generator/recipe resolution and Groot-owned artifacts."
+}

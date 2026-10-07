@@ -1,0 +1,353 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "groot.evidence"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^ev_[0-9a-z]{8,40}$"
+    },
+    "check": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "profile": {
+      "type": "string",
+      "enum": [
+        "structural",
+        "build",
+        "runtime",
+        "product-flow"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "skipped",
+        "blocked"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "."
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "capability",
+        "unit",
+        "operationId",
+        "taskId"
+      ],
+      "additionalProperties": false
+    },
+    "method": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "static",
+            "command",
+            "process",
+            "http",
+            "runner"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "argv": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cwd": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "."
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                    }
+                  ]
+                },
+                "exitCode": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "argv",
+                "cwd",
+                "exitCode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "tool",
+        "command"
+      ],
+      "additionalProperties": false
+    },
+    "revision": {
+      "type": "object",
+      "properties": {
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "none"
+          ]
+        },
+        "head": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "worktreeFingerprint": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "vcs",
+        "head",
+        "branch",
+        "dirty",
+        "worktreeFingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "bun": {
+          "type": "string"
+        },
+        "groot": {
+          "type": "string"
+        },
+        "ci": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "os",
+        "arch",
+        "bun",
+        "groot",
+        "ci"
+      ],
+      "additionalProperties": false
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "finishedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "durationMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "summary": {
+      "type": "string"
+    },
+    "details": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "log",
+              "json",
+              "text"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "sha256",
+          "bytes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nextStep": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "simulated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "kind",
+    "id",
+    "check",
+    "title",
+    "profile",
+    "status",
+    "scope",
+    "method",
+    "revision",
+    "environment",
+    "startedAt",
+    "finishedAt",
+    "durationMs",
+    "summary",
+    "details",
+    "artifacts",
+    "limitations",
+    "reason",
+    "nextStep",
+    "simulated"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/evidence.schema.json",
+  "title": "Evidence",
+  "description": "One check outcome tied to revision, environment, timing, and artifacts."
+}

@@ -24,3 +24,6 @@ Thumbs.db
 # editor state (keep shared settings in .vscode/extensions.json)
 .idea/
 *.swp
+
+# Claude Code agent worktrees (local, per-session)
+.claude/worktrees/

@@ -2,83 +2,30 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/groot.schema.json",
   "title": "groot.json",
-  "description": "Manifest written to the root of a groot-scaffolded workspace by `groot init` and updated by `groot add`. Also the shape emitted by `groot init --dry-run --json`. See docs/cli-spec.md.",
+  "description": "Groot's project file. version 2 (blueprint, written by Groot v2) is a superset of version 1 (manifest, written by Groot v1 and still read by add/doctor). See docs/v2-architecture.md and docs/stability.md.",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["version", "createdWith", "conventions", "scaffolds"],
+  "required": [
+    "version"
+  ],
   "properties": {
-    "$schema": {
-      "type": "string",
-      "format": "uri"
-    },
     "version": {
-      "description": "Manifest schema version.",
-      "const": 1
-    },
-    "createdWith": {
-      "description": "The create-groot release that produced this workspace, e.g. \"create-groot@0.2.0\".",
-      "type": "string",
-      "pattern": "^create-groot@\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
-    },
-    "conventions": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["packagesNamespace"],
-      "properties": {
-        "packagesNamespace": {
-          "description": "Namespace used for shared workspace packages, e.g. \"@repo\".",
-          "type": "string",
-          "pattern": "^@[a-z0-9-~][a-z0-9-._~]*$"
-        }
-      }
-    },
-    "scaffolds": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["slot", "framework", "path", "generator", "port"],
-        "properties": {
-          "slot": {
-            "enum": ["web", "mobile", "desktop", "api", "backend"]
-          },
-          "framework": {
-            "enum": [
-              "next",
-              "sveltekit",
-              "tanstack-start",
-              "astro",
-              "react-router",
-              "nuxt",
-              "vite",
-              "expo",
-              "react-native",
-              "tauri",
-              "electron",
-              "elysia",
-              "hono",
-              "fastify",
-              "convex",
-              "supabase"
-            ]
-          },
-          "path": {
-            "description": "Workspace-relative destination of the scaffold.",
-            "type": "string",
-            "minLength": 1
-          },
-          "generator": {
-            "description": "Pinned upstream generator invocation actually used (e.g. \"create-next-app@16\"), or null when groot wrote the files directly.",
-            "type": ["string", "null"]
-          },
-          "port": {
-            "description": "Deterministic dev port assigned at scaffold time, or null when the scaffold has no local dev port.",
-            "type": ["integer", "null"],
-            "minimum": 1,
-            "maximum": 65535
-          }
-        }
+      "enum": [
+        1,
+        2
+      ]
+    }
+  },
+  "if": {
+    "properties": {
+      "version": {
+        "const": 1
       }
     }
+  },
+  "then": {
+    "$ref": "groot.v1.schema.json"
+  },
+  "else": {
+    "$ref": "v2/blueprint.schema.json"
   }
 }

@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "selections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "recipeVersion": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "dependency"
+            ]
+          },
+          "alreadySatisfied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "capability",
+          "recipe",
+          "recipeVersion",
+          "target",
+          "reason",
+          "alreadySatisfied"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "refusals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unknown-capability",
+              "unknown-recipe",
+              "no-compatible-target",
+              "recipe-conflict",
+              "dependency-conflict",
+              "missing-requirement",
+              "unsupported-topology",
+              "not-certified"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "alternatives"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "ok",
+    "selections",
+    "refusals"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/solver-result.schema.json",
+  "title": "Compatibility resolution",
+  "description": "Selected recipes in application order, or refusals with alternatives."
+}

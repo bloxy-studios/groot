@@ -1,0 +1,423 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "version": {
+      "type": "string"
+    },
+    "capability": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "support": {
+      "type": "string",
+      "enum": [
+        "certified",
+        "experimental",
+        "planned"
+      ]
+    },
+    "provides": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string"
+          },
+          "recipes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "capability",
+          "recipes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recipe": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dependency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "recipe",
+          "dependency",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "targets": {
+      "type": "object",
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "web",
+              "mobile",
+              "desktop",
+              "api",
+              "backend",
+              "library",
+              "config",
+              "unknown"
+            ]
+          }
+        },
+        "frameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runtimes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "bun",
+              "node"
+            ]
+          }
+        },
+        "topologies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "single",
+              "monorepo"
+            ]
+          }
+        }
+      },
+      "required": [
+        "kinds",
+        "frameworks",
+        "runtimes",
+        "topologies"
+      ],
+      "additionalProperties": false
+    },
+    "dependencies": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "devDependencies": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "server",
+              "public",
+              "build"
+            ]
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "secret",
+              "config"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "example": {
+            "type": "string"
+          },
+          "generate": {
+            "type": "string",
+            "enum": [
+              "random-secret",
+              "local-url",
+              "none"
+            ]
+          },
+          "declaredBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "sensitivity",
+          "required",
+          "description",
+          "example",
+          "generate",
+          "declaredBy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "structural",
+              "build",
+              "runtime",
+              "product-flow"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "checker": {
+            "type": "string"
+          },
+          "capability": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "needs": {
+            "type": "object",
+            "properties": {
+              "network": {
+                "type": "boolean"
+              },
+              "processes": {
+                "type": "boolean"
+              },
+              "credentials": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "toolchains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "network",
+              "processes",
+              "credentials",
+              "toolchains"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "description",
+          "checker",
+          "capability",
+          "needs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "external": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "effect": {
+            "type": "string"
+          },
+          "cost": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid",
+              "unknown"
+            ]
+          },
+          "reversible": {
+            "type": "boolean"
+          },
+          "requiresCredentials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "compensation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "effect",
+          "cost",
+          "reversible",
+          "requiresCredentials",
+          "compensation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "partial",
+            "none"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "irreversible": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "summary",
+        "irreversible",
+        "limits"
+      ],
+      "additionalProperties": false
+    },
+    "certification": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "string"
+            },
+            "checkedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "evidence",
+            "checkedAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "capability",
+    "title",
+    "summary",
+    "support",
+    "provides",
+    "requires",
+    "conflicts",
+    "targets",
+    "dependencies",
+    "devDependencies",
+    "env",
+    "verification",
+    "external",
+    "recovery",
+    "certification"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/recipe.schema.json",
+  "title": "Recipe descriptor",
+  "description": "Requirements, conflicts, exact versions, env contracts, verification, recovery."
+}

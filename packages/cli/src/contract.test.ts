@@ -12,6 +12,7 @@ import { normalizeArgv } from "./cli-compat.ts";
 import { add } from "./commands/add.ts";
 import { doctor } from "./commands/doctor.ts";
 import { init } from "./commands/init.ts";
+import { BLUEPRINT_VERSION, FRAMEWORK_IDS, SLOT_IDS } from "./core/contracts/blueprint.ts";
 import { allFrameworkIds } from "./engine/add.ts";
 import { EXIT } from "./engine/errors.ts";
 import { SLOT_ORDER } from "./engine/matrix.ts";
@@ -92,9 +93,12 @@ describe("stability contract: exit codes", () => {
 });
 
 describe("stability contract: groot.json schema", () => {
-  const schema = JSON.parse(
-    readFileSync(join(import.meta.dir, "../../../schemas/groot.schema.json"), "utf8"),
-  ) as {
+  const readSchema = <T>(file: string): T =>
+    JSON.parse(readFileSync(join(import.meta.dir, "../../../schemas", file), "utf8")) as T;
+
+  // The frozen v1 schema (docs/stability.md#manifest-schema-evolution): v1
+  // workspaces stay valid and add/doctor keep reading them.
+  const schema = readSchema<{
     $id: string;
     required: string[];
     properties: {
@@ -106,10 +110,22 @@ describe("stability contract: groot.json schema", () => {
         };
       };
     };
-  };
+  }>("groot.v1.schema.json");
 
-  test("published URL and version match the code", () => {
-    expect(schema.$id).toBe(MANIFEST_SCHEMA_URL);
+  // The published URL keeps its meaning — "the newest version" — and accepts
+  // both versions, discriminated by `version` (deliberate v2 change).
+  const combined = readSchema<{
+    $id: string;
+    properties: { version: { enum: number[] } };
+    then: { $ref: string };
+    else: { $ref: string };
+  }>("groot.schema.json");
+
+  test("published URL and versions match the code", () => {
+    expect(combined.$id).toBe(MANIFEST_SCHEMA_URL);
+    expect(combined.properties.version.enum).toEqual([MANIFEST_VERSION, BLUEPRINT_VERSION]);
+    expect(combined.then.$ref).toBe("groot.v1.schema.json");
+    expect(combined.else.$ref).toBe("v2/blueprint.schema.json");
     expect(schema.properties.version.const).toBe(MANIFEST_VERSION);
   });
 
@@ -129,5 +145,8 @@ describe("stability contract: groot.json schema", () => {
     expect([...schema.properties.scaffolds.items.properties.framework.enum].sort()).toEqual(
       [...allFrameworkIds()].sort(),
     );
+    // The v2 blueprint's `scaffolds` keeps exactly the v1 vocabulary.
+    expect([...SLOT_IDS].sort()).toEqual([...SLOT_ORDER].sort());
+    expect([...FRAMEWORK_IDS].map(String).sort()).toEqual([...allFrameworkIds()].sort());
   });
 });

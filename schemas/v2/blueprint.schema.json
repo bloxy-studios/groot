@@ -1,0 +1,598 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "number",
+      "const": 2
+    },
+    "createdWith": {
+      "type": "string",
+      "pattern": "^create-groot@\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
+    },
+    "conventions": {
+      "type": "object",
+      "properties": {
+        "packagesNamespace": {
+          "type": "string",
+          "pattern": "^@[a-z0-9-~][a-z0-9-._~]*$"
+        }
+      },
+      "required": [
+        "packagesNamespace"
+      ],
+      "additionalProperties": false
+    },
+    "scaffolds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "slot": {
+            "type": "string",
+            "enum": [
+              "web",
+              "mobile",
+              "desktop",
+              "api",
+              "backend"
+            ]
+          },
+          "framework": {
+            "type": "string",
+            "enum": [
+              "next",
+              "sveltekit",
+              "tanstack-start",
+              "astro",
+              "react-router",
+              "nuxt",
+              "vite",
+              "expo",
+              "react-native",
+              "tauri",
+              "electron",
+              "elysia",
+              "hono",
+              "fastify",
+              "convex",
+              "supabase"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "slot",
+          "framework",
+          "path",
+          "generator",
+          "port"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "topology": {
+          "type": "string",
+          "enum": [
+            "single",
+            "monorepo"
+          ]
+        },
+        "packageManager": {
+          "type": "string",
+          "const": "bun"
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "created",
+            "adopted",
+            "migrated"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "topology",
+        "packageManager",
+        "origin"
+      ],
+      "additionalProperties": false
+    },
+    "apps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "."
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "web",
+              "mobile",
+              "desktop",
+              "api",
+              "backend",
+              "library",
+              "config",
+              "unknown"
+            ]
+          },
+          "framework": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packageName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "adopted"
+            ]
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "kind",
+          "framework",
+          "packageName",
+          "port",
+          "origin",
+          "entry"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "recipeVersion": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "options": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "addedBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^op_[0-9a-z]{8,40}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "recipe",
+          "recipeVersion",
+          "target",
+          "options",
+          "addedBy",
+          "addedAt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^dec_[0-9a-z]{8,40}$"
+          },
+          "topic": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "authority": {
+            "type": "string",
+            "enum": [
+              "human",
+              "default",
+              "recipe",
+              "inferred"
+            ]
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "topic",
+          "value",
+          "authority",
+          "rationale",
+          "source",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "environment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "consumer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "."
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              }
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "server",
+              "public",
+              "build"
+            ]
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "secret",
+              "config"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "storage": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+          },
+          "example": {
+            "type": "string"
+          },
+          "generate": {
+            "type": "string",
+            "enum": [
+              "random-secret",
+              "local-url",
+              "none"
+            ]
+          },
+          "declaredBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "consumer",
+          "scope",
+          "sensitivity",
+          "required",
+          "description",
+          "storage",
+          "example",
+          "generate",
+          "declaredBy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "structural",
+              "build",
+              "runtime",
+              "product-flow"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "checker": {
+            "type": "string"
+          },
+          "capability": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "needs": {
+            "type": "object",
+            "properties": {
+              "network": {
+                "type": "boolean"
+              },
+              "processes": {
+                "type": "boolean"
+              },
+              "credentials": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "toolchains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "network",
+              "processes",
+              "credentials",
+              "toolchains"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "description",
+          "checker",
+          "capability",
+          "unit",
+          "needs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "agentsMd": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+        },
+        "claudeMd": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "agents"
+            ]
+          }
+        }
+      },
+      "required": [
+        "agentsMd",
+        "claudeMd",
+        "skills"
+      ],
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "fs.create",
+              "fs.edit",
+              "fs.delete",
+              "fs.move",
+              "deps.change",
+              "install",
+              "generator",
+              "command",
+              "network",
+              "git",
+              "process",
+              "external"
+            ]
+          }
+        },
+        "external": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask"
+          ]
+        }
+      },
+      "required": [
+        "allow",
+        "external"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "$schema",
+    "version",
+    "createdWith",
+    "conventions",
+    "scaffolds",
+    "project",
+    "apps",
+    "capabilities",
+    "decisions",
+    "environment",
+    "verification",
+    "context",
+    "policy"
+  ],
+  "additionalProperties": {},
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/blueprint.schema.json",
+  "title": "groot.json v2 (blueprint)",
+  "description": "Portable desired state: apps, capabilities, decisions, environment, verification, context, policy."
+}

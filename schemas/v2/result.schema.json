@@ -1,0 +1,227 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "groot.result"
+    },
+    "command": {
+      "type": "string"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "data": {},
+    "error": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "enum": [
+                "GROOT_E_INTERNAL",
+                "GROOT_E_USAGE",
+                "GROOT_E_PREFLIGHT",
+                "GROOT_E_GENERATOR",
+                "GROOT_E_COMMAND_FAILED",
+                "GROOT_E_VERIFY_FAILED",
+                "GROOT_E_NOT_A_PROJECT",
+                "GROOT_E_NOT_REGISTERED",
+                "GROOT_E_MIGRATION_REQUIRED",
+                "GROOT_E_UNSUPPORTED_SCHEMA",
+                "GROOT_E_INVALID_DOCUMENT",
+                "GROOT_E_UNSUPPORTED_PROJECT",
+                "GROOT_E_INCOMPATIBLE",
+                "GROOT_E_UNKNOWN_CAPABILITY",
+                "GROOT_E_STALE_PLAN",
+                "GROOT_E_CONFLICT",
+                "GROOT_E_OWNERSHIP_CONFLICT",
+                "GROOT_E_ROLLBACK_CONFLICT",
+                "GROOT_E_PATH_OUTSIDE_PROJECT",
+                "GROOT_E_POLICY_DENIED",
+                "GROOT_E_BLOCKED",
+                "GROOT_E_LOCKED",
+                "GROOT_E_INTERRUPTED",
+                "GROOT_E_NOT_FOUND",
+                "GROOT_E_NOT_RESUMABLE",
+                "GROOT_E_RUNNER_UNAVAILABLE",
+                "GROOT_E_TASK_STATE"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "hint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "details": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "hint",
+            "exitCode",
+            "details"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "blocked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "decision",
+              "prerequisite",
+              "credential",
+              "policy"
+            ]
+          },
+          "question": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "effect": {
+                  "type": "string"
+                },
+                "recommended": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "effect",
+                "recommended"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "resolveWith": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "question",
+          "options",
+          "resolveWith"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "refs": {
+      "type": "object",
+      "properties": {
+        "planId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "planId",
+        "operationId",
+        "taskId",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "grootVersion": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "kind",
+    "command",
+    "ok",
+    "data",
+    "error",
+    "blocked",
+    "warnings",
+    "refs",
+    "grootVersion"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/result.schema.json",
+  "title": "Result envelope",
+  "description": "The single stdout document of every v2 command with --json."
+}

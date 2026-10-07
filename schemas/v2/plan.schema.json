@@ -1,0 +1,2436 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "groot.plan"
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^plan_[0-9a-z]{8,40}$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "createdWith": {
+      "type": "string"
+    },
+    "intent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "init"
+            },
+            "name": {
+              "type": "string"
+            },
+            "topology": {
+              "type": "string",
+              "enum": [
+                "single",
+                "monorepo"
+              ]
+            },
+            "selections": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "topology",
+            "selections",
+            "capabilities"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "adopt"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "migrate"
+            },
+            "from": {
+              "type": "number",
+              "const": 1
+            },
+            "to": {
+              "type": "number",
+              "const": 2
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "add-capability"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "recipe": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "capabilities",
+            "target",
+            "recipe",
+            "options"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "context-sync"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "topology": {
+          "type": "string",
+          "enum": [
+            "single",
+            "monorepo"
+          ]
+        },
+        "revision": {
+          "type": "object",
+          "properties": {
+            "vcs": {
+              "type": "string",
+              "enum": [
+                "git",
+                "none"
+              ]
+            },
+            "head": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dirty": {
+              "type": "boolean"
+            },
+            "worktreeFingerprint": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "vcs",
+            "head",
+            "branch",
+            "dirty",
+            "worktreeFingerprint"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "root",
+        "topology",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "selections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "capability": {
+                "type": "string"
+              },
+              "recipe": {
+                "type": "string"
+              },
+              "recipeVersion": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "requested",
+                  "dependency"
+                ]
+              },
+              "alreadySatisfied": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "capability",
+              "recipe",
+              "recipeVersion",
+              "target",
+              "reason",
+              "alreadySatisfied"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "refusals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "unknown-capability",
+                  "unknown-recipe",
+                  "no-compatible-target",
+                  "recipe-conflict",
+                  "dependency-conflict",
+                  "missing-requirement",
+                  "unsupported-topology",
+                  "not-certified"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "alternatives": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "alternatives"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "selections",
+        "refusals"
+      ],
+      "additionalProperties": false
+    },
+    "generators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "package": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "integrity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tarball": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "npm-registry",
+              "unresolved"
+            ]
+          },
+          "usedBy": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "."
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "package",
+          "range",
+          "version",
+          "integrity",
+          "tarball",
+          "resolvedAt",
+          "source",
+          "usedBy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "file.write"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "content": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "sha256"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "produced"
+                      },
+                      "byStep": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "byStep"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "ownership": {
+                "type": "string",
+                "enum": [
+                  "file",
+                  "none"
+                ]
+              },
+              "executable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "path",
+              "content",
+              "sha256",
+              "expect",
+              "ownership",
+              "executable"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "file.edit"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "edit": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "json"
+                      },
+                      "ops": {
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "set"
+                                },
+                                "pointer": {
+                                  "type": "string"
+                                },
+                                "value": {}
+                              },
+                              "required": [
+                                "op",
+                                "pointer",
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "set-if-absent"
+                                },
+                                "pointer": {
+                                  "type": "string"
+                                },
+                                "value": {}
+                              },
+                              "required": [
+                                "op",
+                                "pointer",
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "merge"
+                                },
+                                "pointer": {
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "pointer",
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "remove"
+                                },
+                                "pointer": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "pointer"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "append-unique"
+                                },
+                                "pointer": {
+                                  "type": "string"
+                                },
+                                "value": {}
+                              },
+                              "required": [
+                                "op",
+                                "pointer",
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "ops"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "managed-region"
+                      },
+                      "regionId": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9-.]*$"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "commentStyle": {
+                        "type": "string",
+                        "enum": [
+                          "html",
+                          "hash",
+                          "slash"
+                        ]
+                      },
+                      "placement": {
+                        "type": "string",
+                        "enum": [
+                          "start",
+                          "end"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "regionId",
+                      "content",
+                      "commentStyle",
+                      "placement"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "lines"
+                      },
+                      "lines": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "header": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "lines",
+                      "header"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "source-anchor"
+                      },
+                      "anchor": {
+                        "type": "string"
+                      },
+                      "anchorDescription": {
+                        "type": "string"
+                      },
+                      "position": {
+                        "type": "string",
+                        "enum": [
+                          "after-line",
+                          "before-line",
+                          "end-of-file"
+                        ]
+                      },
+                      "regionId": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9-.]*$"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "commentStyle": {
+                        "type": "string",
+                        "enum": [
+                          "html",
+                          "hash",
+                          "slash"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "anchor",
+                      "anchorDescription",
+                      "position",
+                      "regionId",
+                      "content",
+                      "commentStyle"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "env"
+                      },
+                      "entries": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string"
+                            },
+                            "comment": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "value",
+                            "comment"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "entries"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "sha256"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "produced"
+                      },
+                      "byStep": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "byStep"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "after": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "content": {
+                        "type": "string"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "content",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "owns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "createIfMissing": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "path",
+              "edit",
+              "expect",
+              "after",
+              "owns",
+              "createIfMissing"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "file.delete"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "sha256"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "produced"
+                      },
+                      "byStep": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "byStep"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "recursive": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "path",
+              "expect",
+              "recursive"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "file.move"
+              },
+              "from": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "sha256"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "produced"
+                      },
+                      "byStep": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "byStep"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "from",
+              "to",
+              "expect"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "deps.add"
+              },
+              "unit": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "const": "."
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                        }
+                      ]
+                    },
+                    "package": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "dev": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "package",
+                    "from",
+                    "to",
+                    "dev"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "sha256"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "produced"
+                      },
+                      "byStep": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "byStep"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "unit",
+              "changes",
+              "expect"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "command.run"
+              },
+              "argv": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              },
+              "purpose": {
+                "type": "string",
+                "enum": [
+                  "install",
+                  "codegen",
+                  "migrate",
+                  "git",
+                  "script",
+                  "check"
+                ]
+              },
+              "network": {
+                "type": "boolean"
+              },
+              "idempotent": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "env": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "stdin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "touches": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "argv",
+              "cwd",
+              "purpose",
+              "network",
+              "idempotent",
+              "timeoutMs",
+              "env",
+              "stdin",
+              "touches"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "generator.run"
+              },
+              "generator": {
+                "type": "object",
+                "properties": {
+                  "package": {
+                    "type": "string"
+                  },
+                  "range": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "integrity": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "package",
+                  "range",
+                  "version",
+                  "integrity"
+                ],
+                "additionalProperties": false
+              },
+              "argv": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "staged",
+                  "in-place"
+                ]
+              },
+              "produces": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              },
+              "stdin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "scrubGit": {
+                "type": "boolean"
+              },
+              "predictable": {
+                "type": "boolean",
+                "const": false
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "generator",
+              "argv",
+              "cwd",
+              "mode",
+              "produces",
+              "stdin",
+              "timeoutMs",
+              "scrubGit",
+              "predictable"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "internal"
+              },
+              "handler": {
+                "type": "string"
+              },
+              "args": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "touches": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "handler",
+              "args",
+              "touches"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "env.secret"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              },
+              "generator": {
+                "type": "string",
+                "enum": [
+                  "random-secret"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "path",
+              "name",
+              "generator"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s\\d{2,4}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fs.create",
+                    "fs.edit",
+                    "fs.delete",
+                    "fs.move",
+                    "deps.change",
+                    "install",
+                    "generator",
+                    "command",
+                    "network",
+                    "git",
+                    "process",
+                    "external"
+                  ]
+                }
+              },
+              "reversible": {
+                "type": "boolean"
+              },
+              "compensation": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "external"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "effect": {
+                "type": "string"
+              },
+              "idempotencyKey": {
+                "type": "string"
+              },
+              "cost": {
+                "type": "string",
+                "enum": [
+                  "free",
+                  "paid",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "description",
+              "classes",
+              "reversible",
+              "compensation",
+              "type",
+              "provider",
+              "effect",
+              "idempotencyKey",
+              "cost"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "."
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              }
+            ]
+          },
+          "package": {
+            "type": "string"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": "string"
+          },
+          "dev": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "unit",
+          "package",
+          "from",
+          "to",
+          "dev"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "environment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "consumer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "."
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              }
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "server",
+              "public",
+              "build"
+            ]
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "secret",
+              "config"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "storage": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+          },
+          "example": {
+            "type": "string"
+          },
+          "generate": {
+            "type": "string",
+            "enum": [
+              "random-secret",
+              "local-url",
+              "none"
+            ]
+          },
+          "declaredBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "consumer",
+          "scope",
+          "sensitivity",
+          "required",
+          "description",
+          "storage",
+          "example",
+          "generate",
+          "declaredBy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "external": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^s\\d{2,4}$"
+          },
+          "description": {
+            "type": "string"
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "fs.create",
+                "fs.edit",
+                "fs.delete",
+                "fs.move",
+                "deps.change",
+                "install",
+                "generator",
+                "command",
+                "network",
+                "git",
+                "process",
+                "external"
+              ]
+            }
+          },
+          "reversible": {
+            "type": "boolean"
+          },
+          "compensation": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "const": "external"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "effect": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "cost": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid",
+              "unknown"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "classes",
+          "reversible",
+          "compensation",
+          "type",
+          "provider",
+          "effect",
+          "idempotencyKey",
+          "cost"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "path"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "absent"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "sha256"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "const": "produced"
+                      },
+                      "byStep": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "byStep"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "dirty": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "path",
+              "expect",
+              "dirty"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "manifest"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "absent",
+                  "v1",
+                  "v2"
+                ]
+              },
+              "sha256": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "state",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "toolchain"
+              },
+              "id": {
+                "type": "string"
+              },
+              "minVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "minVersion",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "fresh-dir"
+              },
+              "path": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "ownership": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+          },
+          "owner": {
+            "type": "string",
+            "enum": [
+              "groot",
+              "shared",
+              "human"
+            ]
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "owner",
+          "parts",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "requiredClasses": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "fs.create",
+          "fs.edit",
+          "fs.delete",
+          "fs.move",
+          "deps.change",
+          "install",
+          "generator",
+          "command",
+          "network",
+          "git",
+          "process",
+          "external"
+        ]
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "structural",
+              "build",
+              "runtime",
+              "product-flow"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "checker": {
+            "type": "string"
+          },
+          "capability": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "."
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\/)(?![A-Za-z]:)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "needs": {
+            "type": "object",
+            "properties": {
+              "network": {
+                "type": "boolean"
+              },
+              "processes": {
+                "type": "boolean"
+              },
+              "credentials": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "toolchains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "network",
+              "processes",
+              "credentials",
+              "toolchains"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "description",
+          "checker",
+          "capability",
+          "unit",
+          "needs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "partial",
+            "none"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "irreversible": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "summary",
+        "irreversible",
+        "limits"
+      ],
+      "additionalProperties": false
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "kind",
+    "planId",
+    "createdAt",
+    "createdWith",
+    "intent",
+    "summary",
+    "project",
+    "capabilities",
+    "generators",
+    "actions",
+    "dependencies",
+    "environment",
+    "external",
+    "preconditions",
+    "ownership",
+    "requiredClasses",
+    "verification",
+    "recovery",
+    "assumptions",
+    "fingerprint"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/plan.schema.json",
+  "title": "Operation plan",
+  "description": "Concrete actions, preconditions, ownership, environment, verification, recovery limits."
+}

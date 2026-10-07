@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "createdWith": {
+      "type": "string",
+      "pattern": "^create-groot@\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
+    },
+    "conventions": {
+      "type": "object",
+      "properties": {
+        "packagesNamespace": {
+          "type": "string",
+          "pattern": "^@[a-z0-9-~][a-z0-9-._~]*$"
+        }
+      },
+      "required": [
+        "packagesNamespace"
+      ],
+      "additionalProperties": false
+    },
+    "scaffolds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "slot": {
+            "type": "string",
+            "enum": [
+              "web",
+              "mobile",
+              "desktop",
+              "api",
+              "backend"
+            ]
+          },
+          "framework": {
+            "type": "string",
+            "enum": [
+              "next",
+              "sveltekit",
+              "tanstack-start",
+              "astro",
+              "react-router",
+              "nuxt",
+              "vite",
+              "expo",
+              "react-native",
+              "tauri",
+              "electron",
+              "elysia",
+              "hono",
+              "fastify",
+              "convex",
+              "supabase"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "slot",
+          "framework",
+          "path",
+          "generator",
+          "port"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "createdWith",
+    "conventions",
+    "scaffolds"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/manifest-v1.schema.json",
+  "title": "groot.json v1 (manifest)",
+  "description": "The v1 manifest — still read by add/doctor; migrated explicitly by `groot migrate`."
+}
