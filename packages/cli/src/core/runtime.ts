@@ -9,7 +9,9 @@ import type { EnvironmentInfo } from "./contracts/common.ts";
 import type { GrootEvent } from "./contracts/envelope.ts";
 import { nowIso } from "./ids.ts";
 
-export type EventInput = Omit<GrootEvent, "schemaVersion" | "kind" | "at"> & { at?: string };
+/** What core code emits; ids, data, and timestamp are optional (filled with null/now). */
+export type EventInput = Pick<GrootEvent, "type" | "level" | "message"> &
+  Partial<Pick<GrootEvent, "operationId" | "stepId" | "taskId" | "data" | "at">>;
 
 export interface EventSink {
   emit(event: EventInput): void;
