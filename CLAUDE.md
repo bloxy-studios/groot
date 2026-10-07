@@ -44,3 +44,11 @@ bunx changeset         # add a changeset
 1. Verify the upstream generator's current non-interactive flags — then document them in `docs/scaffold-flows.md` with source links and a verification date.
 2. Follow the adapter contract in `docs/architecture.md` (silence flags → run → post-patch list).
 3. Add tests for the patch functions; update `docs/cli-spec.md` if flags change.
+
+## Groot v2 refactor
+
+For an explicitly assigned Groot v2 refactor, read [GROOT_V2_BUILD_PROMPT.md](./GROOT_V2_BUILD_PROMPT.md) and [GROOT_V2_PRODUCT_PLAN.md](./GROOT_V2_PRODUCT_PLAN.md). The build brief defines the executable mission, release gates, and acceptance evidence; the product plan preserves the wider research and roadmap.
+
+[GROOT_V2_GOAL.md](./GROOT_V2_GOAL.md) contains the short goal invocation. The project command `/groot-v2 [focus or constraints]` loads the root brief when explicitly invoked.
+
+Apply this mission only to requested v2 work. Ordinary repository tasks retain their assigned scope, and existing repository instructions remain in force.
