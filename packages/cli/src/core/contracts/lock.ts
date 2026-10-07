@@ -5,7 +5,7 @@
  * transitive package integrity stays in bun.lock.
  */
 import { z } from "zod";
-import { IsoDate, OperationId, RelPath, Sha256, UnitPath } from "./common.ts";
+import { IsoDate, PlanId, RelPath, Sha256, UnitPath } from "./common.ts";
 
 export const LOCK_VERSION = 1 as const;
 
@@ -50,8 +50,9 @@ export const RecipeLock = z
     recipeVersion: z.string(),
     /** BlueprintApp id the recipe was applied to. */
     target: z.string(),
-    appliedBy: OperationId,
-    appliedAt: IsoDate,
+    /** The plan that applied it (1:1 with its operation). */
+    appliedBy: PlanId,
+    plannedAt: IsoDate,
     /** Exact dependency versions the recipe added (package → version). */
     dependencies: z.record(z.string(), z.string()),
     artifacts: z.array(OwnedArtifact),

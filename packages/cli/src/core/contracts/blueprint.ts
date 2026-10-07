@@ -17,7 +17,7 @@ import {
   Decision,
   EnvVarContract,
   IsoDate,
-  OperationId,
+  PlanId,
   RelPath,
   Topology,
   UnitKind,
@@ -117,7 +117,9 @@ export const BlueprintCapability = z
     /** BlueprintApp id the capability is applied to. */
     target: z.string(),
     options: z.record(z.string(), CapabilityOptionValue),
-    addedBy: OperationId.nullable(),
+    /** The plan that added it (plans and operations are 1:1 — a re-applied plan is a no-op). */
+    addedBy: PlanId.nullable(),
+    /** When that plan was made. */
     addedAt: IsoDate,
   })
   .strict();

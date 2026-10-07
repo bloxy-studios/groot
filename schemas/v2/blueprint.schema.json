@@ -256,7 +256,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^op_[0-9a-z]{8,40}$"
+                "pattern": "^plan_[0-9a-z]{8,40}$"
               },
               {
                 "type": "null"

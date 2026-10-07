@@ -69,6 +69,10 @@ export class PlanBuilder {
     limits: [],
   };
 
+  /** Allocated up front so recipes can reference the plan in blueprint/lock content. */
+  readonly planId: string = newId("plan");
+  readonly createdAt: string = nowIso();
+
   constructor(init: PlanBuilderInit) {
     this.init = init;
   }
@@ -325,8 +329,8 @@ export class PlanBuilder {
       $schema: schemaUrl("plan"),
       schemaVersion: 1,
       kind: "groot.plan",
-      planId: newId("plan"),
-      createdAt: nowIso(),
+      planId: this.planId,
+      createdAt: this.createdAt,
       createdWith: this.init.createdWith,
       intent: this.init.intent,
       summary: this.init.summary,
