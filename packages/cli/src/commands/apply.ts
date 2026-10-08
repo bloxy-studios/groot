@@ -2,19 +2,21 @@
  * `groot apply <plan>` — execute a plan (a plan JSON file, or the id of a plan
  * saved under .groot/plans/) as a journaled, resumable operation.
  *
- * Policy comes from groot.json when it is a valid v2 blueprint, else the
- * default policy. `--allow <class>` approves extra action classes for this run
- * only; it is repeatable and accepts comma lists. citty keeps only the LAST
- * value of a repeated flag, so the occurrences are collected from the raw
- * args here. A policy denial is returned as blocked decisions (exit 7), one
- * per denied class, each naming the exact re-run that resolves it.
+ * Policy comes from groot.json: its v2 policy, or the default policy for a
+ * project without a v2 blueprint; an invalid or unreadable groot.json fails
+ * closed (GROOT_E_INVALID_DOCUMENT). `--allow <class>` approves extra action
+ * classes for this run only; it is repeatable and accepts comma lists. citty
+ * keeps only the LAST value of a repeated flag, so the occurrences are
+ * collected from the raw args here. A policy denial is returned as blocked
+ * decisions (exit 7), one per denied class, each naming the exact re-run that
+ * resolves it.
  */
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { defineCommand } from "citty";
 import pc from "picocolors";
 import { type CommandResult, GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
-import { BlueprintV2, DEFAULT_POLICY, type Policy } from "../core/contracts/blueprint.ts";
+import type { Policy } from "../core/contracts/blueprint.ts";
 import { ActionClass } from "../core/contracts/common.ts";
 import type { BlockedDecision, ErrorInfo } from "../core/contracts/envelope.ts";
 import type { OperationPlan } from "../core/contracts/plan.ts";
@@ -24,7 +26,9 @@ import {
   findProjectRoot,
   isPlanId,
   loadPlanFile,
+  loadProjectPolicy,
   loadSavedPlan,
+  type PolicySource,
 } from "../core/executor/index.ts";
 import { renderOperationResult } from "./status.ts";
 
@@ -93,30 +97,13 @@ function projectRootFor(cwd: string, plan: OperationPlan): string {
   return found ?? cwd;
 }
 
-export interface PolicySource {
-  readonly policy: Policy;
-  readonly source: "groot.json" | "default";
-}
-
-/** groot.json's policy when it is a valid v2 blueprint, else DEFAULT_POLICY. */
-export function projectPolicy(root: string): PolicySource {
-  try {
-    const parsed = BlueprintV2.safeParse(
-      JSON.parse(readFileSync(join(root, "groot.json"), "utf8")),
-    );
-    if (parsed.success) return { policy: parsed.data.policy, source: "groot.json" };
-  } catch {
-    // absent or unreadable groot.json → default policy
-  }
-  return { policy: DEFAULT_POLICY, source: "default" };
-}
-
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function policyDecision(cls: string, planRef: string, policy: Policy): BlockedDecision {
-  const rerun = `groot apply ${shellQuote(planRef)} --allow ${cls}`;
+/** `rerunBase` is the command that was refused ("groot apply plan.json"); --allow is appended. */
+function policyDecision(cls: string, rerunBase: string, policy: Policy): BlockedDecision {
+  const rerun = `${rerunBase} --allow ${cls}`;
   const external = cls === "external";
   return {
     id: `policy.${cls}`,
@@ -140,23 +127,28 @@ function policyDecision(cls: string, planRef: string, policy: Policy): BlockedDe
   };
 }
 
-function policyBlocked(
+/**
+ * A GROOT_E_POLICY_DENIED as blocked decisions (exit 7), one per denied class.
+ * `rerunBase` is the refused command line; `subject` identifies what was
+ * refused (`planId` or `operationId`) in data and refs.
+ */
+export function policyBlocked(
   error: GrootV2Error,
-  planRef: string,
-  plan: OperationPlan,
+  rerunBase: string,
+  subject: { readonly planId: string } | { readonly operationId: string },
   policy: PolicySource,
 ): CommandResult & { readonly error: ErrorInfo } {
   const denied = ((error.details?.denied ?? []) as unknown[]).map(String);
   return {
     ok: false,
-    data: { planId: plan.planId, denied, policySource: policy.source },
-    blocked: denied.map((cls) => policyDecision(cls, planRef, policy.policy)),
-    refs: { planId: plan.planId },
+    data: { ...subject, denied, policySource: policy.source },
+    blocked: denied.map((cls) => policyDecision(cls, rerunBase, policy.policy)),
+    refs: subject,
     exitCode: EXIT_V2.BLOCKED,
     error: error.toInfo(),
     human: () =>
       console.log(
-        `${pc.yellow("●")} Nothing applied — the ${policy.source} policy does not allow: ${denied.join(", ")}.`,
+        `${pc.yellow("●")} Nothing ${"planId" in subject ? "applied" : "resumed"} — the ${policy.source} policy does not allow: ${denied.join(", ")}.`,
       ),
   };
 }
@@ -183,7 +175,7 @@ export const apply = defineCommand({
       const approvals = parseAllowFlags(rawArgs);
       const plan = await resolvePlan(ctx.cwd, args.plan);
       const root = projectRootFor(ctx.cwd, plan);
-      const policy = projectPolicy(root);
+      const policy = await loadProjectPolicy(root);
       try {
         const result = await applyPlan(ctx, {
           plan,
@@ -200,7 +192,8 @@ export const apply = defineCommand({
         };
       } catch (error) {
         if (error instanceof GrootV2Error && error.id === "GROOT_E_POLICY_DENIED") {
-          return policyBlocked(error, args.plan, plan, policy);
+          const rerun = `groot apply ${shellQuote(args.plan)}`;
+          return policyBlocked(error, rerun, { planId: plan.planId }, policy);
         }
         throw error;
       }

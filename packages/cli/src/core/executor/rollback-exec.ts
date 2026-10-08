@@ -18,6 +18,7 @@ import { resolveInProject } from "../fs/paths.ts";
 import { STATE_DIR_NAME } from "../state.ts";
 import {
   backupBytes,
+  backupMode,
   currentHash,
   EMPTY_TREE_HASH,
   parseKey,
@@ -25,6 +26,7 @@ import {
   removePath,
   restoreFile,
 } from "./fsops.ts";
+import { operationFile } from "./journal.ts";
 import { checkpoint, type Execution, emit } from "./runner.ts";
 import { abortReason } from "./step-context.ts";
 
@@ -75,7 +77,7 @@ function undoTree(ex: Execution, item: UndoItem, path: string): void {
   mkdirSync(target, { recursive: true });
   // A content-free tree (e.g. the empty directory a generator filled) needs no backup.
   if (item.restoreTo === EMPTY_TREE_HASH || item.backup === undefined) return;
-  const backup = join(ex.sc.paths.dir, item.backup);
+  const backup = operationFile(ex.sc.paths, item.backup);
   for (const entry of readdirSync(backup)) {
     cpSync(join(backup, entry), join(target, entry), { recursive: true, verbatimSymlinks: true });
   }
@@ -99,7 +101,8 @@ function undoFile(ex: Execution, stepId: string, item: UndoItem, path: string): 
       },
     );
   }
-  restoreFile(ex.sc.root, path, bytes, join(ex.sc.paths.dir, item.backup));
+  const mode = backupMode(ex.sc.paths, stepId, path, operationFile(ex.sc.paths, item.backup));
+  restoreFile(ex.sc.root, path, bytes, mode);
 }
 
 /** Re-verify every path of a step right before touching it; journal a conflict if one moved. */

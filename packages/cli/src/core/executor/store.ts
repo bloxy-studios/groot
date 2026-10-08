@@ -6,13 +6,19 @@
  * Reads rebuild state from the journal (the source of truth) rather than
  * trusting the snapshot, and correct for liveness: an operation whose journal
  * says "running" but whose writer is gone (no live lock holder) was cut off
- * by a crash and is reported as interrupted and resumable.
+ * by a crash and is reported as interrupted and resumable; one whose writer
+ * is alive is running, and not resumable.
+ *
+ * Operation directories are owner-only (0700, plan copy 0600). The plan copy
+ * conceals known secret values like backups do (secrets.ts) and is revealed
+ * on load, then must be the plan the journal started — same id and
+ * fingerprint — so a swapped copy never runs under another plan's journal.
  */
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { OperationId, schemaUrl } from "../contracts/common.ts";
+import { OperationId, RelPath, schemaUrl } from "../contracts/common.ts";
 import {
   type OperationState,
   OperationState as OperationStateSchema,
@@ -36,8 +42,16 @@ import {
   type StepProgress,
 } from "./journal.ts";
 import { validatePlanDocument } from "./plans.ts";
+import { type Placeholder, SecretBook } from "./secrets.ts";
 
-/** Statuses from which `groot resume` can continue. */
+/** Operation state quotes file contents: only the owner may enter or read it. */
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+
+/**
+ * Journal statuses from which `groot resume` can continue ("running" under
+ * the writer lock means the previous writer crashed).
+ */
 const RESUMABLE: ReadonlySet<OperationStatus> = new Set([
   "running",
   "interrupted",
@@ -53,18 +67,47 @@ export function isOperationId(value: string): boolean {
   return OperationId.safeParse(value).success;
 }
 
-/** Create `.groot/operations/<id>/` with the plan copy, backups/, and logs/. */
+/**
+ * Create `.groot/operations/<id>/` (0700) with the plan copy (0600, known
+ * secret values concealed), backups/, and logs/.
+ */
 export function createOperationDir(
   root: string,
   operationId: string,
   plan: OperationPlan,
+  secrets: SecretBook,
 ): OperationPaths {
   ensureStateDir(root);
   const paths = operationPaths(root, operationId);
-  mkdirSync(paths.backups, { recursive: true });
-  mkdirSync(paths.logs, { recursive: true });
-  writeFileAtomic(paths.plan, prettyJson(plan));
+  for (const dir of [paths.dir, paths.backups, paths.logs]) {
+    mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+    chmodSync(dir, PRIVATE_DIR_MODE);
+  }
+  const { bytes, placeholders } = secrets.conceal(Buffer.from(prettyJson(plan), "utf8"));
+  if (placeholders.length > 0) {
+    writeFileAtomic(paths.planSecrets, prettyJson(placeholders), PRIVATE_FILE_MODE);
+  }
+  writeFileAtomic(paths.plan, bytes, PRIVATE_FILE_MODE);
   return paths;
+}
+
+const PlaceholderList = z.array(
+  z.object({ name: z.string(), path: RelPath, token: z.string() }).strict(),
+);
+
+/** The plan copy's bytes with concealed secret values put back (null: a value is gone). */
+function revealedPlanCopy(
+  root: string,
+  paths: OperationPaths,
+  bytes: Uint8Array,
+): Uint8Array | null {
+  let placeholders: Placeholder[] = [];
+  try {
+    placeholders = PlaceholderList.parse(JSON.parse(readFileSync(paths.planSecrets, "utf8")));
+  } catch {
+    // no sidecar: nothing was concealed
+  }
+  return new SecretBook(root, []).reveal(bytes, placeholders);
 }
 
 function stepState(action: PlannedAction, progress: StepProgress): StepState {
@@ -121,7 +164,9 @@ export function buildState(
     currentStep: replayed.currentStep,
     error: replayed.error,
     evidence: [...replayed.evidence],
-    resumable: isResumableStatus(status),
+    // "running" here means a live writer (readers turn a dead one's into
+    // "interrupted"): resuming it would only meet GROOT_E_LOCKED.
+    resumable: status !== "running" && isResumableStatus(status),
     journal: paths.journalRel,
   });
 }
@@ -195,21 +240,49 @@ function notFound(operationId: string, detail?: string): GrootV2Error {
 export function loadOperation(root: string, operationId: string): LoadedOperation {
   if (!isOperationId(operationId)) throw notFound(operationId, "not an operation id");
   const paths = operationPaths(root, operationId);
-  let planText: string;
+  let planBytes: Uint8Array;
   try {
-    planText = readFileSync(paths.plan, "utf8");
+    planBytes = readFileSync(paths.plan);
   } catch {
     throw notFound(operationId);
   }
+  const revealed = revealedPlanCopy(root, paths, planBytes);
+  if (revealed === null) {
+    throw new GrootV2Error(
+      "GROOT_E_INVALID_DOCUMENT",
+      `The plan copy of operation ${operationId} quotes a secret value that is no longer where it was.`,
+      {
+        hint: "Restore the env file the value came from (see plan.secrets.json for its name and file).",
+        details: { operationId, path: paths.plan },
+      },
+    );
+  }
   let planValue: unknown;
   try {
-    planValue = JSON.parse(planText);
+    planValue = JSON.parse(Buffer.from(revealed).toString("utf8"));
   } catch {
     planValue = null;
   }
   const plan = validatePlanDocument(planValue, paths.plan);
   const replayed = replay(readJournal(paths.journal).records);
   if (replayed.started === null) throw notFound(operationId, "it never started");
+  const { planId, planFingerprint } = replayed.started;
+  if (plan.planId !== planId || plan.fingerprint !== planFingerprint) {
+    // A swapped plan copy must never run under the journal of another plan.
+    throw new GrootV2Error(
+      "GROOT_E_INVALID_DOCUMENT",
+      `The plan copy of operation ${operationId} is not the plan it started (${planId}).`,
+      {
+        hint: "The operation's plan.json was replaced or edited; put back the plan it started with (the same plan file or saved plan) to resume or roll it back.",
+        details: {
+          operationId,
+          path: paths.plan,
+          expected: { planId, fingerprint: planFingerprint },
+          actual: { planId: plan.planId, fingerprint: plan.fingerprint },
+        },
+      },
+    );
+  }
   return { paths, plan, replayed };
 }
 
@@ -244,19 +317,25 @@ export async function readOperation(root: string, operationId: string): Promise<
   return buildState(loaded.plan, loaded.replayed, loaded.paths, observedStatus(root, loaded));
 }
 
-/** Every operation, newest first (ids are time-sortable). Unreadable directories are skipped. */
+/**
+ * Every operation, newest first (ids are time-sortable). Unreadable operation
+ * directories are skipped; a refused state path (a symlinked `.groot`) is an
+ * error, never an empty list.
+ */
 export async function listOperations(root: string): Promise<OperationState[]> {
   let ids: string[];
   try {
     ids = readdirSync(statePaths.operations(root));
-  } catch {
+  } catch (error) {
+    if (error instanceof GrootV2Error) throw error;
     return [];
   }
   const states: OperationState[] = [];
   for (const id of ids.filter(isOperationId).sort().reverse()) {
     try {
       states.push(await readOperation(root, id));
-    } catch {
+    } catch (error) {
+      if (error instanceof GrootV2Error && error.id === "GROOT_E_PATH_OUTSIDE_PROJECT") throw error;
       // a partial or foreign directory is not an operation
     }
   }

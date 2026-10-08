@@ -6,9 +6,9 @@
  * A crash "after the effect, before completion" is simulated in-process by
  * truncating the journal right after the step's intent record (the effect is
  * on disk, step.done never made it). Real SIGKILL crashes are covered by the
- * process-level tests in commands/executor-cli.test.ts.
+ * process-level tests in commands/recovery-cli.test.ts.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OperationPlan } from "../contracts/plan.ts";
@@ -18,13 +18,17 @@ import {
   addCommand,
   addDeps,
   buildPlan,
+  crashAfterEffect,
   journalRecords,
   operationDir,
   permissive,
+  removeScratchDirs,
   scratchProject,
   stateFile,
   testContext,
 } from "./test-support.ts";
+
+afterAll(removeScratchDirs);
 
 async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error> {
   try {
@@ -34,19 +38,6 @@ async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error
     return error as GrootV2Error;
   }
   throw new Error("expected a GrootV2Error");
-}
-
-/** Keep the journal up to (and including) `stepId`'s intent — as if the process died right after the effect. */
-function crashAfterEffect(root: string, operationId: string, stepId: string): void {
-  const path = join(operationDir(root, operationId), "journal.jsonl");
-  const lines = readFileSync(path, "utf8")
-    .split("\n")
-    .filter((line) => line !== "");
-  const cut = lines.findIndex((line) => {
-    const record = JSON.parse(line) as { type: string; stepId?: string };
-    return record.type === "step.intent" && record.stepId === stepId;
-  });
-  writeFileSync(path, `${lines.slice(0, cut + 1).join("\n")}\n`);
 }
 
 async function applied(root: string, plan: OperationPlan): Promise<string> {

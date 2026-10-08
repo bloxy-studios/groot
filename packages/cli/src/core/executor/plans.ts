@@ -7,10 +7,14 @@
  *   idempotency key, so a hand-edited plan must never pass for an applied one;
  * - every exact preview (write content, precomputed edit result) must match
  *   its declared hash;
- * - step ids are unique and dependency changes target their own unit.
+ * - step ids are unique and dependency changes target their own unit;
+ * - a `produced` expectation names an EARLIER step that produces exactly that
+ *   path (it skips the up-front hash check, so it must not be claimable), and
+ *   no precondition expects one (nothing has run when preconditions are checked);
+ * - no action names a path inside `.groot/` or `.git/` (reserved.ts).
  *
- * Saved plans live at `.groot/plans/<planId>.json` so `groot apply <planId>`
- * works without keeping the file around.
+ * Saved plans live at `.groot/plans/<planId>.json` (mode 0600) so
+ * `groot apply <planId>` works without keeping the file around.
  */
 import { readFile } from "node:fs/promises";
 import type { z } from "zod";
@@ -21,9 +25,14 @@ import { writeFileAtomic } from "../fs/atomic.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { canonicalJson, prettyJson } from "../json.ts";
 import { ensureStateDir, statePaths } from "../state.ts";
+import { namedPaths, ownExpectation, producedPath } from "./action-paths.ts";
+import { describeReserved, reservedName } from "./reserved.ts";
 
 /** Most issues listed in an INVALID_DOCUMENT error (the rest are counted). */
 const MAX_REPORTED_ISSUES = 20;
+
+/** Plan copies can hold file contents; only the owner may read them. */
+const PLAN_FILE_MODE = 0o600;
 
 export interface DocumentIssue {
   readonly path: string;
@@ -47,9 +56,59 @@ function zodIssues(error: z.ZodError): DocumentIssue[] {
   return error.issues.map((issue) => ({ path: issuePath(issue.path), message: issue.message }));
 }
 
-/** Integrity problems a schema cannot express (hash/preview consistency). */
-function integrityIssues(plan: OperationPlan): DocumentIssue[] {
+/** Paths inside `.groot/` or `.git/` that an action names. */
+function reservedIssues(plan: OperationPlan): DocumentIssue[] {
+  return plan.actions.flatMap((action, index) =>
+    namedPaths(action).flatMap(({ field, path }) => {
+      const reserved = reservedName(path);
+      return reserved === null
+        ? []
+        : [
+            {
+              path: `actions.${index}.${field}`,
+              message: `is inside ${describeReserved(reserved)}`,
+            },
+          ];
+    }),
+  );
+}
+
+/** `produced` expectations must name an earlier step producing exactly that path. */
+function producedIssues(plan: OperationPlan): DocumentIssue[] {
   const issues: DocumentIssue[] = [];
+  plan.actions.forEach((action, index) => {
+    const own = ownExpectation(action);
+    if (own === null || own.expect.state !== "produced") return;
+    const { byStep } = own.expect;
+    const producerIndex = plan.actions.findIndex((candidate) => candidate.id === byStep);
+    const producer = producerIndex < index ? plan.actions[producerIndex] : undefined;
+    if (producer === undefined) {
+      issues.push({
+        path: `actions.${index}.expect.byStep`,
+        message: `${byStep} is not an earlier step of this plan`,
+      });
+    } else if (producedPath(producer) !== own.path) {
+      issues.push({
+        path: `actions.${index}.expect.byStep`,
+        message: `step ${byStep} (${producer.type}) does not produce ${own.path}`,
+      });
+    }
+  });
+  plan.preconditions.forEach((pre, index) => {
+    if (pre.type === "path" && pre.expect.state === "produced") {
+      issues.push({
+        path: `preconditions.${index}.expect`,
+        message:
+          "preconditions are checked before any step runs, so none can expect a produced path",
+      });
+    }
+  });
+  return issues;
+}
+
+/** Integrity problems a schema cannot express (hash/preview consistency, producers, reserved paths). */
+function integrityIssues(plan: OperationPlan): DocumentIssue[] {
+  const issues: DocumentIssue[] = [...reservedIssues(plan), ...producedIssues(plan)];
   const seen = new Set<string>();
   plan.actions.forEach((action, index) => {
     const at = `actions.${index}`;
@@ -135,7 +194,7 @@ export async function savePlan(root: string, plan: OperationPlan): Promise<strin
   const valid = validatePlanDocument(plan);
   ensureStateDir(root);
   const path = statePaths.plan(root, valid.planId);
-  writeFileAtomic(path, prettyJson(valid));
+  writeFileAtomic(path, prettyJson(valid), PLAN_FILE_MODE);
   return path;
 }
 

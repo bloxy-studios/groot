@@ -30,7 +30,8 @@ import { hashFile, hashTree, sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { prettyJson } from "../json.ts";
 import { STATE_DIR_NAME } from "../state.ts";
-import type { OperationPaths } from "./journal.ts";
+import { type OperationPaths, operationFile } from "./journal.ts";
+import { reservedName } from "./reserved.ts";
 import type { Placeholder, SecretBook } from "./secrets.ts";
 
 export const TREE_PREFIX = "tree:";
@@ -125,24 +126,57 @@ export function fileMode(abs: string): number {
   return statSync(abs).mode & 0o777;
 }
 
-function sidecarPath(paths: OperationPaths, stepId: string): string {
-  return join(paths.backups, `${stepId}.secrets.json`);
+/** Per-step records kept next to a step's backups. */
+type StepRecordKind = "secrets" | "modes" | "dirs" | "generator";
+
+const STEP_RECORD_KINDS: readonly StepRecordKind[] = ["secrets", "modes", "dirs", "generator"];
+
+/** Backups are owner-only; the mode a file had is recorded and restored separately. */
+const BACKUP_MODE = 0o600;
+
+/**
+ * `backups/<stepId>.<kind>.json` (mode 0600): the placeholders of concealed
+ * secrets, original file modes, directories absent at intent, a generator's
+ * result. Written at intent (a generator's during its effect).
+ */
+export function stepRecordPath(
+  paths: OperationPaths,
+  stepId: string,
+  kind: StepRecordKind,
+): string {
+  return join(paths.backups, `${stepId}.${kind}.json`);
 }
 
-function readSidecar(paths: OperationPaths, stepId: string): Record<string, Placeholder[]> {
+export function writeStepRecord(
+  paths: OperationPaths,
+  stepId: string,
+  kind: StepRecordKind,
+  value: unknown,
+): void {
+  writeFileAtomic(stepRecordPath(paths, stepId, kind), prettyJson(value), BACKUP_MODE);
+}
+
+/** A step record's parsed JSON, or null when absent or unreadable. */
+export function readStepRecord(
+  paths: OperationPaths,
+  stepId: string,
+  kind: StepRecordKind,
+): unknown {
   try {
-    return JSON.parse(readFileSync(sidecarPath(paths, stepId), "utf8")) as Record<
-      string,
-      Placeholder[]
-    >;
+    return JSON.parse(readFileSync(stepRecordPath(paths, stepId, kind), "utf8"));
   } catch {
-    return {};
+    return null;
   }
 }
 
+function readSidecar(paths: OperationPaths, stepId: string): Record<string, Placeholder[]> {
+  return (readStepRecord(paths, stepId, "secrets") ?? {}) as Record<string, Placeholder[]>;
+}
+
 /**
- * Back up the current bytes of tracked keys that exist. Returns the journal's
- * `backups` map (key → path relative to the operation directory).
+ * Back up the current bytes of tracked keys that exist (files 0600, their
+ * modes recorded). Returns the journal's `backups` map (key → path relative
+ * to the operation directory).
  */
 export function backupKeys(
   root: string,
@@ -153,6 +187,12 @@ export function backupKeys(
 ): Record<string, string> {
   const backups: Record<string, string> = {};
   const concealed: Record<string, Placeholder[]> = {};
+  const modes: Record<string, number> = {};
+  // A step without a journaled intent has no backups yet: anything here is a
+  // leftover of a crash before the intent (or planted), never written through.
+  rmSync(join(paths.backups, stepId), { recursive: true, force: true });
+  for (const kind of STEP_RECORD_KINDS)
+    rmSync(stepRecordPath(paths, stepId, kind), { force: true });
   for (const key of keys) {
     const parsed = parseKey(key);
     const abs = resolveInProject(root, parsed.path);
@@ -167,16 +207,55 @@ export function backupKeys(
     } else {
       if (kind !== "file") continue;
       const { bytes, placeholders } = secrets.conceal(readFileSync(abs));
-      writeFileAtomic(target, bytes, fileMode(abs));
-      chmodSync(target, fileMode(abs));
+      writeFileAtomic(target, bytes, BACKUP_MODE);
+      modes[parsed.path] = fileMode(abs);
       if (placeholders.length > 0) concealed[parsed.path] = placeholders;
     }
     backups[key] = rel;
   }
-  if (Object.keys(concealed).length > 0) {
-    writeFileAtomic(sidecarPath(paths, stepId), prettyJson(concealed), 0o600);
-  }
+  if (Object.keys(concealed).length > 0) writeStepRecord(paths, stepId, "secrets", concealed);
+  if (Object.keys(modes).length > 0) writeStepRecord(paths, stepId, "modes", modes);
   return backups;
+}
+
+/** The mode a backed-up file had (recorded at intent; older backups kept it on the copy). */
+export function backupMode(
+  paths: OperationPaths,
+  stepId: string,
+  filePath: string,
+  backupAbs: string,
+): number {
+  const recorded = (readStepRecord(paths, stepId, "modes") as Record<string, unknown> | null)?.[
+    filePath
+  ];
+  if (typeof recorded === "number" && Number.isInteger(recorded)) return recorded & 0o777;
+  return existsSync(backupAbs) ? fileMode(backupAbs) : 0o644;
+}
+
+/**
+ * Ancestor directories of the keys' paths that do not exist yet — the ones
+ * the step may create. Recorded at intent so a step that never journals its
+ * completion (in flight, reconciled, skipped) still has them removed by
+ * rollback when they end up empty.
+ */
+export function absentAncestors(root: string, keys: readonly string[]): string[] {
+  const missing = new Set<string>();
+  for (const key of keys) {
+    let dir = parentRel(parseKey(key).path);
+    while (dir !== "." && pathKind(resolveInProject(root, dir)) === "absent") {
+      missing.add(dir);
+      dir = parentRel(dir);
+    }
+  }
+  return [...missing].sort((a, b) => a.split("/").length - b.split("/").length);
+}
+
+/** Directories recorded as absent at the step's intent (see absentAncestors). */
+export function absentAtIntent(paths: OperationPaths, stepId: string): string[] {
+  const recorded = readStepRecord(paths, stepId, "dirs");
+  return Array.isArray(recorded)
+    ? recorded.filter((dir): dir is string => typeof dir === "string" && reservedName(dir) === null)
+    : [];
 }
 
 /**
@@ -191,7 +270,7 @@ export function backupBytes(
   expected: Sha256,
   secrets: SecretBook,
 ): Uint8Array | null {
-  const abs = join(paths.dir, backupRel);
+  const abs = operationFile(paths, backupRel);
   if (pathKind(abs) !== "file") return null;
   const placeholders = readSidecar(paths, stepId)[filePath] ?? [];
   const bytes = secrets.reveal(readFileSync(abs), placeholders);
@@ -199,16 +278,10 @@ export function backupBytes(
   return bytes;
 }
 
-/** Write restored bytes over `relPath` atomically with the backup's file mode. */
-export function restoreFile(
-  root: string,
-  relPath: string,
-  bytes: Uint8Array,
-  backupAbs: string,
-): void {
+/** Write restored bytes over `relPath` atomically with the file's original mode. */
+export function restoreFile(root: string, relPath: string, bytes: Uint8Array, mode: number): void {
   const abs = resolveInProject(root, relPath);
   mkdirSync(dirname(abs), { recursive: true });
-  const mode = existsSync(backupAbs) ? fileMode(backupAbs) : 0o644;
   writeFileAtomic(abs, bytes, mode);
   chmodSync(abs, mode);
 }
@@ -224,11 +297,11 @@ function notStateDir(root: string): (source: string) => boolean {
   return (source) => source !== state && !source.startsWith(`${state}${sep}`);
 }
 
-/** Remove a file or directory tree inside the project — never the project root itself. */
+/** Remove a file or directory tree inside the project — never the project root, .groot/, or .git/. */
 export function removePath(root: string, relPath: string): void {
   const abs = resolveInProject(root, relPath);
-  if (abs === resolve(root)) {
-    throw new GrootV2Error("GROOT_E_INTERNAL", "Refusing to remove the project root.", {
+  if (abs === resolve(root) || reservedName(relPath) !== null) {
+    throw new GrootV2Error("GROOT_E_INTERNAL", `Refusing to remove ${relPath}.`, {
       details: { path: relPath },
     });
   }

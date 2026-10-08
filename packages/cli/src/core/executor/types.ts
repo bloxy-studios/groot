@@ -24,6 +24,13 @@ export interface ResumeOptions {
   readonly retryStep?: string;
   /** Mark this interrupted step done without running it (a human vouches for its effect). */
   readonly skipStep?: string;
+  /**
+   * Policy the steps still to run are held to; defaults to the project's
+   * (groot.json, failing closed — executor/project-policy.ts).
+   */
+  readonly policy?: Policy;
+  /** Classes approved for THIS run — approvals given to apply do not carry over. */
+  readonly approvals?: readonly ActionClass[];
 }
 
 export interface StaleFinding {

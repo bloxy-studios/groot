@@ -4,7 +4,7 @@
  * so no earlier change is lost, and secret-bearing dotenv edits apply their
  * entries without any value reaching a plan, a saved plan, or the journal.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GrootV2Error } from "../errors.ts";
@@ -16,9 +16,12 @@ import {
   buildPlan,
   operationDir,
   permissive,
+  removeScratchDirs,
   scratchProject,
   testContext,
 } from "./test-support.ts";
+
+afterAll(removeScratchDirs);
 
 const DB_PASSWORD = "Pg-Pr0d-Passw0rd";
 const STRIPE_KEY = "rk_live_51HsecretStripeKey";

@@ -5,20 +5,23 @@
  * tree restored from its tree backup, and the preconditions actions imply
  * (fresh destination, absent move target) refused before anything is written.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { GrootV2Error } from "../errors.ts";
-import type { PlanBuilder } from "../planner/builder.ts";
 import { applyPlan, checkPlanFreshness, rollbackOperation } from "./index.ts";
 import {
+  addGenerator,
   buildPlan,
   operationIds,
   permissive,
+  removeScratchDirs,
   scratchProject,
   snapshot,
   testContext,
 } from "./test-support.ts";
+
+afterAll(removeScratchDirs);
 
 async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error> {
   try {
@@ -28,34 +31,6 @@ async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error
     return error as GrootV2Error;
   }
   throw new Error("expected a GrootV2Error");
-}
-
-function addGenerator(
-  builder: PlanBuilder,
-  options: {
-    script: string;
-    produces: string;
-    mode: "staged" | "in-place";
-    cwd?: string;
-    scrubGit?: boolean;
-  },
-): string {
-  return builder.add({
-    type: "generator.run",
-    generator: { package: "fake-generator", range: "1", version: "1.0.0", integrity: null },
-    argv: ["sh", "-c", options.script],
-    cwd: options.cwd ?? ".",
-    mode: options.mode,
-    produces: options.produces,
-    stdin: null,
-    timeoutMs: 60_000,
-    scrubGit: options.scrubGit ?? true,
-    predictable: false,
-    description: `generate ${options.produces}`,
-    classes: ["generator"],
-    reversible: true,
-    compensation: `delete ${options.produces}`,
-  });
 }
 
 describe("generators", () => {

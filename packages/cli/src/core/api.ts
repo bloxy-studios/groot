@@ -10,7 +10,7 @@ import { bootstrapCore } from "./bootstrap.ts";
 import { listCapabilities } from "./capabilities/registry.ts";
 import { planContextSync } from "./context/sync.ts";
 import { buildTaskContext } from "./context/task-context.ts";
-import { type BlueprintV2, DEFAULT_POLICY } from "./contracts/blueprint.ts";
+import type { BlueprintV2, Policy } from "./contracts/blueprint.ts";
 import type { Sha256 } from "./contracts/common.ts";
 import { schemaUrl } from "./contracts/common.ts";
 import { ERROR_IDS } from "./contracts/envelope.ts";
@@ -23,6 +23,7 @@ import {
   applyPlan,
   listOperations,
   loadPlanFile,
+  loadProjectPolicy,
   previewRollback,
   readOperation,
   resumeOperation,
@@ -85,10 +86,12 @@ export async function requireRegistered(root: string): Promise<RegisteredProject
   };
 }
 
-/** The project's action policy (DEFAULT_POLICY until registered). */
-export async function projectPolicy(root: string) {
-  const manifest = await readManifest(root).catch(() => ({ state: "absent" as const }));
-  return manifest.state === "v2" ? manifest.doc.policy : DEFAULT_POLICY;
+/**
+ * The project's action policy: DEFAULT_POLICY until registered; an invalid or
+ * unreadable groot.json fails closed (executor/project-policy.ts).
+ */
+export async function projectPolicy(root: string): Promise<Policy> {
+  return (await loadProjectPolicy(root)).policy;
 }
 
 export function createApi(): GrootApi {

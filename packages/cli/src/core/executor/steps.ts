@@ -10,6 +10,7 @@ import type { PathHashes } from "../contracts/operation.ts";
 import type { PlannedAction } from "../contracts/plan.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
+import { packageJsonPath } from "./action-paths.ts";
 import { checkExpectation, checkFreshDir } from "./freshness.ts";
 import { backupBytes, pathKind, treeKey } from "./fsops.ts";
 import { internalHandler } from "./handlers.ts";
@@ -22,11 +23,11 @@ import {
   editStep,
   mergeDependencies,
   moveStep,
-  packageJsonPath,
   secretStep,
   writeStep,
 } from "./steps-files.ts";
-import { commandStep, externalBlocked, generatorStep, internalStep } from "./steps-process.ts";
+import { generatorStep } from "./steps-generator.ts";
+import { commandStep, externalBlocked, internalStep } from "./steps-process.ts";
 import type { StaleFinding } from "./types.ts";
 
 /** Keys hashed (and backed up when present) around a step. */

@@ -9,9 +9,14 @@
  * process died. Readers ignore a torn tail; writers truncate it before
  * appending so the next record never fuses with the fragment. A complete line
  * that fails validation is corruption, not a crash artefact, and is reported.
+ *
+ * Operation directories resolve through core/state.ts (a real `.groot/`, no
+ * symlinked components), and the same rule holds inside them: the plan copy,
+ * journal, snapshot, backups/, and logs/ are refused when a symlink stands in
+ * for them, and backup paths read from a journal must stay inside.
  */
-import { existsSync, readFileSync, truncateSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, readFileSync, type Stats, truncateSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ErrorInfo } from "../contracts/envelope.ts";
 import { JournalRecord, type OperationStatus } from "../contracts/operation.ts";
 import { GrootV2Error } from "../errors.ts";
@@ -34,6 +39,8 @@ export interface OperationPaths {
   readonly id: string;
   readonly dir: string;
   readonly plan: string;
+  /** Placeholders of secret values concealed in the plan copy (only when there are any). */
+  readonly planSecrets: string;
   readonly journal: string;
   readonly state: string;
   readonly backups: string;
@@ -42,18 +49,76 @@ export interface OperationPaths {
   readonly journalRel: string;
 }
 
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function refuse(path: string, reason: string): GrootV2Error {
+  return new GrootV2Error(
+    "GROOT_E_PATH_OUTSIDE_PROJECT",
+    `Refusing Groot state path "${path}": ${reason}.`,
+    {
+      hint: "Groot keeps operation state in real files inside .groot/; remove what is at that path and retry.",
+      details: { path, reason },
+    },
+  );
+}
+
 export function operationPaths(root: string, operationId: string): OperationPaths {
   const dir = statePaths.operation(root, operationId);
-  return {
+  const paths: OperationPaths = {
     id: operationId,
     dir,
     plan: join(dir, "plan.json"),
+    planSecrets: join(dir, "plan.secrets.json"),
     journal: join(dir, "journal.jsonl"),
     state: join(dir, "state.json"),
     backups: join(dir, "backups"),
     logs: join(dir, "logs"),
     journalRel: `${STATE_DIR_NAME}/operations/${operationId}/journal.jsonl`,
   };
+  const entries = [
+    [paths.plan, "file"],
+    [paths.planSecrets, "file"],
+    [paths.journal, "file"],
+    [paths.state, "file"],
+    [paths.backups, "dir"],
+    [paths.logs, "dir"],
+  ] as const;
+  for (const [path, kind] of entries) {
+    const entry = lstatOrUndefined(path);
+    if (entry === undefined) continue;
+    if (entry.isSymbolicLink()) throw refuse(path, "it is a symlink");
+    if (kind === "dir" ? !entry.isDirectory() : !entry.isFile()) {
+      throw refuse(path, `it is not a ${kind === "dir" ? "directory" : "file"}`);
+    }
+  }
+  return paths;
+}
+
+/**
+ * An operation-relative path recorded in a journal (a backup): it must stay
+ * inside the operation directory, and none of its existing components may be
+ * a symlink.
+ */
+export function operationFile(paths: OperationPaths, rel: string): string {
+  const abs = resolve(paths.dir, rel);
+  const inside = relative(paths.dir, abs);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
+    throw refuse(abs, "it is outside the operation directory");
+  }
+  let current = paths.dir;
+  for (const segment of inside.split(/[\\/]/)) {
+    current = join(current, segment);
+    const entry = lstatOrUndefined(current);
+    if (entry === undefined) break;
+    if (entry.isSymbolicLink()) throw refuse(current, "it is a symlink");
+  }
+  return abs;
 }
 
 export interface JournalRead {

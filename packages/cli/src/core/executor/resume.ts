@@ -9,12 +9,18 @@
  *   journaled before → re-run; anything else → GROOT_E_CONFLICT naming it;
  * - commands: idempotent ones re-run; others are never re-run blindly —
  *   GROOT_E_BLOCKED until a human chooses --retry-step or --skip-step;
- * - generators: a promoted destination → done; otherwise clean and re-run;
+ * - generators: a complete, unchanged recorded result → done; a cut-off
+ *   promotion → remove exactly what it added and re-run; anything Groot
+ *   cannot attribute → the same retry/skip decision (steps-generator.ts);
  * - secrets: re-run (only appends when the variable is still missing).
  * A re-run reuses the ORIGINAL intent (before-hashes and backups), so a
  * partially applied first attempt never becomes rollback's baseline.
  * Pending steps then run with their own expectations re-checked, so human
  * edits made during the interruption surface as a narrow GROOT_E_STALE_PLAN.
+ *
+ * Nothing is trusted that a writer to `.groot/` could swap: the plan copy
+ * must be the plan the journal started (store.ts), and the steps still to run
+ * are held to the project policy again — with this run's approvals only.
  */
 
 import type { OperationResult, OperationStatus, PathHashes } from "../contracts/operation.ts";
@@ -24,9 +30,12 @@ import { acquireProjectLock } from "../fs/lock.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import type { CoreContext } from "../runtime.ts";
 import { crashPoint } from "./crash.ts";
-import { contentEntries, hashKeys, parseKey, pathKind } from "./fsops.ts";
-import type { IntentRecord, Replay } from "./journal.ts";
+import { absentAtIntent, hashKeys, parseKey, pathKind } from "./fsops.ts";
+import { type IntentRecord, progressOf, type Replay } from "./journal.ts";
+import { assertPolicy } from "./policy.ts";
 import { realRoot } from "./project.ts";
+import { loadProjectPolicy } from "./project-policy.ts";
+import { assertNotReserved } from "./reserved.ts";
 import {
   checkpoint,
   completeStep,
@@ -38,8 +47,8 @@ import {
 } from "./runner.ts";
 import { abortReason } from "./step-context.ts";
 import { isFileStep, plannedAfter, runEffect } from "./steps.ts";
-import { cleanProduced } from "./steps-process.ts";
-import { isResumableStatus, loadOperation, observedStatus } from "./store.ts";
+import { settleGenerator } from "./steps-generator.ts";
+import { isResumableStatus, type LoadedOperation, loadOperation, observedStatus } from "./store.ts";
 import type { ResumeOptions } from "./types.ts";
 
 type Settlement =
@@ -101,15 +110,22 @@ function assertStepOptions(
   }
 }
 
-function blocked(ex: Execution, action: PlannedAction, why: string): GrootV2Error {
+/** `removes`: what --retry-step would delete first (generators), named so the choice is informed. */
+function blocked(
+  ex: Execution,
+  action: PlannedAction,
+  why: string,
+  removes: readonly string[] = [],
+): GrootV2Error {
   const id = ex.sc.operationId;
+  const retry = `\`groot resume ${id} --retry-step ${action.id}\`${removes.length > 0 ? ` (removes ${removes.join(", ")} first)` : ""}`;
   return new GrootV2Error(
     "GROOT_E_BLOCKED",
     `Step ${action.id} (${action.description}) was interrupted mid-run and ${why}.`,
     {
-      hint: `If it did not take effect: \`groot resume ${id} --retry-step ${action.id}\`. If it did: \`groot resume ${id} --skip-step ${action.id}\`.`,
+      hint: `If it did not take effect: ${retry}. If it did: \`groot resume ${id} --skip-step ${action.id}\`.`,
       // `gate` tells surfaces this is the retry/skip decision (not, e.g., a missing adapter).
-      details: { operationId: id, stepId: action.id, gate: "interrupted-step" },
+      details: { operationId: id, stepId: action.id, gate: "interrupted-step", removes },
     },
   );
 }
@@ -138,12 +154,6 @@ async function settleFileStep(ex: Execution, unfinished: Unfinished): Promise<Se
   );
 }
 
-function hasContent(root: string, path: string): boolean {
-  const abs = resolveInProject(root, path);
-  if (pathKind(abs) !== "dir") return pathKind(abs) !== "absent";
-  return contentEntries(abs).length > 0;
-}
-
 async function settle(
   ex: Execution,
   unfinished: Unfinished,
@@ -164,15 +174,13 @@ async function settle(
       if (action.idempotent || retry) return { kind: "rerun" };
       throw blocked(ex, action, "is not safe to repeat blindly");
     case "generator.run": {
-      const key = Object.keys(intent.before)[0] ?? "";
-      const existedBefore = (intent.before[key] ?? null) !== null;
-      // Staged output is promoted by one rename: present means complete.
-      if (action.mode === "staged" && !retry && hasContent(ex.sc.root, action.produces)) {
-        return { kind: "done", after: await hashKeys(ex.sc.root, [key]), outcome: "reconciled" };
-      }
+      const settled = await settleGenerator(ex.sc, action, intent, retry);
+      if (settled.kind === "decide") throw blocked(ex, action, settled.why, settled.removes);
+      if (settled.kind === "rerun") return settled;
       return {
-        kind: "rerun",
-        cleanup: () => cleanProduced(ex.sc.root, action.produces, existedBefore),
+        kind: "done",
+        after: await hashKeys(ex.sc.root, Object.keys(intent.before)),
+        outcome: "reconciled",
       };
     }
     case "internal": {
@@ -201,6 +209,7 @@ async function rerun(ex: Execution, unfinished: Unfinished, settlement: Settleme
       },
     );
   }
+  assertNotReserved(ex.sc.root, action);
   if (settlement.kind === "rerun") settlement.cleanup?.();
   ex.journal.append({
     type: "step.intent",
@@ -219,7 +228,19 @@ async function rerun(ex: Execution, unfinished: Unfinished, settlement: Settleme
   const effect = await runEffect(ex.sc, action);
   crashPoint(ex.sc.ctx.env, action.id, "after-effect");
   const outcome = effect.outcome === "already-applied" ? "reconciled" : effect.outcome;
-  await completeStep(ex, action, intent.before, { ...effect, outcome });
+  const created = [...effect.created, ...createdSinceIntent(ex, action)];
+  await completeStep(ex, action, intent.before, { ...effect, outcome, created });
+}
+
+/**
+ * Directories absent at the step's intent that exist now. An interrupted
+ * first attempt may already have created them, so neither a reconciled step
+ * nor a re-run's own effect can report them.
+ */
+function createdSinceIntent(ex: Execution, action: PlannedAction): string[] {
+  return absentAtIntent(ex.sc.paths, action.id).filter(
+    (dir) => pathKind(resolveInProject(ex.sc.root, dir)) === "dir",
+  );
 }
 
 async function settleUnfinished(
@@ -234,9 +255,32 @@ async function settleUnfinished(
   await completeStep(ex, unfinished.action, unfinished.intent.before, {
     outcome: settlement.outcome,
     after: settlement.after,
-    created: [],
+    created: createdSinceIntent(ex, unfinished.action),
     logRef: null,
   });
+}
+
+/**
+ * Hold the steps resume may still run to the policy. The plan copy is
+ * untrusted like any plan file, and approvals are per run: those given to
+ * apply are not journaled, so a resume needs its own.
+ */
+async function assertRemainingPolicy(
+  root: string,
+  loaded: LoadedOperation,
+  options: ResumeOptions,
+): Promise<void> {
+  const remaining = loaded.plan.actions.filter(
+    (action) =>
+      progressOf(loaded.replayed, action.id).phase !== "done" && action.id !== options.skipStep,
+  );
+  const external = remaining.filter((action) => action.type === "external");
+  const policy = options.policy ?? (await loadProjectPolicy(root)).policy;
+  assertPolicy(
+    { ...loaded.plan, actions: remaining, requiredClasses: [], external },
+    policy,
+    options.approvals ?? [],
+  );
 }
 
 export async function resumeOperation(
@@ -250,6 +294,7 @@ export async function resumeOperation(
   const status = observedStatus(canonical, loaded);
   if (!isResumableStatus(status)) throw notResumable(operationId, status);
   assertStepOptions(options, unfinishedStep(loaded.plan.actions, loaded.replayed), operationId);
+  await assertRemainingPolicy(canonical, loaded, options);
 
   const lock = acquireProjectLock(canonical, { command: "resume", operationId });
   try {

@@ -14,7 +14,6 @@
  * command; --no-save so no lockfile appears that wasn't there before).
  */
 import { hostname } from "node:os";
-import { join } from "node:path";
 import type { Sha256 } from "../contracts/common.ts";
 import { schemaUrl } from "../contracts/common.ts";
 import {
@@ -28,8 +27,15 @@ import { GrootV2Error } from "../errors.ts";
 import { acquireProjectLock } from "../fs/lock.ts";
 import { runProcess, tail } from "../process.ts";
 import type { CoreContext } from "../runtime.ts";
-import { backupBytes, currentHash, EMPTY_TREE_HASH, parseKey, pathKind } from "./fsops.ts";
-import { progressOf, type Replay } from "./journal.ts";
+import {
+  absentAtIntent,
+  backupBytes,
+  currentHash,
+  EMPTY_TREE_HASH,
+  parseKey,
+  pathKind,
+} from "./fsops.ts";
+import { operationFile, progressOf, type Replay } from "./journal.ts";
 import { realRoot } from "./project.ts";
 import { executeRollbackSteps, type StepUndo, type UndoItem } from "./rollback-exec.ts";
 import { checkpoint, createExecution, type Execution, emit } from "./runner.ts";
@@ -78,7 +84,7 @@ function backupUsable(ex: Execution, stepId: string, item: UndoItem): boolean {
   const parsed = parseKey(item.key);
   if (parsed.kind === "tree" && item.restoreTo === EMPTY_TREE_HASH) return true;
   if (item.backup === undefined) return false;
-  if (parsed.kind === "tree") return pathKind(join(ex.sc.paths.dir, item.backup)) === "dir";
+  if (parsed.kind === "tree") return pathKind(operationFile(ex.sc.paths, item.backup)) === "dir";
   return (
     backupBytes(ex.sc.paths, stepId, item.backup, parsed.path, item.restoreTo, ex.sc.secrets) !==
     null
@@ -224,7 +230,11 @@ async function previewStep(
   }
   const items = undoItems(ex, action, replayed);
   const keyPaths = new Set(items.map((item) => parseKey(item.key).path));
-  const createdDirs = (progress.done?.created ?? []).filter((path) => !keyPaths.has(path));
+  // Directories absent at intent count too: an in-flight step has no done
+  // record, and a command creates its touched files' directories unreported.
+  const createdDirs = [
+    ...new Set([...(progress.done?.created ?? []), ...absentAtIntent(ex.sc.paths, action.id)]),
+  ].filter((path) => !keyPaths.has(path));
   const evaluation = await evaluateItems(ex, action.id, items, sim);
   return decide(base, evaluation, progress.phase === "done", createdDirs);
 }

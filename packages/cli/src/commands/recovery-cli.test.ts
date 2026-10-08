@@ -1,23 +1,27 @@
 /**
  * Process-level recovery tests: real hard crashes injected with the test-only
- * GROOT_INTERNAL_CRASH_AT hook (SIGKILL right after a step's intent, or right
- * after its effect), then `groot resume` — the final tree must equal an
- * uninterrupted run's, with no effect duplicated. Plus the non-idempotent
- * command gate and SIGINT during a long command (exit 130, the child's whole
- * process group gone, then resume completes).
+ * GROOT_INTERNAL_CRASH_AT hook (SIGKILL right after a step's intent, right
+ * after its effect, or in the middle of a staged generator's promotion), then
+ * `groot resume` — the final tree must equal an uninterrupted run's, with no
+ * effect duplicated. Plus the non-idempotent command gate, an in-place
+ * generator killed mid-run (resume decides with a human, deleting nothing),
+ * and SIGINT during a long command (exit 130, the child's whole process group
+ * gone, then resume completes).
  */
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { OperationPlan } from "../core/contracts/plan.ts";
 import {
   addCommand,
+  addGenerator,
   buildPlan,
   envelopeOf,
   journalRecords,
   operationIds,
+  removeScratchDirs,
   runCli,
+  scratchDir,
   scratchProject,
   snapshot,
   spawnCli,
@@ -25,6 +29,8 @@ import {
   waitFor,
   writePlanFile,
 } from "../core/executor/test-support.ts";
+
+afterAll(removeScratchDirs);
 
 const PROCESS_TIMEOUT = 180_000;
 const FILES = { "README.md": "# Demo\n" };
@@ -174,6 +180,92 @@ describe("crash recovery via GROOT_INTERNAL_CRASH_AT (process-level)", () => {
   );
 });
 
+describe("generators interrupted mid-effect (process-level)", () => {
+  /** A staged generator promoting four entries into the project root, then a write. */
+  async function stagedRootPlan(root: string): Promise<OperationPlan> {
+    const name = basename(root); // a staged generator creates basename(produces) in its stage
+    return buildPlan(root, async (b) => {
+      addGenerator(b, {
+        script: `mkdir -p ${name}/src && echo a > ${name}/a.txt && echo b > ${name}/b.txt && echo c > ${name}/src/c.ts && echo d > ${name}/d.txt`,
+        produces: ".",
+        mode: "staged",
+      });
+      await b.writeFile({ path: "z.txt", content: "z\n", description: "create z.txt" });
+    });
+  }
+
+  test(
+    "a staged promotion cut off after one entry: resume removes it and regenerates the whole tree",
+    async () => {
+      // Arrange
+      const reference = scratchProject();
+      const uninterrupted = await runCli(reference, [
+        "apply",
+        writePlanFile(await stagedRootPlan(reference)),
+      ]);
+      const root = scratchProject();
+      const crashed = await runCli(root, ["apply", writePlanFile(await stagedRootPlan(root))], {
+        GROOT_INTERNAL_CRASH_AT: "s01:mid-promotion",
+      });
+      const operationId = String(operationIds(root)[0]);
+      const partial = Object.keys(snapshot(root));
+
+      // Act
+      const resumed = await runCli(root, ["resume", operationId, "--json"]);
+
+      // Assert
+      expect(uninterrupted.exitCode).toBe(0);
+      expect(crashed.signalCode).toBe("SIGKILL");
+      expect(partial).toEqual(["a.txt"]);
+      expect(resumed.exitCode).toBe(0);
+      expect(lastDoneOutcome(root, operationId, "s01")).toBe("applied");
+      expect(snapshot(root)).toEqual(snapshot(reference));
+    },
+    PROCESS_TIMEOUT,
+  );
+
+  test(
+    "an in-place generator killed mid-run: resume asks instead of deleting; --retry-step regenerates",
+    async () => {
+      // Arrange — the first run writes part of its output, then kills groot itself.
+      const marker = join(scratchDir("groot-gen-marker-"), "ran-once");
+      const root = scratchProject();
+      const planFile = writePlanFile(
+        await buildPlan(root, async (b) => {
+          addGenerator(b, {
+            script: `mkdir -p src && echo a > src/a.ts && if [ ! -f '${marker}' ]; then touch '${marker}'; kill -9 $PPID; sleep 1; exit 0; fi; echo '<h1/>' > index.html`,
+            produces: ".",
+            mode: "in-place",
+          });
+        }),
+      );
+      const crashed = await runCli(root, ["apply", planFile]);
+      const operationId = String(operationIds(root)[0]);
+      writeFileSync(join(root, "MY-NOTES.md"), "mine\n");
+
+      // Act
+      const withNotes = await runCli(root, ["resume", operationId, "--json"]);
+      const notesAfter = readFileSync(join(root, "MY-NOTES.md"), "utf8");
+      rmSync(join(root, "MY-NOTES.md"));
+      const partialOnly = await runCli(root, ["resume", operationId, "--json"]);
+      const retried = await runCli(root, ["resume", operationId, "--retry-step", "s01", "--json"]);
+
+      // Assert
+      expect(crashed.signalCode).toBe("SIGKILL");
+      for (const run of [withNotes, partialOnly]) {
+        expect(run.exitCode).toBe(7);
+        expect(envelopeOf(run).error?.id).toBe("GROOT_E_BLOCKED");
+        expect(envelopeOf(run).blocked[0]?.resolveWith).toContain("--retry-step s01");
+      }
+      expect(envelopeOf(withNotes).error?.details?.removes).toEqual(["MY-NOTES.md", "src"]);
+      expect(notesAfter).toBe("mine\n");
+      expect(retried.exitCode).toBe(0);
+      expect(Object.keys(snapshot(root))).toEqual(["index.html", "src/", "src/a.ts"]);
+    },
+    PROCESS_TIMEOUT,
+  );
+});
+
 /** pgrep -g lists the members of a process group (exit 1 when there are none). */
 function groupMembers(pgid: number): string[] {
   const result = Bun.spawnSync(["pgrep", "-g", String(pgid)]);
@@ -191,7 +283,7 @@ describe.skipIf(process.platform === "win32")(
       "exits 130, leaves the operation interrupted with no surviving child group, then resume completes",
       async () => {
         // Arrange — the first run records its pid and blocks; the resumed run sees the marker and exits 0.
-        const outside = mkdtempSync(join(tmpdir(), "groot-sigint-"));
+        const outside = scratchDir("groot-sigint-");
         const pidFile = join(outside, "pid");
         const marker = join(outside, "marker");
         const root = scratchProject(FILES);

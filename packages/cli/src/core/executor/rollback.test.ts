@@ -4,28 +4,38 @@
  * with nothing changed), generated trees patched by later steps, secret
  * concealment in backups, the compensating install, and idempotence.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GrootV2Error } from "../errors.ts";
 import { hashTree } from "../fs/hash.ts";
-import { applyPlan, previewRollback, rollbackOperation } from "./index.ts";
+import {
+  applyPlan,
+  previewRollback,
+  registerInternalHandler,
+  resumeOperation,
+  rollbackOperation,
+} from "./index.ts";
 import {
   addCommand,
   addDeps,
   addSecret,
   anyFileContains,
   buildPlan,
+  crashAfterEffect,
   journalRecords,
   MULTI_STEP_FILES,
   operationDir,
   permissive,
+  removeScratchDirs,
   scratchProject,
   setMode,
   snapshot,
   testContext,
 } from "./test-support.ts";
 import { simulatedTreeHash } from "./tree-sim.ts";
+
+afterAll(removeScratchDirs);
 
 async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error> {
   try {
@@ -292,6 +302,125 @@ describe("rollback: dependencies, trees, secrets", () => {
     expect(secret).toHaveLength(43);
     expect(leakAfterApply).toBeNull();
     expect(anyFileContains(join(root, ".groot"), secret)).toBeNull();
+    expect(snapshot(root)).toEqual(before);
+  });
+});
+
+describe("rollback: directories and files a step created without reporting them", () => {
+  async function deepWrite(root: string) {
+    return buildPlan(root, async (b) => {
+      await b.writeFile({
+        path: "src/deep/new.ts",
+        content: "export {};\n",
+        description: "create",
+      });
+    });
+  }
+
+  test("an interrupted write's rollback also removes the parent directories it created", async () => {
+    // Arrange
+    const root = scratchProject({ "README.md": "# Demo\n" });
+    const before = snapshot(root);
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan: await deepWrite(root),
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+    crashAfterEffect(root, applied.operationId, "s01");
+
+    // Act
+    await rollbackOperation(testContext(root).ctx, root, applied.operationId);
+
+    // Assert
+    expect(snapshot(root)).toEqual(before);
+  });
+
+  test("a step reconciled by resume journals the directories it created", async () => {
+    // Arrange
+    const root = scratchProject({ "README.md": "# Demo\n" });
+    const before = snapshot(root);
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan: await deepWrite(root),
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+    crashAfterEffect(root, applied.operationId, "s01");
+    await resumeOperation(testContext(root).ctx, root, applied.operationId);
+
+    // Act
+    const done = journalRecords(root, applied.operationId).find(
+      (record) => record.type === "step.done",
+    );
+    await rollbackOperation(testContext(root).ctx, root, applied.operationId);
+
+    // Assert
+    expect(done?.type === "step.done" ? done.created : []).toEqual([
+      "src",
+      "src/deep",
+      "src/deep/new.ts",
+    ]);
+    expect(snapshot(root)).toEqual(before);
+  });
+
+  test("a command's touched file and the directories it made for it are removed", async () => {
+    // Arrange
+    const root = scratchProject({ "README.md": "# Demo\n" });
+    const before = snapshot(root);
+    const plan = await buildPlan(root, async (b) => {
+      addCommand(b, "mkdir -p out/deep && echo x > out/deep/file.txt", {
+        touches: ["out/deep/file.txt"],
+      });
+    });
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan,
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+
+    // Act
+    await rollbackOperation(testContext(root).ctx, root, applied.operationId);
+
+    // Assert
+    expect(snapshot(root)).toEqual(before);
+  });
+
+  test("files an internal handler created beyond its touches are rolled back", async () => {
+    // Arrange
+    registerInternalHandler("test.create-files", async ({ root }) => {
+      mkdirSync(join(root, "gen"), { recursive: true });
+      writeFileSync(join(root, "gen/out.txt"), "generated\n");
+      return { created: ["gen", "gen/out.txt"] };
+    });
+    const root = scratchProject({ "README.md": "# Demo\n" });
+    const before = snapshot(root);
+    const plan = await buildPlan(root, async (b) => {
+      b.add({
+        type: "internal",
+        handler: "test.create-files",
+        args: {},
+        touches: [],
+        description: "run a vetted stage",
+        classes: ["fs.create"],
+        reversible: true,
+        compensation: "remove what it created",
+      });
+    });
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan,
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+
+    // Act
+    const preview = await previewRollback(testContext(root).ctx, root, applied.operationId);
+    await rollbackOperation(testContext(root).ctx, root, applied.operationId);
+
+    // Assert
+    expect(preview.steps[0]?.paths).toEqual(["gen/out.txt"]);
     expect(snapshot(root)).toEqual(before);
   });
 });

@@ -6,19 +6,25 @@
  *
  * Semantics (docs/v2-architecture.md#execution):
  * - Plans are validated against the plan contract (plus integrity: the
- *   fingerprint and every exact preview) and must target `root`.
+ *   fingerprint, every exact preview, `produced` expectations naming an
+ *   earlier producer of that path, no action inside `.groot/` or `.git/`) and
+ *   must target `root`.
  * - Policy: every required class must be allowed (or approved); external
  *   effects additionally need policy.external "ask" plus an explicit approval.
+ *   Resume holds the steps it still runs to the policy again (approvals are
+ *   per run), and only runs the plan copy its journal started.
  * - A plan whose fingerprint already completed is a no-op (`alreadyApplied`).
- * - Preconditions are re-checked before any write; a changed affected path is
+ * - Preconditions — declared, and implied by each action's own expectation —
+ *   are re-checked before any write; a changed affected path is
  *   GROOT_E_STALE_PLAN listing exactly those paths.
  * - One writer at a time (core/fs/lock.ts); intent is journaled before each
  *   step's effect and completion after it; SIGINT/abort stops at the next
  *   checkpoint (GROOT_E_INTERRUPTED, exit 130) and the operation is resumable.
  *
  * Layout: apply.ts · resume.ts · rollback.ts (+ rollback-exec.ts) · runner.ts
- * (checkpoint protocol) · steps*.ts (effects) · journal.ts · store.ts ·
- * freshness.ts · policy.ts · plans.ts · secrets.ts · fsops.ts · root.ts.
+ * (checkpoint protocol) · steps*.ts (effects; generators in steps-generator.ts)
+ * · journal.ts · store.ts · freshness.ts · policy.ts · project-policy.ts ·
+ * plans.ts · action-paths.ts · reserved.ts · secrets.ts · fsops.ts · root.ts.
  */
 import type { OperationState } from "../contracts/operation.ts";
 import type { OperationPlan } from "../contracts/plan.ts";
@@ -38,6 +44,7 @@ export {
   validatePlanDocument,
 } from "./plans.ts";
 export { deniedClasses, requiredClasses } from "./policy.ts";
+export { loadProjectPolicy, type PolicySource } from "./project-policy.ts";
 export { resumeOperation } from "./resume.ts";
 export { COMPENSATING_INSTALL, previewRollback, rollbackOperation } from "./rollback.ts";
 export { findProjectRoot } from "./root.ts";
