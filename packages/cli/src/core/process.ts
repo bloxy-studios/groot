@@ -28,7 +28,10 @@ export interface SpawnOptions {
    * last line is held back until its newline, or flushed at exit).
    */
   readonly onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
-  /** Max characters kept per stream (whole lines are dropped from the head beyond it). */
+  /**
+   * Max characters kept per stream; whole lines ("\r" ends one too) are
+   * dropped from the head beyond it.
+   */
   readonly captureLimit?: number;
   /** Values to redact exactly from captured output. */
   readonly secrets?: readonly string[];
@@ -106,9 +109,24 @@ export async function sweepProcessGroup(pgid: number, graceMs = 3000): Promise<v
 }
 
 /**
+ * End of the first line boundary at or after `from` — "\n", "\r\n", or a lone
+ * "\r" (progress output redraws one line with it) — or -1. Secrets and
+ * assignments never span one, so a cut there keeps none of them in part.
+ */
+function lineBoundaryEnd(text: string, from: number): number {
+  const newline = text.indexOf("\n", from);
+  const carriageReturn = text.indexOf("\r", from);
+  if (carriageReturn === -1 || (newline !== -1 && newline < carriageReturn)) {
+    return newline === -1 ? -1 : newline + 1;
+  }
+  return text[carriageReturn + 1] === "\n" ? carriageReturn + 2 : carriageReturn + 1;
+}
+
+/**
  * Raw output with its head dropped beyond `limit` characters. Cuts fall on
- * line boundaries, so the capture — redacted once, as a whole — never holds a
- * line (or a secret) whose start was cut off.
+ * line boundaries ("\r" counts), so the capture — redacted once, as a whole —
+ * never holds a line (or a secret) whose start was cut off. A single line
+ * longer than `limit` is dropped until its boundary arrives.
  */
 function cappedText(limit: number): { append: (chunk: string) => void; value: () => string } {
   let text = "";
@@ -117,16 +135,16 @@ function cappedText(limit: number): { append: (chunk: string) => void; value: ()
     append(chunk: string): void {
       let next = chunk;
       if (inDroppedLine) {
-        const newline = next.indexOf("\n");
-        if (newline === -1) return;
-        next = next.slice(newline + 1);
+        const boundary = lineBoundaryEnd(next, 0);
+        if (boundary === -1) return;
+        next = next.slice(boundary);
         inDroppedLine = false;
       }
       text += next;
       if (text.length <= limit) return;
-      const newline = text.indexOf("\n", text.length - limit - 1);
-      inDroppedLine = newline === -1;
-      text = inDroppedLine ? "" : text.slice(newline + 1);
+      const boundary = lineBoundaryEnd(text, text.length - limit - 1);
+      inDroppedLine = boundary === -1;
+      text = inDroppedLine ? "" : text.slice(boundary);
     },
     value: () => text,
   };

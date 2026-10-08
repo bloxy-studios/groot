@@ -3,7 +3,14 @@
  * artifacts), and ids are validated before they become paths.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { schemaUrl } from "../contracts/common.ts";
@@ -72,6 +79,32 @@ describe("storeEvidence", () => {
       "bun run build failed in apps/api (exit 1): STRIPE_SECRET_KEY=[REDACTED]",
     );
     expect((await readEvidence(root, ID)).summary).toBe(stored.summary);
+  });
+
+  test("refuses an artifact name that is not a single file name, before writing anything", () => {
+    // Arrange
+    const base = scratch();
+    const root = join(base, "project");
+    mkdirSync(root);
+    const names = ["../../../../escaped.log", "nested/server.log", "..", ".", "", "evidence.json"];
+
+    // Act
+    const ids = names.map((name) => {
+      try {
+        storeEvidence(root, evidenceInput(), [
+          { name: "server.log", kind: "log", content: "fine" },
+          { name, kind: "log", content: "escaped" },
+        ]);
+      } catch (error) {
+        return error instanceof GrootV2Error ? error.id : String(error);
+      }
+      return "stored";
+    });
+
+    // Assert
+    expect(ids).toEqual(names.map(() => "GROOT_E_PATH_OUTSIDE_PROJECT"));
+    expect(existsSync(join(base, "escaped.log"))).toBe(false);
+    expect(existsSync(join(root, ".groot/evidence", ID))).toBe(false);
   });
 });
 
