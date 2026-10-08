@@ -13,11 +13,12 @@
 
 ### Next runnable task (resume here)
 
-1. When `v2-review-fixes` finishes: merge its three branches into `wip/v2-integration`, regenerate `schemas/v2`, pin `policy.allow` in `contract.test.ts`, apply the cross-group needs the agents reported (e.g. `0o600` for generated secret files), run lint/typecheck/test.
-2. Wire dynamic port allocation (`core/ports.ts` `allocatePort`) into create (declared ports kept, collisions re-allocated, coupled URLs updated) and record adopted ports as observed — then correct the ledger row (review finding: allocation was never called).
-3. When `groot-v2-core-units` finishes: merge runners (`-3`) and recipes (`-4`) replacing the placeholders (recipes carry a copy of the anchor scanner — switch it to the fixed `insertAtAnchor` conflict), address the executor/discovery review findings, run checks on Bun 1.4 + 1.3.14.
-4. Gate C proof: `GROOT_E2E=1 bun test v2-flow.e2e` (fresh single-app + monorepo + adopted custom project → plan add auth → apply → verify all four profiles → context sync → crash/resume, stale plan, re-apply no-op, rollback conflict) + recipe certification; record evidence here.
-5. Gate D/E: real Claude Code task-run evidence, MCP end-to-end with the real API, docs (README, architecture, stability, roadmap ledger), changesets (prerelease `next`), compiled-binary demos, push + draft PR.
+Done since the last checkpoint: recipes and runners units merged (placeholders gone); CLI `task run/resume` get the task-context provider; dynamic port allocation for v2 `groot add` (real E2E passed); MCP end-to-end test (`mcp.e2e.test.ts`, gated); task/review spec aligned; README v2; changesets pre mode `next` + six changesets.
+
+1. When `v2-review-fixes` (run `wf_5c648abe-1df`) finishes: merge its three branches into `wip/v2-integration`, regenerate `schemas/v2`, pin `policy.allow` (without `external`) in `contract.test.ts`, apply reported cross-group needs (e.g. `0o600` for files created by `env.secret`), lint/typecheck/test.
+2. **Wave 2 fixes** (after step 1, so ownership is clean): unit-review findings saved in `/tmp/groot-review/unit-reviews.{txt,json}` — executor 14 (2 high: forged `produced` expectations bypass freshness and the recursive-delete guard; toolchain preconditions execute a plan-named path), discovery 8 (git fingerprint following untracked symlinks; script ports as app ports; unreadable groot.json crash; env-file key material as names; eager command imports; pnpm zero-indent; adopt plans declaring failing checks), plus the runners and recipes reviews when they arrive. Groups: D executor · E discovery/startup · F runners · G recipes; adversarial verification as in wave 1.
+3. Gate C proof on the merged result: `GROOT_E2E=1 bun test v2-flow.e2e mcp.e2e` (+ `GROOT_RECIPE_E2E=1` certification) on a quiet machine (load average was 120–220 during wave 1; process tests with Bun's 5 s default time out under that load on main as well); full suite on Bun 1.4 and 1.3.14.
+4. Gate D/E: final real Claude Code task demo on the compiled binary; Codex stays blocked (local config); refresh the ledger statuses from the evidence; compiled-binary demos; fast-forward `refactor/groot-v2-core`; push; draft PR; Greptile loop.
 
 ### Integration branch commits (`232a30c..wip/v2-integration`, first parent)
 
