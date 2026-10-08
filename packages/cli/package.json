@@ -37,7 +37,7 @@
   ],
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun build --compile --minify --sourcemap src/index.ts --outfile dist/groot",
+    "build": "bun build --compile --minify --sourcemap --no-compile-autoload-dotenv --no-compile-autoload-bunfig --compile-exec-argv=--no-orphans src/index.ts --outfile dist/groot",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
