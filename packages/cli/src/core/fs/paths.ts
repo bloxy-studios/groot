@@ -4,14 +4,19 @@
  * whose real target lies outside the project root. The deepest existing entry
  * (found with lstat, so a dangling link counts as existing) is resolved, and a
  * link whose target does not exist yet is followed by reading it — a
- * not-yet-created file is judged by where a write would actually land.
+ * not-yet-created file is judged by where a write would actually land. Link
+ * text is followed the way the kernel follows it: each `..` steps up from the
+ * real directory reached so far, never lexically back through a symlink.
  */
 import { lstatSync, readlinkSync, realpathSync, type Stats } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { GrootV2Error } from "../errors.ts";
 
 /** Symlinks followed by hand per resolution before giving up (Linux's MAXSYMLINKS). */
 const MAX_SYMLINK_HOPS = 40;
+
+/** Separators in link text: Windows accepts both. */
+const LINK_TEXT_SEPARATOR = process.platform === "win32" ? /[\\/]/ : /\//;
 
 /** Normalize an OS path fragment to the contracts' POSIX form. */
 export function toPosix(path: string): string {
@@ -26,13 +31,18 @@ function lstatOrUndefined(path: string): Stats | undefined {
   }
 }
 
+/** Dangling links followed so far in one resolution, across every branch of it. */
+interface HopBudget {
+  hops: number;
+}
+
 /**
- * The real location `abs` refers to, or null when symlinks loop (or chain
- * past MAX_SYMLINK_HOPS). A dangling link is followed by its link text,
- * relative to the link's own directory.
+ * The real location `abs` (an absolute path without `.`/`..` segments)
+ * refers to, or null when symlinks loop (or chain past MAX_SYMLINK_HOPS). A
+ * dangling link is followed by its link text, relative to the link's own
+ * directory.
  */
-function realTargetOf(abs: string, hops = 0): string | null {
-  if (hops > MAX_SYMLINK_HOPS) return null;
+function realTargetOf(abs: string, budget: HopBudget = { hops: 0 }): string | null {
   let current = abs;
   const tail: string[] = [];
   let entry = lstatOrUndefined(current);
@@ -48,11 +58,38 @@ function realTargetOf(abs: string, hops = 0): string | null {
       return join(realpathSync(current), ...tail);
     } catch {
       // Dangling (or looping): follow the link text to where a write would land.
-      const target = resolve(realpathSync(dirname(current)), readlinkSync(current));
-      return realTargetOf(join(target, ...tail), hops + 1);
+      budget.hops += 1;
+      if (budget.hops > MAX_SYMLINK_HOPS) return null;
+      const target = followLinkText(realpathSync(dirname(current)), readlinkSync(current), budget);
+      return target === null ? null : realTargetOf(join(target, ...tail), budget);
     }
   }
   return join(realpathSync(current), ...tail);
+}
+
+/**
+ * Where link text leads from the link's real directory. Segments are taken
+ * one at a time: before each `..`, the path so far is resolved to its real
+ * location, so `deep/../x` with `deep` → `/elsewhere/a/b` leads to
+ * `/elsewhere/a/x`, not to `x` beside the link. Below a missing directory `..`
+ * is plain (a writer creating it makes a real directory).
+ */
+function followLinkText(linkDir: string, text: string, budget: HopBudget): string | null {
+  const textRoot = isAbsolute(text) ? parse(text).root : "";
+  let base = textRoot === "" ? linkDir : textRoot;
+  let pending: string[] = [];
+  for (const segment of text.slice(textRoot.length).split(LINK_TEXT_SEPARATOR)) {
+    if (segment === "" || segment === ".") continue;
+    if (segment !== "..") {
+      pending.push(segment);
+      continue;
+    }
+    const reached = realTargetOf(join(base, ...pending), budget);
+    if (reached === null) return null;
+    base = dirname(reached);
+    pending = [];
+  }
+  return join(base, ...pending);
 }
 
 function isWithin(root: string, candidate: string): boolean {

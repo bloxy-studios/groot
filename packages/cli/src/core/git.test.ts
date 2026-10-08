@@ -1,11 +1,21 @@
 /**
  * Read-only git probes: they must not run commands a repository's own
  * .git/config or the inherited environment configures (fsmonitor hooks,
- * external diff drivers), and the worktree fingerprint must reflect the
- * content actually on disk — also before the first commit.
+ * external diff drivers, repository hooks), must not write the index, and
+ * the worktree fingerprint must reflect the content actually on disk — also
+ * before the first commit.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitState, revisionInfo } from "./git.ts";
@@ -56,11 +66,29 @@ function recordingHook(dir: string, name: string): { path: string; marker: strin
   return { path, marker };
 }
 
+/**
+ * A committed repository whose tracked files are stat-dirty (touched, same
+ * content) beside one real edit — the state in which `git diff` refreshes
+ * and rewrites the index unless told not to.
+ */
+function statDirtyRepo(): string {
+  const repo = committedRepo();
+  for (const name of ["a.txt", "b.txt"]) writeFileSync(join(repo, name), "same\n");
+  setupGit(repo, "add", "-A");
+  setupGit(repo, "commit", "-q", "-m", "more");
+  writeFileSync(join(repo, "tracked.txt"), "two\n");
+  writeFileSync(join(repo, "untracked.txt"), "new\n");
+  const later = new Date(Date.now() + 60_000);
+  for (const name of ["a.txt", "b.txt"]) utimesSync(join(repo, name), later, later);
+  return repo;
+}
+
 const INJECTED = [
   "GIT_EXTERNAL_DIFF",
   "GIT_CONFIG_COUNT",
   "GIT_CONFIG_KEY_0",
   "GIT_CONFIG_VALUE_0",
+  "GIT_CEILING_DIRECTORIES",
 ];
 const saved = new Map(INJECTED.map((key) => [key, process.env[key]]));
 
@@ -136,6 +164,73 @@ describe.skipIf(!posix)("git probes run no repository-configured commands", () =
       expect(two).not.toBe(three);
       expect(existsSync(extDiff.marker)).toBe(false);
       expect(existsSync(fsmonitor.marker)).toBe(false);
+    },
+    TIMEOUT_MS,
+  );
+
+  test(
+    "a post-index-change hook in .git/hooks does not run and the index is not rewritten",
+    async () => {
+      // Arrange: the hook is installed after setup, so only the probes could run it.
+      const repo = statDirtyRepo();
+      const hook = recordingHook(scratch(), "post-index-change");
+      mkdirSync(join(repo, ".git/hooks"), { recursive: true });
+      writeFileSync(join(repo, ".git/hooks/post-index-change"), readFileSync(hook.path, "utf8"));
+      chmodSync(join(repo, ".git/hooks/post-index-change"), 0o755);
+      const indexBefore = readFileSync(join(repo, ".git/index"));
+
+      // Act
+      const state = await gitState(repo);
+      const revision = await revisionInfo(repo);
+
+      // Assert
+      expect(state.unstaged).toEqual(["tracked.txt"]);
+      expect(revision.worktreeFingerprint).not.toBeNull();
+      expect(existsSync(hook.marker)).toBe(false);
+      expect(readFileSync(join(repo, ".git/index")).equals(indexBefore)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  test(
+    "a hook in a repository-configured core.hooksPath directory does not run",
+    async () => {
+      // Arrange: what a repository with a shared hooks directory looks like after setup.
+      const repo = statDirtyRepo();
+      const hook = recordingHook(scratch(), "shared-hook");
+      mkdirSync(join(repo, ".githooks"));
+      writeFileSync(join(repo, ".githooks/post-index-change"), readFileSync(hook.path, "utf8"));
+      chmodSync(join(repo, ".githooks/post-index-change"), 0o755);
+      setupGit(repo, "config", "core.hooksPath", ".githooks");
+
+      // Act
+      await revisionInfo(repo);
+
+      // Assert
+      expect(existsSync(hook.marker)).toBe(false);
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe.skipIf(!posix)("git probes keep discovery-only settings", () => {
+  test(
+    "GIT_CEILING_DIRECTORIES still stops discovery at the ceiling",
+    async () => {
+      // Arrange: a project without .git below a repository the user fenced off.
+      const parent = scratch();
+      setupGit(parent, "init", "-q");
+      const project = join(parent, "project");
+      mkdirSync(project);
+      writeFileSync(join(project, "app.ts"), "export {};\n");
+      process.env.GIT_CEILING_DIRECTORIES = parent;
+
+      // Act
+      const state = await gitState(project);
+
+      // Assert
+      expect(state.vcs).toBe("none");
+      expect(state.untracked).toEqual([]);
     },
     TIMEOUT_MS,
   );

@@ -93,6 +93,37 @@ describe("project boundary", () => {
     expect(nested).toBe(join(root, "inner-dir/x/y.ts"));
   });
 
+  test("refuses a dangling link whose `..` steps out through another symlink", () => {
+    // Arrange: `..` after a symlinked directory leaves from the link's target,
+    // not from the project — as the kernel resolves it.
+    const root = scratch();
+    const outside = scratch();
+    mkdirSync(join(outside, "a/b"), { recursive: true });
+    symlinkSync(join(outside, "a/b"), join(root, "deep"));
+    symlinkSync("deep/../escaped.txt", join(root, "sneaky"));
+    symlinkSync("deep/../newdir", join(root, "sneakydir"));
+    symlinkSync("not-yet/../deep/../escaped.txt", join(root, "tricky"));
+
+    // Act + Assert
+    for (const path of ["sneaky", "sneakydir/file.txt", "tricky"]) {
+      expect(() => resolveInProject(root, path)).toThrow(/symlink/);
+    }
+  });
+
+  test("accepts a dangling link whose `..` steps stay inside the project", () => {
+    // Arrange
+    const root = scratch();
+    mkdirSync(join(root, "real/sub"), { recursive: true });
+    symlinkSync(join(root, "real/sub"), join(root, "inner"));
+    symlinkSync("inner/../later.txt", join(root, "ok"));
+
+    // Act
+    const resolved = resolveInProject(root, "ok");
+
+    // Assert
+    expect(resolved).toBe(join(root, "ok"));
+  });
+
   test("refuses a symlink loop instead of looping", () => {
     // Arrange
     const root = scratch();
@@ -101,6 +132,24 @@ describe("project boundary", () => {
 
     // Act + Assert
     expect(() => resolveInProject(root, "a/file.txt")).toThrow(GrootV2Error);
+  });
+
+  test("a web of dangling links with `..` resolves in bounded time", () => {
+    // Arrange: each link's text passes through the others several times.
+    const root = scratch();
+    const names = ["l0", "l1", "l2", "l3"];
+    for (const [index, name] of names.entries()) {
+      const next = names[(index + 1) % names.length];
+      symlinkSync(`${next}/../${next}/../${next}/../${next}/x`, join(root, name));
+    }
+
+    // Act
+    const started = performance.now();
+    const error = thrownBy(() => resolveInProject(root, "l0/file.txt"));
+
+    // Assert
+    expect((error as GrootV2Error).id).toBe("GROOT_E_PATH_OUTSIDE_PROJECT");
+    expect(performance.now() - started).toBeLessThan(5_000);
   });
 
   test("joinRel treats '.' as the root", () => {

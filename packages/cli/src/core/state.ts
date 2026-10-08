@@ -125,7 +125,7 @@ function statePath(root: string, ...segments: readonly string[]): string {
 /** An id that is safe to use as a path segment, or GROOT_E_USAGE. */
 function checkedId(kind: string, schema: z.ZodType<string>, id: string): string {
   if (!schema.safeParse(id).success) {
-    throw new GrootV2Error("GROOT_E_USAGE", `"${id}" is not a ${kind} id.`, {
+    throw new GrootV2Error("GROOT_E_USAGE", `"${id}" is not a valid ${kind} id.`, {
       details: { kind, id },
     });
   }

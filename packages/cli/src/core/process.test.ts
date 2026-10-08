@@ -141,4 +141,23 @@ describe.skipIf(!posix)("runProcess group supervision", () => {
     // Assert
     expect(result.stdout).toBe("second line\nthird\n");
   }, 30_000);
+
+  test("the capture cap keeps the tail of a line rewritten with carriage returns", async () => {
+    // Arrange: progress output redraws one line; the failure follows on the same line.
+    const script =
+      "i=0; while [ $i -lt 200 ]; do printf 'progress %s\\r' $i; i=$((i+1)); done; printf 'ERROR: the real failure message'";
+
+    // Act
+    const result = await runProcess({
+      argv: ["sh", "-c", script],
+      cwd: tmpdir(),
+      timeoutMs: 20_000,
+      captureLimit: 500,
+    });
+
+    // Assert
+    expect(result.stdout.endsWith("progress 199\rERROR: the real failure message")).toBe(true);
+    expect(result.stdout.length).toBeLessThanOrEqual(500);
+    expect(result.stdout.startsWith("progress ")).toBe(true);
+  }, 30_000);
 });

@@ -4,11 +4,15 @@
  * dirty tree carries a fingerprint of its uncommitted content, not just HEAD.
  *
  * These probes must not run commands that a repository or the inherited
- * environment configures: every GIT_* variable is dropped (GIT_CONFIG_*,
- * GIT_EXTERNAL_DIFF, GIT_DIR, …), the fsmonitor hook is disabled, and diffs
- * use neither external drivers nor textconv. Clean/smudge filter drivers in
- * the repository's own .git/config cannot be disabled by flags — an untrusted
- * `.git` (e.g. from an extracted archive) is unsafe to inspect in place.
+ * environment configures, and must not write the repository: GIT_* variables
+ * are dropped (GIT_CONFIG_*, GIT_EXTERNAL_DIFF, GIT_DIR, …; only the
+ * discovery fence GIT_CEILING_DIRECTORIES is kept), the fsmonitor hook and
+ * all hooks (core.hooksPath) are disabled, `git diff` never refreshes the
+ * index (which would write it and run post-index-change), and diffs use
+ * neither external drivers nor textconv. Clean/smudge/process filter drivers
+ * in the repository's own .git/config cannot be disabled by flags — an
+ * untrusted `.git` (e.g. from an extracted archive) is unsafe to inspect in
+ * place.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -22,8 +26,19 @@ export interface GitResult {
   readonly stderr: string;
 }
 
-/** Overrides that keep repository configuration from running commands. */
-const SAFE_CONFIG = ["-c", "core.fsmonitor=false"] as const;
+/**
+ * Overrides that keep repository configuration from running commands or
+ * writing: no fsmonitor hook, no hooks at all, and no index refresh by
+ * `git diff` (with GIT_OPTIONAL_LOCKS=0, `git status` already writes nothing).
+ */
+const SAFE_CONFIG = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "diff.autoRefreshIndex=false",
+] as const;
 
 /** Diff flags that keep diff.external, GIT_EXTERNAL_DIFF, and textconv drivers from running. */
 const SAFE_DIFF = ["--binary", "--no-ext-diff", "--no-textconv"] as const;
@@ -31,11 +46,19 @@ const SAFE_DIFF = ["--binary", "--no-ext-diff", "--no-textconv"] as const;
 /** git's empty tree in the sha1 object format (fallback when it can't be computed). */
 const EMPTY_TREE_SHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/**
+ * GIT_* variables passed through: they only fence off repository discovery
+ * (a user's guard against a parent repository capturing projects) and
+ * configure nothing that runs.
+ */
+const KEPT_GIT_VARIABLES: ReadonlySet<string> = new Set(["GIT_CEILING_DIRECTORIES"]);
+
 /** The inherited environment without git's own variables, plus stable output settings. */
 function childEnv(): Record<string, string | undefined> {
-  const inherited = Object.entries(process.env).filter(
-    ([key]) => !key.toUpperCase().startsWith("GIT_"),
-  );
+  const inherited = Object.entries(process.env).filter(([key]) => {
+    const name = key.toUpperCase();
+    return !name.startsWith("GIT_") || KEPT_GIT_VARIABLES.has(name);
+  });
   return { ...Object.fromEntries(inherited), GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" };
 }
 

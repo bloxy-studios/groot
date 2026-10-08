@@ -127,4 +127,29 @@ describe("state ids", () => {
       join(root, ".groot/plans/plan_0000000000000000000001.json"),
     );
   });
+
+  test("the refusal names the kind of id in plain English", () => {
+    // Arrange
+    const root = scratch();
+    const messageOf = (fn: () => unknown): string => {
+      try {
+        fn();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error("expected the call to throw");
+    };
+
+    // Act
+    const messages = [
+      messageOf(() => statePaths.evidence(root, "../../x")),
+      messageOf(() => statePaths.operation(root, "op_../../x")),
+    ];
+
+    // Assert
+    expect(messages).toEqual([
+      '"../../x" is not a valid evidence id.',
+      '"op_../../x" is not a valid operation id.',
+    ]);
+  });
 });
