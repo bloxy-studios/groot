@@ -30,6 +30,7 @@ import type {
 export const reactRouterAdapter: ScaffoldAdapter = {
   id: "react-router",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {

@@ -97,6 +97,16 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `packages/backend` (Convex) | — | Cloud dev deployment; no local port |
 | `packages/backend` (Supabase) | — | Local stack is Docker-managed on config.toml's 54321+ block, never started by groot — no declared port |
 
+The table is collision-free per slot, so `init` never needs to move a port. Same-slot alternatives share a default, so collisions arise when `groot add --path` grows a second scaffold. A **v1** workspace keeps the v1 rule: warn, and `groot doctor` flags it until someone changes a port. In a **v2** workspace (groot.json version 2), `add` allocates instead:
+
+- Every port the workspace's scaffolds and blueprint apps declare counts as claimed, including adopted apps without a scaffold entry.
+- The new scaffold keeps its framework default when that port is free; otherwise it gets the next free port above it (`core/ports.ts` `allocatePort`).
+- The stitch applies the result through the adapter's `portAssignment`. **dev-script** adapters get `--port <n>` in their `dev` script, replacing a template's own flag; this applies to Next.js, SvelteKit, TanStack Start, Astro, React Router, Nuxt and Vite, whose dev CLIs all take `--port` ([scaffold-flows.md](./scaffold-flows.md#dev-port-flags)). **source** adapters write `scaffold.port` into their listener (Elysia, Hono, Fastify).
+- A scaffold on its default port is left byte-identical. Adapters without a `portAssignment` keep the default and the warning. That covers Expo and bare React Native (Metro's port is coupled to the native app) and Tauri (its template couples Vite's `strictPort`, `tauri.conf.json`'s `devUrl` and the HMR port).
+- `groot.json` records the allocated port, so doctor's per-adapter port checks follow it.
+
+Runtime occupancy is a separate question from blueprint collisions. Verification never uses the declared ports: runtime and product-flow checks start apps on an OS-assigned ephemeral port. Doctor's "dev ports" check only compares declarations.
+
 ## Workspace conventions (what groot outputs)
 
 - **Bun end-to-end**: `bun install`, `bun run dev` (→ `turbo run dev`), single `bun.lock`.

@@ -30,6 +30,7 @@ import type {
 export const tanstackStartAdapter: ScaffoldAdapter = {
   id: "tanstack-start",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {

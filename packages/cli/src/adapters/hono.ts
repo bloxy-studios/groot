@@ -21,6 +21,7 @@ import { apiPortCheck } from "./elysia.ts";
 export const honoAdapter: ScaffoldAdapter = {
   id: "hono",
   slot: "api",
+  portAssignment: "source",
   command(ctx: AdapterContext): GeneratorCommand {
     return {
       argv: ["bunx", "create-hono@0.19", ctx.scaffold.path, "--template", "bun", "--pm", "bun"],

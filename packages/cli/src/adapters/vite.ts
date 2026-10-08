@@ -29,6 +29,7 @@ export const VITE_TEMPLATE = "react-ts";
 export const viteAdapter: ScaffoldAdapter = {
   id: "vite",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {

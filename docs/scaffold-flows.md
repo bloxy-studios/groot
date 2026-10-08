@@ -282,6 +282,22 @@ bunx supabase@2 init   # postCommand, cwd = packages/backend (after groot's writ
 - Env plumbing: two lines per frontend, `<prefix>SUPABASE_URL=` + `<prefix>SUPABASE_ANON_KEY=`, prefixed per framework exactly like the Convex names (§7); bare React Native gets the unprefixed pair.
 - Sources: <https://github.com/supabase/cli> (apps/cli-go/cmd/init.go, apps/cli-go/internal/init/init.go), <https://www.npmjs.com/package/supabase> (published 2.109.1 shim + optionalDependencies), plus a live run of the 2.109.1 binary (fresh dir / git repo / re-run / --force).
 
+## Dev port flags
+
+v2 port allocation for `groot add` ([architecture.md#port-allocation](./architecture.md#port-allocation)) depends on one fact per web framework: the dev CLI behind the template's `dev` script takes `--port <n>`. All verified 2026-10-08:
+
+| Framework | Template `dev` script | Port flag | Source |
+| --- | --- | --- | --- |
+| Next.js | `next dev` (± `--turbopack`) | `-p, --port` | <https://nextjs.org/docs/app/api-reference/cli/next> |
+| SvelteKit | `vite dev` | `--port` (Vite CLI) | <https://vite.dev/guide/cli> |
+| TanStack Start | `vite dev --port 3000` | the template's own flag, replaced | §10 above; Vite CLI |
+| Astro | `astro dev` | `--port` | <https://docs.astro.build/en/reference/cli-reference/> |
+| React Router | `react-router dev` | `--port` ("Specify port") | <https://reactrouter.com/api/other-api/dev> |
+| Nuxt | `nuxt dev` | `-p, --port=<port>` (default `NUXT_PORT \|\| NITRO_PORT \|\| PORT \|\| devServer.port`) | <https://nuxt.com/docs/4.x/api/commands/dev> |
+| Vite | `vite` | `--port` | <https://vite.dev/guide/cli> |
+
+Vite-based servers (SvelteKit, TanStack Start, React Router, Vite) still move up to the next free port at *runtime* if the assigned one is busy, unless `--strictPort` is set. groot treats that runtime occupancy separately from the blueprint and never adds `--strictPort`.
+
 ## Stitching reference
 
 The canonical "what does stitched output look like" spec is the diff between raw generator output and the same app inside Turborepo's official examples (`basic`, `with-svelte`, `kitchen-sink`): package renames, `@repo/*` deps with `workspace:*`, shared `typescript-config` extends, per-app ports in dev scripts, no nested lockfiles. See [architecture.md](./architecture.md#4-stitch) for the full operation list.

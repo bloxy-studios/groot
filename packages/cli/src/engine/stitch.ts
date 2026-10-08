@@ -8,9 +8,11 @@
 import { existsSync } from "node:fs";
 import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { ADAPTERS } from "../adapters/index.ts";
 import { backendEnvLines } from "./env-names.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { stitchLock } from "./locks.ts";
+import { findChoice } from "./matrix.ts";
 import { planToManifest } from "./plan.ts";
 import type { FrameworkId, Plan } from "./types.ts";
 
@@ -119,6 +121,43 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
     );
     await writeFile(path, rewritten, "utf8");
     notes.push(`${hono.path}/src/index.ts → dev port ${hono.port}`);
+  }
+  return notes;
+}
+
+/**
+ * Apply allocated dev ports (docs/architecture.md#port-allocation): a web
+ * scaffold whose port differs from its framework's default — `groot add`
+ * moved it off a claimed port in a v2 workspace — gets `--port <n>` in its
+ * `dev` script (replacing a template's own `--port`). Scaffolds on their
+ * default port are left byte-identical, so init output is unchanged. Source-
+ * assigned ports (Elysia/Hono/Fastify) are written by their own steps.
+ */
+export async function stitchDevPorts(plan: Plan): Promise<string[]> {
+  const notes: string[] = [];
+  for (const scaffold of plan.scaffolds) {
+    if (scaffold.port === null) continue;
+    if (ADAPTERS[scaffold.framework].portAssignment !== "dev-script") continue;
+    if (scaffold.port === findChoice(scaffold.slot, scaffold.framework)?.port) continue;
+    const path = join(plan.targetDir, scaffold.path, "package.json");
+    if (!existsSync(path)) continue;
+    const pkg = await readJson(path);
+    const scripts = (pkg.scripts ?? {}) as Record<string, string>;
+    const dev = scripts.dev;
+    if (dev === undefined) {
+      notes.push(
+        `${scaffold.path}/package.json: no dev script — dev port ${scaffold.port} not applied`,
+      );
+      continue;
+    }
+    const flag = /--port(?:=|\s+)\d+(?!\d)/;
+    const desired = flag.test(dev)
+      ? dev.replace(flag, `--port ${scaffold.port}`)
+      : `${dev} --port ${scaffold.port}`;
+    if (desired === dev) continue; // already applied
+    pkg.scripts = { ...scripts, dev: desired };
+    await writeJson(path, pkg);
+    notes.push(`${scaffold.path}/package.json → dev script serves on :${scaffold.port}`);
   }
   return notes;
 }
@@ -426,6 +465,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchAppNames(plan));
   push(await stitchLockfileHygiene(plan));
   push(await stitchHonoPort(plan));
+  push(await stitchDevPorts(plan));
   push(await stitchFastifyScripts(plan));
   push(await stitchMetroMonorepo(plan));
   push(await stitchSupabaseProjectId(plan));

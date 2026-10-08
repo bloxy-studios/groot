@@ -50,6 +50,7 @@ v2 keeps the v1 command set, flags, exit codes, and stdout/stderr routing. These
 | `groot.json` written by `init` | `version: 1` manifest | `version: 2` blueprint — a strict superset (`createdWith`, `conventions`, `scaffolds` keep their v1 meaning) | v1 CLIs reject version 2 files; pin `create-groot@1` to keep writing v1 |
 | `init --dry-run --json` and `add --dry-run --json` on fresh/v2 workspaces | v1 manifest | v2 blueprint | consumers of the v1 fields keep working; `version` checks must accept 2 |
 | `groot.json` reading (`add`, `doctor`, `--preset`) | version 1 only | versions 1 and 2; `add` writes back the version it found | — |
+| `groot add` dev-port collision in a **v2** workspace | warning; the new scaffold keeps the colliding default port | the new scaffold gets the next free port, applied to its `dev` script or source and recorded in `groot.json` (v1 workspaces and Metro/Tauri keep the warning — [architecture.md#port-allocation](./architecture.md#port-allocation)) | change the port back by hand; `groot doctor` then flags the collision as in v1 |
 | Reserved bare words for `bun create groot <word>` | `init`, `add`, `doctor` | also the v2 command names (see [v2-cli-spec.md](./v2-cli-spec.md#bare-word-routing)) | use `groot init <dir>` for such directory names |
 | Compiled binaries | load `.env`/`bunfig.toml` from the working directory | never do (security fix); child process trees are swept on exit | — |
 

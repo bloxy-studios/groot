@@ -18,7 +18,7 @@
 | Exact generator + recipe locks | partial (recipe locks via planner; generator resolution in progress) | registry resolver | — | lock records exact version + integrity; replay uses exact versions |
 | Plans with exact previews, preconditions, ownership, recovery limits | done | PlanBuilder, transforms | certified | planner tests |
 | Journaled apply/resume/rollback, writer lock, cancellation, idempotency | in progress | executor | — | crash-at-boundary, concurrent writer, SIGINT, stale-plan, rollback-conflict tests |
-| Dynamic ports + runtime occupancy | done (allocation + probes) | — | certified | port tests; verification on ephemeral ports |
+| Dynamic ports + runtime occupancy | done for `groot add` in v2 workspaces (allocation applied via dev-script `--port` / source); verification on ephemeral ports; re-allocating existing apps not implemented | — | experimental | unit tests (allocation matrix, `stitchDevPorts`); real E2E: `add next --path` next to a Next app serves on the allocated port |
 | Environment contracts (scope, sensitivity, storage; no public secrets) | done | — | certified | contract validation + structural.env tests |
 | Verification profiles + evidence (structural/build/runtime/product-flow) | done (engine); recipe checkers in progress | verify engine | — | evidence tied to revision; blocked/skipped truthful |
 | Managed instructions (AGENTS.md, CLAUDE.md shims, skills) + task context | done (core); command wiring pending | discovery | — | human text preserved; conflicts; budgets |

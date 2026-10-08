@@ -71,6 +71,7 @@ try {
 export const fastifyAdapter: ScaffoldAdapter = {
   id: "fastify",
   slot: "api",
+  portAssignment: "source",
   // generate shells out to `npm init -y`, and npm's project-root walk-up
   // hard-fails on the workspace's bun devEngines declaration (EBADDEVENGINES —
   // caught live in e2e scenario 4). Staging runs it under the OS tempdir with

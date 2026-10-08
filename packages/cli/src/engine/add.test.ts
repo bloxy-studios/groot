@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import type { BlueprintV2 } from "../core/contracts/blueprint.ts";
 import {
   allFrameworkIds,
   buildAddPlan,
@@ -16,6 +17,7 @@ import {
 import { EXIT, GrootError } from "./errors.ts";
 import { growScaffold } from "./generate.ts";
 import { type LoadedManifest, loadManifest } from "./manifest.ts";
+import { planToManifest } from "./plan.ts";
 import {
   type FrameworkId,
   MANIFEST_SCHEMA_URL,
@@ -75,6 +77,46 @@ async function workspace(
       )}\n`,
     );
   }
+  return { root, loaded: await loadManifest(root) };
+}
+
+/**
+ * The same workspace with groot.json written the way v2 init writes it (a
+ * version 2 blueprint), plus optional adopted apps that have no scaffold entry.
+ */
+async function workspaceV2(
+  scaffolds: PlannedScaffold[],
+  adoptedApps: readonly { readonly path: string; readonly port: number }[] = [],
+): Promise<{ root: string; loaded: LoadedManifest }> {
+  const { root } = await workspace(scaffolds);
+  const blueprint = planToManifest({
+    name: "grown",
+    targetDir: root,
+    createdWith: TEST_CREATED_WITH,
+    conventions: { packagesNamespace: "@repo" },
+    scaffolds,
+    options: {
+      install: false,
+      git: false,
+      dirConflict: "error",
+      keepFailed: false,
+      verbose: false,
+    },
+  }) as BlueprintV2;
+  const adopted = adoptedApps.map((app) => ({
+    id: basename(app.path),
+    path: app.path,
+    kind: "web" as const,
+    framework: null,
+    packageName: basename(app.path),
+    port: app.port,
+    origin: "adopted" as const,
+    entry: null,
+  }));
+  await writeFile(
+    join(root, "groot.json"),
+    `${JSON.stringify({ ...blueprint, apps: [...blueprint.apps, ...adopted] }, null, 2)}\n`,
+  );
   return { root, loaded: await loadManifest(root) };
 }
 
@@ -292,6 +334,97 @@ describe("resolveAddScaffold — occupancy matrix", () => {
     await mkdir(join(root, "apps/api"), { recursive: true });
     const { scaffold } = await resolveAddScaffold(loaded.manifest, root, "elysia", undefined);
     expect(scaffold.path).toBe("apps/api");
+  });
+});
+
+describe("resolveAddScaffold — v2 workspaces allocate dev ports", () => {
+  test("a colliding web port moves to the next free port, reported as a note", async () => {
+    const { root, loaded } = await workspaceV2([entryFor("next"), entryFor("hono")]);
+    const { scaffold, warnings, notes } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "next",
+      "apps/admin",
+      loaded.blueprint,
+    );
+    // 3000 is apps/web's, 3001 apps/api's.
+    expect(scaffold.port).toBe(3002);
+    expect(warnings).toEqual([]);
+    expect(notes).toEqual(["dev port 3000 is taken by apps/web → apps/admin gets 3002"]);
+  });
+
+  test("API scaffolds write their port into source, so any free port works", async () => {
+    const { root, loaded } = await workspaceV2([entryFor("elysia")]);
+    const { scaffold, warnings } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "hono",
+      "apps/gateway",
+      loaded.blueprint,
+    );
+    expect(scaffold.port).toBe(3002);
+    expect(warnings).toEqual([]);
+  });
+
+  test("ports claimed by blueprint apps without a scaffold entry count too", async () => {
+    const { root, loaded } = await workspaceV2([], [{ path: "apps/legacy", port: 3000 }]);
+    const { scaffold } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "next",
+      undefined,
+      loaded.blueprint,
+    );
+    expect(scaffold.port).toBe(3001);
+  });
+
+  test("a free default port is kept as is", async () => {
+    const { root, loaded } = await workspaceV2([entryFor("next")]);
+    const { scaffold, notes } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "astro",
+      "apps/docs",
+      loaded.blueprint,
+    );
+    expect(scaffold.port).toBe(4321);
+    expect(notes).toEqual([]);
+  });
+
+  test("template-coupled ports (Metro, Tauri) keep the default and warn, as in v1", async () => {
+    const { root, loaded } = await workspaceV2([entryFor("expo"), entryFor("tauri")]);
+    const rn = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "react-native",
+      "apps/companion",
+      loaded.blueprint,
+    );
+    expect(rn.scaffold.port).toBe(8081);
+    expect(rn.warnings[0]).toContain("8081");
+    const tauri = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "tauri",
+      "apps/studio",
+      loaded.blueprint,
+    );
+    expect(tauri.scaffold.port).toBe(1420);
+    expect(tauri.warnings[0]).toContain("1420");
+  });
+
+  test("v1 workspaces never re-allocate — the documented warning stays", async () => {
+    const { root, loaded } = await workspace([entryFor("next")]);
+    const { scaffold, warnings, notes } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "next",
+      "apps/admin",
+      loaded.blueprint,
+    );
+    expect(scaffold.port).toBe(3000);
+    expect(warnings[0]).toContain("3000");
+    expect(notes).toEqual([]);
   });
 });
 

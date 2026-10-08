@@ -6,6 +6,7 @@
  *     → context sync (human text preserved)
  *   + a deliberately crashed apply recovered with `groot resume`
  *   + stale plan refused · re-apply is a no-op · rollback refused after a human edit
+ *   + v2 `add` allocates a free dev port next to a colliding app and serves on it
  *
  * Real generators and real package installs — network required:
  *   GROOT_E2E=1 bun test v2-flow.e2e
@@ -16,6 +17,8 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ResultEnvelope } from "./core/contracts/envelope.ts";
+import { isPortFree } from "./core/ports.ts";
+import { startServer } from "./core/verify/server.ts";
 
 const e2e = process.env.GROOT_E2E === "1";
 const CLI = join(import.meta.dir, "index.ts");
@@ -215,6 +218,64 @@ describe.skipIf(!e2e)("Groot v2 acceptance flow (real generators + installs)", (
       expect(await readFile(join(root, "server/main.ts"), "utf8")).toContain('app.get("/health"');
       await contextSyncPreserves(root, "HUMAN: always run the health check before deploying.");
       expect(await git(root, ["diff", "--cached"])).toBe(stagedBefore);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "v2 add allocates a free dev port next to a colliding app, and the app serves on it",
+    async () => {
+      const base = await mkdtemp(join(tmpdir(), "groot-v2-ports-"));
+      const created = await groot(base, [
+        "init",
+        "ports",
+        "--web",
+        "next",
+        "--mobile",
+        "none",
+        "--desktop",
+        "none",
+        "--api",
+        "hono",
+        "--backend",
+        "none",
+        "--yes",
+      ]);
+      expect(created.exitCode).toBe(0);
+      const root = join(base, "ports");
+
+      // A second Next app defaults to 3000 (apps/web's); 3001 is apps/api's.
+      const added = await groot(root, ["add", "next", "--path", "apps/admin"]);
+      expect(added.exitCode).toBe(0);
+      expect(added.stdout).toContain("dev port 3000 is taken by apps/web → apps/admin gets 3002");
+      const blueprint = JSON.parse(await readFile(join(root, "groot.json"), "utf8")) as {
+        apps: { path: string; port: number | null }[];
+      };
+      const portOf = (path: string) => blueprint.apps.find((app) => app.path === path)?.port;
+      expect([portOf("apps/web"), portOf("apps/api"), portOf("apps/admin")]).toEqual([
+        3000, 3001, 3002,
+      ]);
+      const admin = JSON.parse(await readFile(join(root, "apps/admin/package.json"), "utf8"));
+      expect(admin.scripts.dev).toMatch(/--port 3002$/);
+      expect((await groot(root, ["doctor"])).exitCode).toBe(0);
+
+      // Serve for real on the allocated port. Runtime occupancy is checked, not assumed.
+      if (!isPortFree(3002))
+        throw new Error("port 3002 is busy on this machine — free it and re-run");
+      const server = await startServer({
+        argv: ["bun", "run", "dev"],
+        cwd: join(root, "apps/admin"),
+        env: process.env,
+        port: 3002,
+        readyPath: "/",
+        readyTimeoutMs: 180_000,
+        secrets: [],
+      });
+      try {
+        expect((await fetch(`${server.baseUrl}/`)).status).toBe(200);
+      } finally {
+        await server.stop();
+      }
     },
     TIMEOUT,
   );

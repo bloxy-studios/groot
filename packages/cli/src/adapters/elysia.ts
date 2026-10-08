@@ -89,6 +89,7 @@ bun run start  # run the production bundle
 export const elysiaAdapter: ScaffoldAdapter = {
   id: "elysia",
   slot: "api",
+  portAssignment: "source",
   command(): null {
     return null;
   },

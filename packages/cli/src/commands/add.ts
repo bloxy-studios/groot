@@ -42,11 +42,12 @@ async function runAdd(args: {
       "Add capabilities with `groot plan add <capability>`, or create a monorepo with `groot init <dir>`.",
     );
   }
-  const { scaffold, warnings } = await resolveAddScaffold(
+  const { scaffold, warnings, notes } = await resolveAddScaffold(
     loaded.manifest,
     loaded.workspaceRoot,
     args.framework,
     args.path,
+    loaded.blueprint,
   );
   const rootName = await readRootPackageName(loaded.workspaceRoot);
   const plan = buildAddPlan(loaded, scaffold, rootName, {
@@ -62,6 +63,9 @@ async function runAdd(args: {
   write(`${pc.dim("workspace")}  ${loaded.workspaceRoot}`);
   write(`${pc.dim("growing")}    ${describeScaffold(scaffold)}`);
   write();
+  for (const note of notes) {
+    write(`${pc.green("●")} ${note}`);
+  }
   for (const warning of warnings) {
     write(`${pc.yellow("●")} ${warning}`);
   }

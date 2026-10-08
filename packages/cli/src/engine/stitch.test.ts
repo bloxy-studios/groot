@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { buildPlan } from "./plan.ts";
-import { stitch, stitchBackendLinks, stitchTrustedDependencies } from "./stitch.ts";
+import { stitch, stitchBackendLinks, stitchDevPorts, stitchTrustedDependencies } from "./stitch.ts";
 import type { Plan, Slot } from "./types.ts";
 
 /** Build a fixture tree simulating raw post-generate output, then stitch it. */
@@ -339,6 +339,104 @@ describe("stitchFastifyScripts (bun-first scripts — scaffold-flows.md#15)", ()
     const untouched = JSON.parse(await readFile(path, "utf8"));
     expect(untouched.scripts.dev).toBe("node --watch dist/server.js");
     expect(untouched.scripts.deploy).toBe("flyctl deploy");
+  });
+});
+
+describe("stitchDevPorts (allocated ports — architecture.md#port-allocation)", () => {
+  /** Scaffolds as `groot add` leaves them in a v2 workspace after allocation. */
+  async function grown(): Promise<{ plan: Plan; root: string }> {
+    const root = await mkdtemp(join(tmpdir(), "groot-devports-"));
+    const pkg = async (path: string, scripts: Record<string, string>): Promise<void> => {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(
+        join(root, path, "package.json"),
+        `${JSON.stringify({ name: path.split("/")[1], private: true, scripts }, null, 2)}\n`,
+      );
+    };
+    await pkg("apps/web", { dev: "next dev --turbopack" });
+    await pkg("apps/admin", { dev: "next dev --turbopack", build: "next build" });
+    await pkg("apps/shop", { dev: "vite dev --port 3000" });
+    await pkg("apps/docs", { dev: "astro dev" });
+    await pkg("apps/lab", { build: "vite build" });
+    const plan: Plan = {
+      name: "grown",
+      targetDir: root,
+      createdWith: "create-groot@0.0.0-test",
+      conventions: { packagesNamespace: "@repo" },
+      scaffolds: [
+        {
+          slot: "web",
+          framework: "next",
+          path: "apps/web",
+          generator: "create-next-app@16",
+          port: 3000,
+        },
+        {
+          slot: "web",
+          framework: "next",
+          path: "apps/admin",
+          generator: "create-next-app@16",
+          port: 3002,
+        },
+        {
+          slot: "web",
+          framework: "tanstack-start",
+          path: "apps/shop",
+          generator: "@tanstack/cli@0.69",
+          port: 3003,
+        },
+        {
+          slot: "web",
+          framework: "astro",
+          path: "apps/docs",
+          generator: "create-astro@5",
+          port: 4321,
+        },
+        {
+          slot: "web",
+          framework: "vite",
+          path: "apps/lab",
+          generator: "create-vite@9",
+          port: 5174,
+        },
+      ],
+      options: {
+        install: false,
+        git: false,
+        dirConflict: "error",
+        keepFailed: false,
+        verbose: false,
+      },
+    };
+    return { plan, root };
+  }
+  const devOf = async (root: string, path: string): Promise<string | undefined> =>
+    JSON.parse(await readFile(join(root, path, "package.json"), "utf8")).scripts.dev;
+
+  test("an allocated port reaches the dev script; framework defaults stay untouched", async () => {
+    const { plan, root } = await grown();
+    const notes = await stitchDevPorts(plan);
+    expect(notes).toEqual([
+      "apps/admin/package.json → dev script serves on :3002",
+      "apps/shop/package.json → dev script serves on :3003",
+      "apps/lab/package.json: no dev script — dev port 5174 not applied",
+    ]);
+    expect(await devOf(root, "apps/admin")).toBe("next dev --turbopack --port 3002");
+    expect(await devOf(root, "apps/shop")).toBe("vite dev --port 3003");
+    expect(await devOf(root, "apps/web")).toBe("next dev --turbopack");
+    expect(await devOf(root, "apps/docs")).toBe("astro dev");
+    // Other scripts survive the rewrite.
+    const admin = JSON.parse(await readFile(join(root, "apps/admin/package.json"), "utf8"));
+    expect(admin.scripts.build).toBe("next build");
+  });
+
+  test("is idempotent — a second pass changes nothing", async () => {
+    const { plan, root } = await grown();
+    await stitchDevPorts(plan);
+    const before = await readFile(join(root, "apps/admin/package.json"), "utf8");
+    const again = await stitchDevPorts(plan);
+    expect(await readFile(join(root, "apps/admin/package.json"), "utf8")).toBe(before);
+    expect(again.filter((note) => note.includes("serves on"))).toEqual([]);
   });
 });
 
