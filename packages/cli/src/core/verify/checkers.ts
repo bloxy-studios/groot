@@ -106,8 +106,8 @@ async function envCheck({ root, blueprint }: CheckInput): Promise<CheckOutcome> 
       nextStep: missing
         .map((entry) =>
           entry.generate === "random-secret"
-            ? `${entry.name}: re-apply the plan that declared it (Groot generates local secrets) or set it in ${entry.storage}`
-            : `${entry.name}: set it in ${entry.storage} (${entry.description})`,
+            ? `set ${entry.name} in ${entry.storage}, or re-apply the plan that declared it (Groot generates local secrets)`
+            : `set ${entry.name} in ${entry.storage} (${entry.description})`,
         )
         .join("; "),
       details: { missing: missing.map((entry) => entry.name) },

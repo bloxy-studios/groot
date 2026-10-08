@@ -59,7 +59,7 @@ function expectedOutline(app: string, src: string, entry: string, gitignore: str
     `edit ${a("package.json")} json`,
     `deps ${app} drizzle-orm@0.45.3 drizzle-kit@0.31.11:dev`,
     `edit ${gitignore} lines`,
-    `edit ${a(".env.example")} env`,
+    `edit ${a(".env.example")} env deferred`,
     `edit ${a(".env.local")} env deferred`,
     `write ${s("auth.ts")}`,
     `write ${s("db/auth-schema.ts")}`,
@@ -76,7 +76,7 @@ function expectedOutline(app: string, src: string, entry: string, gitignore: str
     `edit ${a(entry)} source-anchor`,
     `edit ${a("package.json")} json deferred`,
     `deps ${app} better-auth@1.7.7`,
-    `edit ${a(".env.example")} env`,
+    `edit ${a(".env.example")} env deferred`,
     `edit ${a(".env.local")} env deferred`,
     `secret ${a(".env.local")} BETTER_AUTH_SECRET`,
   ];
