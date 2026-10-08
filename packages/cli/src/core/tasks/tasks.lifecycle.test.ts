@@ -174,6 +174,44 @@ describe("task lifecycle (simulated runner, real git)", () => {
   );
 
   test(
+    "a conflicting target branch makes integration `conflicted`: merge aborted, cleaned up, target untouched",
+    async () => {
+      // Arrange — the task fixes add(); meanwhile main rewrites the same line.
+      const project = await tempProject();
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const ctx = project.context();
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        accept: ["bun test"],
+      });
+      await runTask(ctx, project.root, task.id, { grace: GRACE });
+      await reviewTask(ctx, project.root, task.id, { approve: true });
+      project.write("src/math.ts", FIXED_MATH.replace("a + b", "b + a"));
+      await project.git("commit", "-q", "-am", "main: rewrite add");
+      const before = (await project.git("rev-parse", "main")).trim();
+
+      // Act
+      const conflicted = await integrateTask(ctx, project.root, task.id);
+
+      // Assert
+      expect(conflicted.status).toBe("blocked");
+      expect(conflicted.integration).toMatchObject({
+        status: "conflicted",
+        commit: null,
+        evidence: [],
+      });
+      expect(conflicted.statusReason).toContain("src/math.ts");
+      expect((await project.git("rev-parse", "main")).trim()).toBe(before);
+      expect((await project.git("status", "--porcelain")).trim()).toBe("");
+      expect(await project.git("branch", "--list", `groot/integrate/${task.id}`)).toBe("");
+      expect(await project.git("worktree", "list")).not.toContain(`integrate-${task.id}`);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "ownership violations and secret-looking additions are reported by the review",
     async () => {
       // Arrange

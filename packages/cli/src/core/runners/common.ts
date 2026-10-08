@@ -159,10 +159,15 @@ export function startRun(
         },
       });
       const outcome = parser.finish(await supervised.done);
+      // Final message and error text are persisted in task.json — redact
+      // env-derived secrets too, not just credential-shaped patterns.
       return {
         ...outcome,
-        // The final message is persisted in task.json — redact env-derived secrets too.
         finalMessage: outcome.finalMessage === null ? null : redact(outcome.finalMessage, secrets),
+        error:
+          outcome.error === null
+            ? null
+            : { ...outcome.error, message: redact(outcome.error.message, secrets) },
         notes: [...spec.notes, ...outcome.notes],
       };
     } finally {

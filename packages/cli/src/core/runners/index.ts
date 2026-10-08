@@ -5,7 +5,7 @@
  */
 import type { RunnerCapabilities, RunnerId } from "../contracts/task.ts";
 import { GrootV2Error } from "../errors.ts";
-import { claudeAdapter } from "./claude.ts";
+import { assertClaudeEffort, claudeAdapter } from "./claude.ts";
 import { codexAdapter } from "./codex.ts";
 import type { RunnerAdapter } from "./types.ts";
 
@@ -22,6 +22,18 @@ export function getRunner(id: RunnerId): RunnerAdapter {
     });
   }
   return adapter;
+}
+
+/**
+ * Validate a reasoning effort for a runner BEFORE any work is claimed (an
+ * invalid value would otherwise surface only when argv is built).
+ */
+export function assertEffort(runner: RunnerId, effort: string): string {
+  if (runner === "claude-code") return assertClaudeEffort(effort);
+  if (!/^[a-z]{2,16}$/.test(effort)) {
+    throw new GrootV2Error("GROOT_E_USAGE", `Invalid Codex reasoning effort "${effort}".`);
+  }
+  return effort;
 }
 
 /** Discover every supported runner (in parallel); each result is contract-validated. */

@@ -186,6 +186,14 @@ describe("groot task / groot review (process-level, simulated runner)", () => {
         "--accept",
         "bun test && rm -rf /",
       ]);
+      const claudeTask = envelopeOf(await runCli(project, ["task", "create", "y", "--json"]));
+      const badEffort = await runCli(project, [
+        "task",
+        "run",
+        claudeTask.data.id as string,
+        "--effort",
+        "ultra",
+      ]);
 
       // Assert
       expect(blocked.exitCode).toBe(7);
@@ -197,6 +205,10 @@ describe("groot task / groot review (process-level, simulated runner)", () => {
       expect(neither.stderr).toContain("Give a task id or --ready");
       expect(shell.exitCode).toBe(2);
       expect(shell.stderr).toContain("without a shell");
+      // An invalid effort is refused before any worktree or runner is touched.
+      expect(badEffort.exitCode).toBe(2);
+      expect(badEffort.stderr).toContain('Unknown Claude effort "ultra"');
+      expect(project.fakes.records()).toEqual([]);
     },
     TIMEOUT,
   );

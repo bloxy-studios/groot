@@ -35,6 +35,11 @@ export class AttemptLog {
     mkdirSync(dirname(path), { recursive: true });
   }
 
+  /** Redact text with the run's known secrets plus credential patterns. */
+  scrub(text: string): string {
+    return redact(text, this.secrets);
+  }
+
   /** One provider output line (already a JSON document, or raw text). */
   line(text: string): void {
     this.append(redact(text, this.secrets));
@@ -270,7 +275,8 @@ export function supervise(options: SuperviseOptions): Supervised {
     void stop(`wall time of ${options.wallTimeMs} ms exceeded`);
   }, options.wallTimeMs);
   const onAbort = (): void => {
-    cancelled = true;
+    // An abort that lands after the runner already exited doesn't relabel the run.
+    if (!exited) cancelled = true;
     void stop("cancelled");
   };
   options.signal.addEventListener("abort", onAbort, { once: true });
@@ -302,7 +308,7 @@ export function supervise(options: SuperviseOptions): Supervised {
       timedOut,
       cancelled,
       spawnError: null,
-      stderrTail: redact(stderr, []),
+      stderrTail: log.scrub(stderr),
       durationMs: Math.round(performance.now() - started),
       survivors,
       leftover,

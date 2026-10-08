@@ -22,7 +22,7 @@ import type { Task, TaskStatus } from "../contracts/task.ts";
 import { GrootV2Error, toErrorInfo } from "../errors.ts";
 import { nowIso } from "../ids.ts";
 import { RUNNER_LABEL } from "../runners/common.ts";
-import { getRunner } from "../runners/index.ts";
+import { assertEffort, getRunner } from "../runners/index.ts";
 import type { RunnerBlock, RunnerResult } from "../runners/types.ts";
 import type { CoreContext } from "../runtime.ts";
 import { runAcceptance } from "./acceptance.ts";
@@ -459,6 +459,7 @@ export async function runTask(
   const repo = await repositoryRoot(root, ctx.env);
   const task = await reconcile(repo, await readTask(repo, id));
   if (!RUNNABLE.includes(task.status) || blockedAfterReview(task)) throw stateError(task, "run");
+  if (options.effort) assertEffort(task.runner, options.effort);
   return execute(ctx, repo, task, options);
 }
 
@@ -477,5 +478,6 @@ export async function resumeTask(
       hint: `Start it with \`groot task run ${id}\`.`,
     });
   }
+  if (options.effort) assertEffort(task.runner, options.effort);
   return execute(ctx, repo, task, options);
 }
