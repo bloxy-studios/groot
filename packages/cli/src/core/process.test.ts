@@ -5,7 +5,9 @@
  * POSIX only (process groups); skipped on Windows.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isProcessGroupAlive, runProcess, sweepProcessGroup } from "./process.ts";
 
 const posix = process.platform !== "win32";
@@ -78,6 +80,37 @@ describe.skipIf(!posix)("runProcess group supervision", () => {
 
     // Assert
     expect(groupMembers(proc.pid)).toEqual([]);
+  }, 30_000);
+
+  test("a forced exit (second Ctrl-C) SIGKILLs groups still running, SIGTERM-ignoring ones included", async () => {
+    // Arrange — a host process starts a SIGTERM-ignoring command, then exits
+    // mid-run the way runV2Command's second SIGINT does (process.exit).
+    const dir = await mkdtemp(join(tmpdir(), "groot-forced-exit-"));
+    const pidFile = join(dir, "pgid");
+    const host = `
+      import { runProcess } from ${JSON.stringify(join(import.meta.dir, "process.ts"))};
+      void runProcess({
+        argv: ["sh", "-c", "trap '' TERM; echo $$ > ${pidFile}; sleep 30 & wait"],
+        cwd: ${JSON.stringify(dir)},
+        timeoutMs: 60_000,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!(await Bun.file(${JSON.stringify(pidFile)}).exists()) && Date.now() < deadline) {
+        await Bun.sleep(20);
+      }
+      process.exit(130);
+    `;
+
+    // Act
+    const proc = Bun.spawn([process.execPath, "-e", host], { stdout: "ignore", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const pgid = Number((await readFile(pidFile, "utf8")).trim());
+    const deadline = Date.now() + 2000;
+    while (isProcessGroupAlive(pgid) && Date.now() < deadline) await Bun.sleep(25);
+
+    // Assert
+    expect(exitCode).toBe(130);
+    expect(groupMembers(pgid)).toEqual([]);
   }, 30_000);
 
   test("captured output is redacted with known secrets", async () => {

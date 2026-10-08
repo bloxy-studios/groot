@@ -5,7 +5,7 @@
  * the dev script spawned — when the check ends.
  */
 
-import { killTree } from "../process.ts";
+import { killTree, trackProcessGroup } from "../process.ts";
 import { redact } from "../redact.ts";
 
 export interface ServerOptions {
@@ -38,6 +38,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     stderr: "pipe",
     detached: process.platform !== "win32",
   });
+  const untrack = trackProcessGroup(proc.pid);
   let log = "";
   const pump = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
     const decoder = new TextDecoder();
@@ -60,6 +61,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       if (!exited) killTree(proc.pid, "SIGKILL");
       // Sweep the group even after the leader exits (scripts may leave children).
       killTree(proc.pid, "SIGKILL");
+      untrack();
       await Promise.race([pumps, sleep(1000)]);
     }
     return redact(log, options.secrets);

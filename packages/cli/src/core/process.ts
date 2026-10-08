@@ -75,6 +75,30 @@ export function killTree(pid: number, signal: NodeJS.Signals): void {
 }
 
 /**
+ * Process groups started by groot and not yet swept. A forced exit — a second
+ * Ctrl-C calls process.exit while a child still runs — skips every pending
+ * sweep, so the exit hook SIGKILLs these groups synchronously and nothing
+ * outlives groot as an orphan (SIGTERM-ignoring members included).
+ */
+const liveGroups = new Set<number>();
+let exitHookInstalled = false;
+
+/** Track a detached child's process group until it is swept; returns the untrack function. */
+export function trackProcessGroup(pgid: number): () => void {
+  if (!isPosix) return () => {};
+  liveGroups.add(pgid);
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.on("exit", () => {
+      for (const group of liveGroups) killTree(group, "SIGKILL");
+    });
+  }
+  return () => {
+    liveGroups.delete(pgid);
+  };
+}
+
+/**
  * True while any process in group `pgid` still exists. EPERM means a member
  * belongs to another user — we could not signal it anyway, so it does not
  * count as ours to wait for.
@@ -256,6 +280,7 @@ export async function runProcess(options: SpawnOptions): Promise<SpawnResult> {
     };
   }
 
+  const untrack = trackProcessGroup(proc.pid);
   let timedOut = false;
   let aborted = false;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -294,6 +319,7 @@ export async function runProcess(options: SpawnOptions): Promise<SpawnResult> {
   options.signal?.removeEventListener("abort", onAbort);
   // Reap anything the child left running in its group (servers, `cmd &` jobs).
   await sweepProcessGroup(proc.pid, grace);
+  untrack();
   // The pipes close once the last writer is gone; bound the wait in case a
   // process that escaped the group (its own setsid) still holds them.
   const drained = await settledWithin(Promise.all([stdout.done, stderr.done]), grace);
