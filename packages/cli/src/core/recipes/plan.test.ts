@@ -4,7 +4,7 @@
  * human code kept intact, lock records that match what lands on disk, and
  * secrets that never enter a plan.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { OperationPlan, type PlannedAction } from "../contracts/plan.ts";
@@ -14,10 +14,19 @@ import { joinRel } from "../fs/paths.ts";
 import { removeRegion } from "../transforms/index.ts";
 import { SCHEMA_TS } from "./data/templates.ts";
 import { materializePlan } from "./testing/apply.ts";
-import { adoptedApp, adoptedMain, monorepo, planBoth, singleApp } from "./testing/fixtures.ts";
+import {
+  adoptedApp,
+  adoptedMain,
+  monorepo,
+  planBoth,
+  removeScratchDirs,
+  singleApp,
+} from "./testing/fixtures.ts";
 import { ADOPTED_AGENTS, CREATE_HONO_INDEX } from "./testing/projects.ts";
 
 const TIMEOUT = 60_000;
+
+afterAll(removeScratchDirs);
 
 function outline(action: PlannedAction): string {
   switch (action.type) {

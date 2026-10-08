@@ -4,9 +4,8 @@
  * cleanup, secret redaction in stored artifacts, and a product flow that can
  * never pass against a server that answers "yes" to everything.
  */
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BlueprintV2 } from "../contracts/blueprint.ts";
 import type { VerificationContract, VerificationProfile } from "../contracts/common.ts";
@@ -16,13 +15,15 @@ import { appFixture, blueprintFixture } from "../test-fixtures.ts";
 import { runVerification } from "../verify/engine.ts";
 import { registerRecipeCheckers } from "./index.ts";
 import { materializePlan } from "./testing/apply.ts";
-import { planBoth, singleApp } from "./testing/fixtures.ts";
+import { planBoth, removeScratchDirs, scratchDir, singleApp } from "./testing/fixtures.ts";
 import { lockWith } from "./testing/plan.ts";
 import { writeFiles } from "./testing/projects.ts";
 
 registerRecipeCheckers();
 
 const TIMEOUT = 90_000;
+
+afterAll(removeScratchDirs);
 
 function contract(
   checker: string,
@@ -94,7 +95,7 @@ console.log("migrated");
 function fakeApp(
   options: { home?: number; authOk?: number; rows?: number; server?: string } = {},
 ): string {
-  const root = mkdtempSync(join(tmpdir(), "groot-fake-app-"));
+  const root = scratchDir("fake-app");
   writeFiles(root, {
     "package.json": JSON.stringify({
       name: "fake-api",
@@ -270,14 +271,14 @@ describe("build.bundle", () => {
     "bundles the entry's whole import graph, and fails on an import that doesn't resolve",
     async () => {
       // Arrange
-      const ok = mkdtempSync(join(tmpdir(), "groot-bundle-ok-"));
+      const ok = scratchDir("bundle-ok");
       writeFiles(ok, {
         "package.json": JSON.stringify({ name: "bundle-ok" }),
         "src/index.ts":
           'import { greet } from "./lib";\nexport default { fetch: () => new Response(greet()) };\n',
         "src/lib.ts": 'export const greet = (): string => "hi";\n',
       });
-      const broken = mkdtempSync(join(tmpdir(), "groot-bundle-broken-"));
+      const broken = scratchDir("bundle-broken");
       writeFiles(broken, {
         "package.json": JSON.stringify({ name: "bundle-broken" }),
         "src/index.ts": 'import { greet } from "./missing";\nexport default greet;\n',

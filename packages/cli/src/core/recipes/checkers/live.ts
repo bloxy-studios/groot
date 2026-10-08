@@ -96,6 +96,74 @@ async function driveThenStop(
   return { result, log: await server.stop() };
 }
 
+function migrateLog(migration: MigrationReport): ArtifactInput {
+  return { name: "migrate.log", kind: "log", content: migration.log };
+}
+
+function migrationFailure(
+  tool: string,
+  unit: UnitUnderTest,
+  migration: MigrationReport,
+): CheckOutcome {
+  return {
+    status: "fail",
+    summary: `migrations: ${migration.problem}`,
+    method: {
+      kind: "command",
+      tool,
+      command: { argv: [...migration.argv], cwd: unit.path, exitCode: migration.exitCode },
+    },
+    details: { migration: migrationDetails(migration) },
+    artifacts: [migrateLog(migration)],
+    nextStep: "Fix the migration error in migrate.log, then re-run groot verify.",
+  };
+}
+
+function startFailure(
+  method: Evidence["method"],
+  migration: MigrationReport,
+  error: unknown,
+): CheckOutcome {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    status: "fail",
+    summary: `the server did not start: ${firstLine(message)}`,
+    method,
+    details: { command: method.command?.argv, migration: migrationDetails(migration) },
+    artifacts: [migrateLog(migration), { name: "server.log", kind: "log", content: message }],
+    nextStep: "See server.log for the startup error.",
+  };
+}
+
+function liveOutcome(
+  method: Evidence["method"],
+  run: LiveRun,
+  driven: { result: LiveResult; log: string },
+): CheckOutcome {
+  const { result, log } = driven;
+  return {
+    status: result.status,
+    summary: result.summary,
+    method,
+    details: {
+      command: run.argv,
+      port: run.environment.port,
+      env: [...CHECK_ENV_NAMES],
+      migration: migrationDetails(run.migration),
+      bootMs: run.bootMs,
+      ...result.details,
+    },
+    artifacts: [
+      migrateLog(run.migration),
+      ...(result.artifacts ?? []),
+      { name: "server.log", kind: "log", content: log },
+    ],
+    limitations: [...baseLimitations(run.environment.port), ...(result.limitations ?? [])],
+    secrets: [run.environment.secret, ...(result.secrets ?? [])],
+    nextStep: result.nextStep ?? null,
+  };
+}
+
 async function runLive(
   input: CheckInput,
   tool: string,
@@ -109,23 +177,11 @@ async function runLive(
     tool,
     command: { argv, cwd: unit.path, exitCode: null },
   };
+  // Every outcome is redacted with the throwaway secret, including the failure paths.
   const secrets = [environment.secret];
   const migration = await runMigrations(input.ctx, unit, environment);
-  const migrateLog: ArtifactInput = { name: "migrate.log", kind: "log", content: migration.log };
   if (migration.problem !== null) {
-    return cancelledOr(input, {
-      status: "fail",
-      summary: `migrations: ${migration.problem}`,
-      method: {
-        kind: "command",
-        tool,
-        command: { argv: [...migration.argv], cwd: unit.path, exitCode: migration.exitCode },
-      },
-      details: { migration: migrationDetails(migration) },
-      artifacts: [migrateLog],
-      secrets,
-      nextStep: "Fix the migration error in migrate.log, then re-run groot verify.",
-    });
+    return cancelledOr(input, { ...migrationFailure(tool, unit, migration), secrets });
   }
   const started = performance.now();
   let server: RunningServer;
@@ -141,41 +197,11 @@ async function runLive(
       signal: input.ctx.signal,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return cancelledOr(input, {
-      status: "fail",
-      summary: `the server did not start: ${firstLine(message)}`,
-      method,
-      details: { command: argv, migration: migrationDetails(migration) },
-      artifacts: [migrateLog, { name: "server.log", kind: "log", content: message }],
-      secrets,
-      nextStep: "See server.log for the startup error.",
-    });
+    return cancelledOr(input, { ...startFailure(method, migration, error), secrets });
   }
   const bootMs = Math.round(performance.now() - started);
   const run: LiveRun = { unit, environment, migration, baseUrl: server.baseUrl, argv, bootMs };
-  const { result, log } = await driveThenStop(server, run, body);
-  return cancelledOr(input, {
-    status: result.status,
-    summary: result.summary,
-    method,
-    details: {
-      command: argv,
-      port: environment.port,
-      env: [...CHECK_ENV_NAMES],
-      migration: migrationDetails(migration),
-      bootMs,
-      ...result.details,
-    },
-    artifacts: [
-      migrateLog,
-      ...(result.artifacts ?? []),
-      { name: "server.log", kind: "log", content: log },
-    ],
-    limitations: [...baseLimitations(environment.port), ...(result.limitations ?? [])],
-    secrets: [...secrets, ...(result.secrets ?? [])],
-    nextStep: result.nextStep ?? null,
-  });
+  return cancelledOr(input, liveOutcome(method, run, await driveThenStop(server, run, body)));
 }
 
 /** Run `body` against the unit's live server; every precondition failure is reported, never hidden. */

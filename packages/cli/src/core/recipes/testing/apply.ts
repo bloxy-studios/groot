@@ -66,13 +66,21 @@ async function applyDeps(root: string, action: DepsAction): Promise<void> {
   write(root, path, applyEdit(read(root, path), { kind: "json", ops }, path));
 }
 
-/** Generates the secret locally; an already-assigned name is left untouched. */
+/**
+ * Generates the secret locally. A name that already has a value is left
+ * untouched; an empty `NAME=` placeholder line is filled in place.
+ */
 function applySecret(root: string, action: SecretAction): string | null {
   const current = read(root, action.path);
   const assigned = new RegExp(`^\\s*(?:export\\s+)?${action.name}\\s*=\\s*\\S`, "m");
   if (current !== null && assigned.test(current)) return null;
   const value = randomBytes(32).toString("base64url");
-  write(root, action.path, addEnvEntries(current, [{ name: action.name, value, comment: null }]));
+  const empty = new RegExp(`^(\\s*(?:export\\s+)?${action.name}\\s*=)\\s*$`, "m");
+  const next =
+    current !== null && empty.test(current)
+      ? current.replace(empty, (_line, prefix: string) => `${prefix}${value}`)
+      : addEnvEntries(current, [{ name: action.name, value, comment: null }]);
+  write(root, action.path, next);
   return value;
 }
 

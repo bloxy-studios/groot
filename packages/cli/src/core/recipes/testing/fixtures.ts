@@ -4,7 +4,7 @@
  * check-ignore and dirty-path detection are real) plus the blueprint app and
  * observation a planner would hand to the recipes.
  */
-import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BlueprintApp, BlueprintV2 } from "../../contracts/blueprint.ts";
@@ -31,8 +31,17 @@ export interface PlanningFixture {
 
 export const BOTH: readonly Recipe[] = [dataDrizzleSqlite, authBetterAuth];
 
-function scratch(name: string): string {
-  return mkdtempSync(join(tmpdir(), `groot-recipe-${name}-`));
+const created: string[] = [];
+
+/** A fresh temporary directory, removed by removeScratchDirs() (call it from afterAll). */
+export function scratchDir(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `groot-recipe-${name}-`));
+  created.push(dir);
+  return dir;
+}
+
+export function removeScratchDirs(): void {
+  for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
 }
 
 async function fixture(
@@ -50,7 +59,7 @@ async function fixture(
 
 /** create-hono single app at the project root (entry src/index.ts, Bun's default port). */
 export async function singleApp(edit?: (root: string) => void): Promise<PlanningFixture> {
-  const root = scratch("single");
+  const root = scratchDir("single");
   writeCreateHonoApp(root, "app");
   edit?.(root);
   commitAll(root);
@@ -66,7 +75,7 @@ export async function singleApp(edit?: (root: string) => void): Promise<Planning
 
 /** Bun workspace with apps/api from create-hono. */
 export async function monorepo(): Promise<PlanningFixture> {
-  const root = scratch("mono");
+  const root = scratchDir("mono");
   writeWorkspaceRoot(root, "mono");
   writeCreateHonoApp(join(root, "apps/api"), "api");
   commitAll(root);
@@ -86,7 +95,7 @@ export const DIRTY_ROUTE = 'api.get("/version", (c) => c.text("0.3.0"));';
 export async function adoptedApp(
   options: { dirty: boolean } = { dirty: false },
 ): Promise<PlanningFixture> {
-  const root = scratch("adopted");
+  const root = scratchDir("adopted");
   writeAdoptedProject(root);
   commitAll(root);
   if (options.dirty) {

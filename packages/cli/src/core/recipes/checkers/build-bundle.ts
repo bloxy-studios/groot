@@ -11,7 +11,7 @@
 import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProcess, tail } from "../../process.ts";
+import { runProcess, type SpawnResult, tail } from "../../process.ts";
 import type { CheckInput, CheckOutcome } from "../../verify/engine.ts";
 import {
   blockedOnInstall,
@@ -31,6 +31,49 @@ function outputSize(dir: string): { files: number; bytes: number } {
   return { files: files.length, bytes: files.reduce((sum, path) => sum + statSync(path).size, 0) };
 }
 
+function bundleOutcome(
+  unit: UnitUnderTest,
+  entry: string,
+  result: SpawnResult,
+  size: { files: number; bytes: number },
+): CheckOutcome {
+  const log = `${result.stdout}\n${result.stderr}`;
+  // The temporary output path is meaningless in evidence; record a stable placeholder.
+  const argv = ["bun", "build", entry, "--target", "bun", "--outdir", "<temporary directory>"];
+  const method = {
+    kind: "command" as const,
+    tool: TOOL,
+    command: { argv, cwd: unit.path, exitCode: result.exitCode },
+  };
+  const artifacts = [{ name: "bundle.log", kind: "log" as const, content: log }];
+  if (result.aborted) {
+    return {
+      status: "skipped",
+      summary: "bundle cancelled",
+      method,
+      artifacts,
+      reason: "cancelled",
+    };
+  }
+  if (result.exitCode !== 0) {
+    return {
+      status: "fail",
+      summary: `bun build failed for ${entry} (exit ${result.exitCode ?? result.signal}): ${tail(log, 3)}`,
+      method,
+      artifacts,
+      nextStep: "Fix the import or syntax error shown in bundle.log.",
+    };
+  }
+  return {
+    status: "pass",
+    summary: `bun build bundled ${entry} for the bun target — every import resolved (${size.files} file(s), ${Math.round(size.bytes / 1024)} KiB, ${result.durationMs} ms)`,
+    method,
+    artifacts,
+    details: { entry, files: size.files, bytes: size.bytes, durationMs: result.durationMs },
+    limitations: ["bundling resolves and transpiles every import but does not typecheck"],
+  };
+}
+
 async function bundle(
   input: CheckInput,
   unit: UnitUnderTest,
@@ -38,50 +81,14 @@ async function bundle(
 ): Promise<CheckOutcome> {
   const out = mkdtempSync(join(tmpdir(), "groot-bundle-"));
   try {
-    const argv = ["bun", "build", entry, "--target", "bun", "--outdir", out];
     const result = await runProcess({
-      argv,
+      argv: ["bun", "build", entry, "--target", "bun", "--outdir", out],
       cwd: unit.dir,
       env: input.ctx.env,
       timeoutMs: BUNDLE_TIMEOUT_MS,
       signal: input.ctx.signal,
     });
-    const log = `${result.stdout}\n${result.stderr}`;
-    // The temporary path is meaningless in evidence; record a stable placeholder.
-    const shown = [...argv.slice(0, -1), "<temporary directory>"];
-    const method = {
-      kind: "command" as const,
-      tool: TOOL,
-      command: { argv: shown, cwd: unit.path, exitCode: result.exitCode },
-    };
-    const artifacts = [{ name: "bundle.log", kind: "log" as const, content: log }];
-    if (result.aborted) {
-      return {
-        status: "skipped",
-        summary: "bundle cancelled",
-        method,
-        artifacts,
-        reason: "cancelled",
-      };
-    }
-    if (result.exitCode !== 0) {
-      return {
-        status: "fail",
-        summary: `bun build failed for ${entry} (exit ${result.exitCode ?? result.signal}): ${tail(log, 3)}`,
-        method,
-        artifacts,
-        nextStep: "Fix the import or syntax error shown in bundle.log.",
-      };
-    }
-    const size = outputSize(out);
-    return {
-      status: "pass",
-      summary: `bun build bundled ${entry} for the bun target — every import resolved (${size.files} file(s), ${Math.round(size.bytes / 1024)} KiB, ${result.durationMs} ms)`,
-      method,
-      artifacts,
-      details: { entry, files: size.files, bytes: size.bytes, durationMs: result.durationMs },
-      limitations: ["bundling resolves and transpiles every import but does not typecheck"],
-    };
+    return bundleOutcome(unit, entry, result, outputSize(out));
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

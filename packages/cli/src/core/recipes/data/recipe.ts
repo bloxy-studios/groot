@@ -16,6 +16,7 @@
  * operation, mounts against the same database module.
  */
 import type { BlueprintCapability } from "../../contracts/blueprint.ts";
+import type { Decision } from "../../contracts/common.ts";
 import type { OwnedArtifact, RecipeLock } from "../../contracts/lock.ts";
 import { joinRel } from "../../fs/paths.ts";
 import type { PlanBuilder } from "../../planner/builder.ts";
@@ -168,6 +169,32 @@ async function planProjectFiles(input: RecipePlanInput, layout: RecipeLayout): P
   );
 }
 
+function decisions(input: RecipePlanInput, layout: RecipeLayout): Decision[] {
+  const app = input.target.app;
+  const decision = (topic: string, value: string, rationale: string): Decision =>
+    recipeDecision({
+      recipe: DATA_RECIPE_ID,
+      version: DATA_RECIPE_VERSION,
+      app: app.id,
+      topic,
+      value,
+      rationale,
+      at: input.builder.createdAt,
+    });
+  return [
+    decision(
+      "data.store",
+      `SQLite through bun:sqlite and Drizzle ORM ${PINS.drizzleOrm}; DATABASE_URL defaults to ${DEFAULT_DATABASE_URL} in ${app.path}`,
+      "Zero infrastructure, Bun-native, and fully verifiable locally against temporary databases.",
+    ),
+    decision(
+      "data.migrations",
+      `versioned SQL in ${layout.drizzle}: bun run db:generate (drizzle-kit ${PINS.drizzleKit}) writes migrations, bun run db:migrate applies them`,
+      "Migrations are reviewable files; the recipe's own migration ships pre-generated so the plan previews its exact SQL.",
+    ),
+  ];
+}
+
 function contribution(
   input: RecipePlanInput,
   layout: RecipeLayout,
@@ -194,33 +221,12 @@ function contribution(
     dependencies: { "drizzle-orm": PINS.drizzleOrm, "drizzle-kit": PINS.drizzleKit },
     artifacts,
   };
-  const decision = (topic: string, value: string, rationale: string) =>
-    recipeDecision({
-      recipe: DATA_RECIPE_ID,
-      version: DATA_RECIPE_VERSION,
-      app: app.id,
-      topic,
-      value,
-      rationale,
-      at: builder.createdAt,
-    });
   return {
     capability,
     env: envFor(DATA_DESCRIPTOR.env, layout),
     verification: verificationFor(DATA_DESCRIPTOR.verification, app),
     lock,
-    decisions: [
-      decision(
-        "data.store",
-        `SQLite through bun:sqlite and Drizzle ORM ${PINS.drizzleOrm}; DATABASE_URL defaults to ${DEFAULT_DATABASE_URL} in ${app.path}`,
-        "Zero infrastructure, Bun-native, and fully verifiable locally against temporary databases.",
-      ),
-      decision(
-        "data.migrations",
-        `versioned SQL in ${layout.drizzle}: bun run db:generate (drizzle-kit ${PINS.drizzleKit}) writes migrations, bun run db:migrate applies them`,
-        "Migrations are reviewable files; the recipe's own migration ships pre-generated so the plan previews its exact SQL.",
-      ),
-    ],
+    decisions: decisions(input, layout),
   };
 }
 

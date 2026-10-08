@@ -45,36 +45,37 @@ function selection(recipe: Recipe, app: BlueprintApp, last: boolean): SolverSele
   };
 }
 
+function builderFor(input: PlanRecipesInput, selections: readonly SolverSelection[]): PlanBuilder {
+  const { git } = input.observation;
+  return new PlanBuilder({
+    root: input.root,
+    intent: {
+      type: "add-capability",
+      capabilities: [input.recipes.at(-1)?.descriptor.capability ?? "data"],
+      target: input.app.id,
+      recipe: null,
+      options: {},
+    },
+    summary: `add ${selections.map((entry) => `${entry.capability} (${entry.recipe})`).join(", ")} to ${input.app.id}`,
+    topology: input.blueprint.project.topology,
+    revision: {
+      vcs: git.vcs,
+      head: git.head,
+      branch: git.branch,
+      dirty: git.dirty,
+      worktreeFingerprint: git.worktreeFingerprint,
+    },
+    createdWith: createdWith(),
+    dirtyPaths: new Set([...git.staged, ...git.unstaged, ...git.untracked]),
+  });
+}
+
 export async function planRecipes(input: PlanRecipesInput): Promise<PlannedRecipes> {
   const { observation, app } = input;
   const selections = input.recipes.map((recipe, index) =>
     selection(recipe, app, index === input.recipes.length - 1),
   );
-  const builder = new PlanBuilder({
-    root: input.root,
-    intent: {
-      type: "add-capability",
-      capabilities: [input.recipes.at(-1)?.descriptor.capability ?? "data"],
-      target: app.id,
-      recipe: null,
-      options: {},
-    },
-    summary: `add ${selections.map((entry) => `${entry.capability} (${entry.recipe})`).join(", ")} to ${app.id}`,
-    topology: input.blueprint.project.topology,
-    revision: {
-      vcs: observation.git.vcs,
-      head: observation.git.head,
-      branch: observation.git.branch,
-      dirty: observation.git.dirty,
-      worktreeFingerprint: observation.git.worktreeFingerprint,
-    },
-    createdWith: createdWith(),
-    dirtyPaths: new Set([
-      ...observation.git.staged,
-      ...observation.git.unstaged,
-      ...observation.git.untracked,
-    ]),
-  });
+  const builder = builderFor(input, selections);
   builder.capabilities({ ok: true, selections, refusals: [] });
   const shared = new Map<string, unknown>();
   const contributions: RecipeContribution[] = [];

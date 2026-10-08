@@ -22,7 +22,7 @@ import { authBetterAuth } from "../auth/recipe.ts";
 import { dataDrizzleSqlite } from "../data/recipe.ts";
 import { registerRecipeCheckers } from "../index.ts";
 import { materializePlan } from "./apply.ts";
-import { blueprintWith, lockWith, observeUnit, planRecipes } from "./plan.ts";
+import { blueprintWith, lockWith, observeUnit, type PlannedRecipes, planRecipes } from "./plan.ts";
 
 export interface CertificationCase {
   readonly name: string;
@@ -48,24 +48,43 @@ function since(started: number): number {
   return Math.round(performance.now() - started);
 }
 
-export async function certify(c: CertificationCase): Promise<CertificationResult> {
-  registerBuiltInCheckers();
-  registerRecipeCheckers();
-  const timings: Record<string, number> = {};
-  let started = performance.now();
+/** Plan data + auth exactly as add-capability will, and validate the plan contract. */
+async function planBoth(c: CertificationCase): Promise<{ base: BlueprintV2 } & PlannedRecipes> {
   const base = blueprintFixture({
     project: { name: c.name, topology: c.topology, packageManager: "bun", origin: c.origin },
     apps: [c.app],
   });
   const observation = await observeUnit(c.root, c.app, c.topology);
-  const { plan, contributions } = await planRecipes({
+  const planned = await planRecipes({
     root: c.root,
     blueprint: base,
     observation,
     app: c.app,
     recipes: [dataDrizzleSqlite, authBetterAuth],
   });
-  OperationPlan.parse(plan);
+  OperationPlan.parse(planned.plan);
+  return { base, ...planned };
+}
+
+async function install(root: string): Promise<void> {
+  const result = await runProcess({
+    argv: ["bun", "install"],
+    cwd: root,
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `bun install failed in ${root}: ${tail(`${result.stdout}\n${result.stderr}`, 10)}`,
+    );
+  }
+}
+
+export async function certify(c: CertificationCase): Promise<CertificationResult> {
+  registerBuiltInCheckers();
+  registerRecipeCheckers();
+  const timings: Record<string, number> = {};
+  let started = performance.now();
+  const { base, plan, contributions } = await planBoth(c);
   timings.planMs = since(started);
 
   started = performance.now();
@@ -77,16 +96,7 @@ export async function certify(c: CertificationCase): Promise<CertificationResult
   timings.applyMs = since(started);
 
   started = performance.now();
-  const install = await runProcess({
-    argv: ["bun", "install"],
-    cwd: c.root,
-    timeoutMs: INSTALL_TIMEOUT_MS,
-  });
-  if (install.exitCode !== 0) {
-    throw new Error(
-      `bun install failed in ${c.root}: ${tail(`${install.stdout}\n${install.stderr}`, 10)}`,
-    );
-  }
+  await install(c.root);
   timings.installMs = since(started);
 
   started = performance.now();
@@ -99,12 +109,5 @@ export async function certify(c: CertificationCase): Promise<CertificationResult
     extra: defaultContracts(blueprint),
   });
   timings.verifyMs = since(started);
-  return {
-    name: c.name,
-    plan,
-    blueprint,
-    report,
-    generatedSecrets: materialized.secrets,
-    timings,
-  };
+  return { name: c.name, plan, blueprint, report, generatedSecrets: materialized.secrets, timings };
 }

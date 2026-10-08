@@ -17,6 +17,7 @@
  *    value never enters the plan) unless the developer already set one.
  */
 import type { BlueprintCapability } from "../../contracts/blueprint.ts";
+import type { Decision } from "../../contracts/common.ts";
 import type { OwnedArtifact, RecipeLock } from "../../contracts/lock.ts";
 import { GrootV2Error } from "../../errors.ts";
 import { sha256Of } from "../../fs/hash.ts";
@@ -132,7 +133,7 @@ export function journalState(text: string, path: string): "ready" | "applied" {
     "GROOT_E_CONFLICT",
     `${path} lists ${tags.length === 0 ? "no readable migrations" : `migrations ${tags.join(", ")}`}; ${AUTH_RECIPE_ID} ships ${auth} pre-generated to follow ${data} directly.`,
     {
-      hint: "The schema has moved on since data was added. Add Better Auth's tables yourself (bun run auth:generate, then bun run db:generate), or plan auth where the journal holds only 0000_data_init.",
+      hint: "The schema has moved on since data was added, so a pre-generated 0001 would be wrong and Groot won't guess. Set up Better Auth by hand (its CLI generates tables for your current schema; then bun run db:generate), or plan auth on an app whose journal holds only 0000_data_init.",
       details: { path, conflict: "migration-journal", entries: tags },
     },
   );
@@ -320,10 +321,57 @@ async function planProjectFiles(
   return addSecret(builder, root, layout, SECRET_NAME);
 }
 
+interface AuthPlan {
+  readonly artifacts: OwnedArtifact[];
+  readonly analysis: EntryAnalysis;
+  readonly url: string;
+  /** false when the developer's existing secret was kept. */
+  readonly generated: boolean;
+}
+
+function decisions(input: RecipePlanInput, layout: RecipeLayout, plan: AuthPlan): Decision[] {
+  const app = input.target.app;
+  const decision = (topic: string, value: string, rationale: string): Decision =>
+    recipeDecision({
+      recipe: AUTH_RECIPE_ID,
+      version: AUTH_RECIPE_VERSION,
+      app: app.id,
+      topic,
+      value,
+      rationale,
+      at: input.builder.createdAt,
+    });
+  const portSource =
+    app.port === null ? "Bun's default port — groot.json records none" : "groot.json";
+  const kept = decision(
+    "auth.secret",
+    `kept the existing ${SECRET_NAME} in ${layout.envLocal}`,
+    "Groot never replaces a secret the developer already set.",
+  );
+  return [
+    decision(
+      "auth.method",
+      `email + password via Better Auth ${PINS.betterAuth}; cookie sessions stored through Drizzle; email verification off`,
+      "The certified composition: fully local, no provider account, verifiable end to end over HTTP.",
+    ),
+    decision(
+      "auth.routes",
+      `Better Auth at /api/auth and per-user notes (the protected example) at /api/notes, mounted on ${plan.analysis.appVar} in ${layout.entry}`,
+      "Better Auth's default basePath; the notes routes prove the authorization boundary.",
+    ),
+    decision(
+      "auth.origin",
+      `BETTER_AUTH_URL=${plan.url} (port from ${portSource})`,
+      "Better Auth trusts this origin for Origin checks; it must match where the app serves.",
+    ),
+    ...(plan.generated ? [] : [kept]),
+  ];
+}
+
 function contribution(
   input: RecipePlanInput,
   layout: RecipeLayout,
-  plan: { artifacts: OwnedArtifact[]; analysis: EntryAnalysis; url: string; generated: boolean },
+  plan: AuthPlan,
 ): RecipeContribution {
   const { builder } = input;
   const app = input.target.app;
@@ -346,49 +394,12 @@ function contribution(
     dependencies: { "better-auth": PINS.betterAuth },
     artifacts: plan.artifacts,
   };
-  const decision = (topic: string, value: string, rationale: string) =>
-    recipeDecision({
-      recipe: AUTH_RECIPE_ID,
-      version: AUTH_RECIPE_VERSION,
-      app: app.id,
-      topic,
-      value,
-      rationale,
-      at: builder.createdAt,
-    });
-  const portSource =
-    app.port === null ? "Bun's default port — groot.json records none" : "groot.json";
   return {
     capability,
     env: envFor(AUTH_DESCRIPTOR.env, layout, { BETTER_AUTH_URL: plan.url }),
     verification: verificationFor(AUTH_DESCRIPTOR.verification, app),
     lock,
-    decisions: [
-      decision(
-        "auth.method",
-        `email + password via Better Auth ${PINS.betterAuth}; cookie sessions stored through Drizzle; email verification off`,
-        "The certified composition: fully local, no provider account, verifiable end to end over HTTP.",
-      ),
-      decision(
-        "auth.routes",
-        `Better Auth at /api/auth and per-user notes (the protected example) at /api/notes, mounted on ${plan.analysis.appVar} in ${layout.entry}`,
-        "Better Auth's default basePath; the notes routes prove the authorization boundary.",
-      ),
-      decision(
-        "auth.origin",
-        `BETTER_AUTH_URL=${plan.url} (port from ${portSource})`,
-        "Better Auth trusts this origin for Origin checks; it must match where the app serves.",
-      ),
-      ...(plan.generated
-        ? []
-        : [
-            decision(
-              "auth.secret",
-              `kept the existing ${SECRET_NAME} in ${layout.envLocal}`,
-              "Groot never replaces a secret the developer already set.",
-            ),
-          ]),
-    ],
+    decisions: decisions(input, layout, plan),
   };
 }
 

@@ -25,11 +25,16 @@ export const DATA_RECIPE_VERSION = "1.0.0";
 export const AUTH_RECIPE_VERSION = "1.0.0";
 
 /**
- * "certified" only once the GROOT_RECIPE_E2E suite has passed every profile
+ * "certified" only while the GROOT_RECIPE_E2E suite passes every profile
  * (structural, build, runtime, product-flow) on a fresh single-app project, a
- * Bun monorepo, and an adopted custom layout.
+ * Bun monorepo, and an adopted custom layout — re-run it after any pin,
+ * template, or migration change, and drop back to "experimental" if it fails.
  */
-export const RECIPE_SUPPORT: SupportLevel = "experimental";
+export const RECIPE_SUPPORT: SupportLevel = "certified";
 
-/** What certification was performed (null until the suite has passed). */
-export const CERTIFICATION: RecipeDescriptor["certification"] = null;
+/** What certification was performed, against which versions and platform. */
+export const CERTIFICATION: RecipeDescriptor["certification"] = {
+  evidence:
+    "GROOT_RECIPE_E2E=1 bun test src/core/recipes/recipes.e2e.test.ts: (a) fresh single app from create-hono 0.19.5, (b) Bun workspace with apps/api from create-hono 0.19.5, (c) adopted custom layout (server/main.ts, port 4310, custom scripts, dirty tree) — planned with the PlanBuilder, materialized, bun install, then structural, build, runtime, and product-flow (24-step auth flow) all pass; drizzle-kit reports no schema drift afterwards. macOS x64, Bun 1.4.0; Linux and Windows not yet certified.",
+  checkedAt: "2026-10-08",
+};

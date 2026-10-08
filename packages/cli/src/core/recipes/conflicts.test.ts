@@ -6,7 +6,7 @@
  * or copied into the plan; and auth planned after data (separately) builds on
  * the applied data layer.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OperationPlan } from "../contracts/plan.ts";
@@ -15,12 +15,20 @@ import { fixtureFact, unitFixture } from "../test-fixtures.ts";
 import { authBetterAuth } from "./auth/recipe.ts";
 import { dataDrizzleSqlite } from "./data/recipe.ts";
 import { materializePlan } from "./testing/apply.ts";
-import { BOTH, type PlanningFixture, planBoth, singleApp } from "./testing/fixtures.ts";
+import {
+  BOTH,
+  type PlanningFixture,
+  planBoth,
+  removeScratchDirs,
+  singleApp,
+} from "./testing/fixtures.ts";
 import { observeUnit } from "./testing/plan.ts";
 import { commitAll } from "./testing/projects.ts";
 import type { Recipe } from "./types.ts";
 
 const TIMEOUT = 60_000;
+
+afterAll(removeScratchDirs);
 
 async function planError(
   fx: PlanningFixture,

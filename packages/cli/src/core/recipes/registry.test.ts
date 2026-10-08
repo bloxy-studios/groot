@@ -7,7 +7,7 @@
  * other suites' solver calls pick.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SolverResult } from "../contracts/capability.ts";
@@ -67,16 +67,20 @@ function probe(): Promise<ProbeOutput> {
 
 async function runProbe(): Promise<ProbeOutput> {
   const dir = mkdtempSync(join(tmpdir(), "groot-registry-probe-"));
-  const script = join(dir, "probe.ts");
-  writeFileSync(script, PROBE);
-  const proc = Bun.spawn([process.execPath, script], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (code !== 0) throw new Error(`registry probe failed (exit ${code}): ${stderr}`);
-  return JSON.parse(stdout) as ProbeOutput;
+  try {
+    const script = join(dir, "probe.ts");
+    writeFileSync(script, PROBE);
+    const proc = Bun.spawn([process.execPath, script], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (code !== 0) throw new Error(`registry probe failed (exit ${code}): ${stderr}`);
+    return JSON.parse(stdout) as ProbeOutput;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe("built-in registration + solver", () => {

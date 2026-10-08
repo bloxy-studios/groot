@@ -52,12 +52,15 @@ const RECIPE_CHECKS = [
 const roots: string[] = [];
 const summaries: unknown[] = [];
 
+// Removing three installed projects (node_modules included) outlasts the default hook timeout.
+const CLEANUP_TIMEOUT_MS = 300_000;
+
 afterAll(() => {
   const reportPath = process.env.GROOT_RECIPE_E2E_REPORT;
   if (reportPath && summaries.length > 0) writeFileSync(reportPath, prettyJson(summaries));
   if (process.env.GROOT_RECIPE_E2E_KEEP === "1") return;
   for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
+}, CLEANUP_TIMEOUT_MS);
 
 function scratch(name: string): string {
   const dir = mkdtempSync(join(tmpdir(), `groot-cert-${name}-`));
