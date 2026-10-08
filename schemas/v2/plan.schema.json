@@ -600,7 +600,8 @@
                                   "const": "set"
                                 },
                                 "pointer": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^(?:\\/(?!(?:__proto__|constructor|prototype)(?:\\/|$))[^/]*)*$"
                                 },
                                 "value": {}
                               },
@@ -619,7 +620,8 @@
                                   "const": "set-if-absent"
                                 },
                                 "pointer": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^(?:\\/(?!(?:__proto__|constructor|prototype)(?:\\/|$))[^/]*)*$"
                                 },
                                 "value": {}
                               },
@@ -638,7 +640,8 @@
                                   "const": "merge"
                                 },
                                 "pointer": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^(?:\\/(?!(?:__proto__|constructor|prototype)(?:\\/|$))[^/]*)*$"
                                 },
                                 "value": {
                                   "type": "object",
@@ -663,7 +666,8 @@
                                   "const": "remove"
                                 },
                                 "pointer": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^(?:\\/(?!(?:__proto__|constructor|prototype)(?:\\/|$))[^/]*)*$"
                                 }
                               },
                               "required": [
@@ -680,7 +684,8 @@
                                   "const": "append-unique"
                                 },
                                 "pointer": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^(?:\\/(?!(?:__proto__|constructor|prototype)(?:\\/|$))[^/]*)*$"
                                 },
                                 "value": {}
                               },

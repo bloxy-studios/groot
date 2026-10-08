@@ -2,8 +2,9 @@
  * PlanBuilder — the one way planners assemble an OperationPlan. It assigns
  * step ids, derives preconditions from each action's expectations (so a
  * human edit to any touched file makes the plan stale), computes exact
- * previews for edits of existing files, collects dependency changes and
- * required action classes, and fingerprints the result.
+ * previews for edits whose content is known at planning time (never for
+ * secret-bearing dotenv edits), collects dependency changes and required
+ * action classes, and fingerprints the result.
  */
 import { readFile } from "node:fs/promises";
 import type { RecoveryInfo, SolverResult } from "../contracts/capability.ts";
@@ -16,16 +17,17 @@ import type {
 } from "../contracts/common.ts";
 import { schemaUrl } from "../contracts/common.ts";
 import type { GeneratorLock } from "../contracts/lock.ts";
-import type {
-  DependencyChange,
-  ExternalAction,
-  OperationPlan,
-  OwnershipRule,
-  PathExpectation,
-  PlanIntent,
-  PlannedAction,
-  Precondition,
-  StructuredEdit,
+import {
+  type DependencyChange,
+  type ExternalAction,
+  isSecretBearingEdit,
+  type OperationPlan,
+  type OwnershipRule,
+  type PathExpectation,
+  type PlanIntent,
+  type PlannedAction,
+  type Precondition,
+  type StructuredEdit,
 } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 import { hashFile, sha256Of } from "../fs/hash.ts";
@@ -89,7 +91,12 @@ export class PlanBuilder {
     return hash === null ? { state: "absent" } : { state: "sha256", sha256: hash };
   }
 
-  /** Current content of a path as later steps will see it (null = absent/unknown). */
+  /**
+   * Content of a path as later steps will see it (null = absent). For a path
+   * an earlier step changes without a preview (see contentKnown) this is the
+   * last content known at planning time; editFile defers edits of such paths
+   * instead of previewing them.
+   */
   async currentContent(path: string): Promise<string | null> {
     const pending = this.pendingContent.get(path);
     if (pending !== undefined) return pending;
@@ -101,6 +108,21 @@ export class PlanBuilder {
   }
 
   private readonly pendingContent = new Map<string, string>();
+
+  /**
+   * Is the content a path will have before the next step known now? Yes for
+   * files on disk (or absent), and for the exact result of an earlier write
+   * or previewed edit. No when an earlier step changes the path without a
+   * preview — deps.add, a deferred or secret-bearing edit, a move, a
+   * generator — so an edit of it is deferred to the executor.
+   */
+  private contentKnown(expect: PathExpectation): boolean {
+    if (expect.state !== "produced") return true;
+    const producer = this.actions.find((action) => action.id === expect.byStep);
+    return (
+      producer?.type === "file.write" || (producer?.type === "file.edit" && producer.after !== null)
+    );
+  }
 
   add(draft: ActionDraft): string {
     const id = `s${String(this.actions.length + 1).padStart(2, "0")}`;
@@ -206,9 +228,13 @@ export class PlanBuilder {
 
   /**
    * Plan a structured edit with an exact preview when the file's content is
-   * known now (existing or produced by an earlier step with known content).
-   * Returns null when the edit is already applied. Transform conflicts become
-   * GROOT_E_CONFLICT with the precise reason.
+   * known now (existing, or produced by an earlier step with known content);
+   * otherwise the edit is deferred and the executor computes it at apply
+   * time. Secret-bearing edits (env edits, non-example dotenv files) are
+   * still computed here — for conflicts and the no-op skip — but never carry
+   * their result: `expect` pins the content they apply to and the edit itself
+   * (variable names) is their preview. Returns null when the edit is already
+   * applied. Transform conflicts become GROOT_E_CONFLICT with the precise reason.
    */
   async editFile(options: {
     path: string;
@@ -226,7 +252,7 @@ export class PlanBuilder {
       });
     }
     let after: { content: string; sha256: ReturnType<typeof sha256Of> } | null = null;
-    if (!options.deferred && (current !== null || expect.state !== "produced")) {
+    if (!options.deferred && this.contentKnown(expect)) {
       let content: string;
       try {
         content = applyEdit(current, options.edit, options.path);
@@ -240,7 +266,9 @@ export class PlanBuilder {
         throw error;
       }
       if (current !== null && content === current) return null;
-      after = { content, sha256: sha256Of(content) };
+      if (!isSecretBearingEdit(options.path, options.edit)) {
+        after = { content, sha256: sha256Of(content) };
+      }
     }
     const classes: ActionClass[] = expect.state === "absent" ? ["fs.create"] : ["fs.edit"];
     return this.add({
