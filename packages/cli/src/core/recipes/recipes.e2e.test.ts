@@ -129,7 +129,7 @@ async function expectCertified(c: CertificationCase, result: CertificationResult
   }
   const flow = byCheck.get("auth.flow.api");
   const steps = (flow?.details.steps ?? []) as { ok: boolean }[];
-  expect(steps).toHaveLength(24);
+  expect(steps).toHaveLength(26);
   expect(steps.every((step) => step.ok)).toBe(true);
   const stored = evidenceFiles(c.root, report.evidence);
   for (const secret of result.generatedSecrets) {

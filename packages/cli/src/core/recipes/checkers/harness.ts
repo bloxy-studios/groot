@@ -7,10 +7,11 @@
  * - whether the unit's declared packages are installed at all — if not, the
  *   check is `blocked` with `bun install` as the next step, never a fake pass
  *   or a confusing crash;
- * - an isolated environment: an ephemeral loopback port, a temporary SQLite
- *   database, and a throwaway BETTER_AUTH_SECRET passed explicitly (explicit
- *   process env beats .env.local in Bun, so the app's own database and secret
- *   are never touched or read);
+ * - an isolated environment: an ephemeral loopback port (in every variable
+ *   Bun reads a port from), a temporary SQLite database, and a throwaway
+ *   BETTER_AUTH_SECRET passed explicitly (explicit process env beats
+ *   .env.local in Bun, so the app's own database and secret are never touched
+ *   or read);
  * - migrations applied first and confirmed from the database itself
  *   (`__drizzle_migrations` rows vs the journal), not from an exit code alone.
  */
@@ -131,8 +132,15 @@ export interface CheckEnvironment {
   cleanup(): void;
 }
 
+/**
+ * Every variable a check run pins. Bun serves on BUN_PORT, else PORT, else
+ * NODE_PORT, so all three name the ephemeral port — a value the developer
+ * exported must not move the app elsewhere.
+ */
 export const CHECK_ENV_NAMES = [
+  "BUN_PORT",
   "PORT",
+  "NODE_PORT",
   "DATABASE_URL",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
@@ -153,7 +161,9 @@ export function checkEnvironment(ctx: CoreContext): CheckEnvironment {
     databasePath,
     env: {
       ...ctx.env,
+      BUN_PORT: String(port),
       PORT: String(port),
+      NODE_PORT: String(port),
       DATABASE_URL: databasePath,
       BETTER_AUTH_SECRET: secret,
       BETTER_AUTH_URL: baseUrl,

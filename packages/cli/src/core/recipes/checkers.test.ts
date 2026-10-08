@@ -6,13 +6,16 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BlueprintV2 } from "../contracts/blueprint.ts";
 import type { VerificationContract, VerificationProfile } from "../contracts/common.ts";
 import type { Evidence } from "../contracts/evidence.ts";
+import { ephemeralPort } from "../ports.ts";
 import { createContext } from "../runtime.ts";
 import { appFixture, blueprintFixture } from "../test-fixtures.ts";
 import { runVerification } from "../verify/engine.ts";
+import { CHECK_ENV_NAMES, checkEnvironment } from "./checkers/harness.ts";
 import { registerRecipeCheckers } from "./index.ts";
 import { materializePlan } from "./testing/apply.ts";
 import { planBoth, removeScratchDirs, scratchDir, singleApp } from "./testing/fixtures.ts";
@@ -53,8 +56,9 @@ async function verifyOne(
   root: string,
   check: VerificationContract,
   entry = "server.ts",
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<Evidence> {
-  const report = await runVerification(createContext({ cwd: root }), {
+  const report = await runVerification(createContext({ cwd: root, env }), {
     root,
     blueprint: blueprintFor([check], entry),
     observation: null,
@@ -216,6 +220,48 @@ describe("runtime.http", () => {
     TIMEOUT,
   );
 
+  test("the check environment pins every port variable Bun reads (BUN_PORT > PORT > NODE_PORT)", () => {
+    // Arrange
+    const ctx = createContext({
+      cwd: tmpdir(),
+      env: { BUN_PORT: "41001", PORT: "41002", NODE_PORT: "41003", KEEP: "yes" },
+    });
+    // Act
+    const environment = checkEnvironment(ctx);
+    environment.cleanup();
+    // Assert
+    const port = String(environment.port);
+    expect([environment.env.BUN_PORT, environment.env.PORT, environment.env.NODE_PORT]).toEqual([
+      port,
+      port,
+      port,
+    ]);
+    expect(environment.env.KEEP).toBe("yes");
+    expect(CHECK_ENV_NAMES).toEqual(expect.arrayContaining(["BUN_PORT", "PORT", "NODE_PORT"]));
+  });
+
+  test(
+    "a developer's exported BUN_PORT doesn't move the app off the check's ephemeral port",
+    async () => {
+      // Arrange — a default-export app: Bun picks BUN_PORT over PORT.
+      const root = fakeApp({
+        server: `import { writeFileSync } from "node:fs";\nwriteFileSync("server-facts.json", JSON.stringify({ pid: process.pid }));\nexport default { fetch: () => new Response("home") };\n`,
+      });
+      const env = { ...process.env, BUN_PORT: String(ephemeralPort()) };
+      // Act
+      const evidence = await verifyOne(
+        root,
+        contract("runtime.http", "data", "runtime"),
+        "server.ts",
+        env,
+      );
+      // Assert
+      expect(evidence.status).toBe("pass");
+      expect(alive(facts(root).pid)).toBe(false);
+    },
+    TIMEOUT,
+  );
+
   test(
     "migrations that apply fewer entries than the journal lists fail before anything starts",
     async () => {
@@ -250,9 +296,42 @@ describe("auth.flow", () => {
         actual: number;
         ok: boolean;
       }[];
-      expect(steps).toHaveLength(24);
+      expect(steps.map((step) => step.step)).toEqual([
+        "a",
+        "b",
+        "b2",
+        "c",
+        "c2",
+        "d",
+        "e1",
+        "e2",
+        "e3",
+        "e4",
+        "f1",
+        "f2",
+        "f3",
+        "o1",
+        "o2",
+        "o3",
+        "o4",
+        "g1",
+        "g2",
+        "g3",
+        "g4",
+        "h1",
+        "h2",
+        "i",
+        "j1",
+        "j2",
+      ]);
       expect(steps[0]).toMatchObject({ step: "a", expected: "401", actual: 200, ok: false });
-      expect(steps.filter((step) => step.ok).length).toBeLessThan(24);
+      // CSRF: a cookie-bearing POST without Origin must be refused, and must not sign bob out.
+      expect(steps.find((step) => step.step === "g3")).toMatchObject({
+        expected: "403",
+        actual: 200,
+        ok: false,
+      });
+      expect(steps.filter((step) => step.ok).length).toBeLessThan(26);
       expect(evidence.artifacts.map((artifact) => artifact.path.split("/").at(-1))).toEqual([
         "migrate.log",
         "flow.json",
@@ -266,7 +345,90 @@ describe("auth.flow", () => {
   );
 });
 
+/** A data-only app: the entry never imports the database modules the data recipe wrote. */
+function dataOnlyApp(name: string, overrides: Readonly<Record<string, string>> = {}): string {
+  const root = scratchDir(name);
+  writeFiles(root, {
+    "package.json": JSON.stringify({ name }),
+    "src/index.ts": 'export default { fetch: () => new Response("hi") };\n',
+    "src/db/schema.ts": "export const todos = { name: 'todos' };\n",
+    "src/db/client.ts": 'import * as schema from "./schema";\nexport const db = { schema };\n',
+    "src/db/migrate.ts": 'import { db } from "./client";\nconsole.log(Object.keys(db));\n',
+    ...overrides,
+  });
+  return root;
+}
+
 describe("build.bundle", () => {
+  test(
+    "a data-only app: data.build bundles the database modules the entry never imports",
+    async () => {
+      // Arrange
+      const healthy = dataOnlyApp("data-only-ok");
+      const brokenImport = dataOnlyApp("data-only-import", {
+        "src/db/client.ts": 'import { nope } from "./does-not-exist";\nexport const db = nope;\n',
+      });
+      const brokenSchema = dataOnlyApp("data-only-schema", {
+        "src/db/schema.ts": "export const = ;\n",
+      });
+      const check = contract("build.bundle", "data", "build");
+      // Act
+      const passing = await verifyOne(healthy, check, "src/index.ts");
+      const importFails = await verifyOne(brokenImport, check, "src/index.ts");
+      const schemaFails = await verifyOne(brokenSchema, check, "src/index.ts");
+      // Assert
+      expect([passing.status, importFails.status, schemaFails.status]).toEqual([
+        "pass",
+        "fail",
+        "fail",
+      ]);
+      expect(passing.method.command?.argv).toEqual([
+        "bun",
+        "build",
+        "src/index.ts",
+        "src/db/client.ts",
+        "src/db/migrate.ts",
+        "--target",
+        "bun",
+        "--outdir",
+        "<temporary directory>",
+      ]);
+      expect(passing.summary).toContain("src/index.ts with src/db/client.ts, src/db/migrate.ts");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "auth.build bundles auth.ts and its route modules as entrypoints of their own",
+    async () => {
+      // Arrange
+      const root = scratchDir("auth-modules");
+      writeFiles(root, {
+        "package.json": JSON.stringify({ name: "auth-modules" }),
+        "src/index.ts": 'export default { fetch: () => new Response("hi") };\n',
+        "src/auth.ts": "export const auth = { ok: true };\n",
+        "src/http/auth-routes.ts": 'import { auth } from "../auth";\nexport const routes = auth;\n',
+        "src/http/notes-routes.ts":
+          'import { missing } from "./not-there";\nexport const n = missing;\n',
+      });
+      // Act
+      const evidence = await verifyOne(
+        root,
+        contract("build.bundle", "auth", "build"),
+        "src/index.ts",
+      );
+      // Assert
+      expect(evidence.status).toBe("fail");
+      expect(evidence.method.command?.argv.slice(2, 6)).toEqual([
+        "src/index.ts",
+        "src/auth.ts",
+        "src/http/auth-routes.ts",
+        "src/http/notes-routes.ts",
+      ]);
+    },
+    TIMEOUT,
+  );
+
   test(
     "bundles the entry's whole import graph, and fails on an import that doesn't resolve",
     async () => {
@@ -277,6 +439,8 @@ describe("build.bundle", () => {
         "src/index.ts":
           'import { greet } from "./lib";\nexport default { fetch: () => new Response(greet()) };\n',
         "src/lib.ts": 'export const greet = (): string => "hi";\n',
+        "src/db/client.ts": "export const db = {};\n",
+        "src/db/migrate.ts": 'import { db } from "./client";\nconsole.log(db);\n',
       });
       const broken = scratchDir("bundle-broken");
       writeFiles(broken, {
@@ -293,6 +457,8 @@ describe("build.bundle", () => {
         "bun",
         "build",
         "src/index.ts",
+        "src/db/client.ts",
+        "src/db/migrate.ts",
         "--target",
         "bun",
         "--outdir",

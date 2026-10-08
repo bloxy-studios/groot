@@ -9,9 +9,10 @@
  *
  * Checkers registered by registerRecipeCheckers():
  * - structural.recipe — owned files/regions, pins, migration journal (offline);
- * - build.bundle      — `bun build` of the entry (every import resolves);
+ * - build.bundle      — `bun build` of the entry and the recipe's own modules
+ *                       (every import resolves);
  * - runtime.http      — migrate a temporary database, start the app, probe it;
- * - auth.flow         — the 24-step product flow over HTTP against the app.
+ * - auth.flow         — the 26-step product flow over HTTP against the app.
  *
  * Both functions are idempotent (registries are keyed by id); every surface
  * calls them once at startup (core/bootstrap.ts).

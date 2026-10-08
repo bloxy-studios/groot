@@ -1,8 +1,9 @@
 /**
  * The auth product flow, driven over real HTTP against the running app with a
- * manual cookie jar — adapted from the certified 2026-10-07 prototype flow
- * (24/24 steps passed there), plus the owner's own delete, which the
- * prototype never exercised.
+ * manual cookie jar — all 24 steps of the certified 2026-10-07 prototype flow
+ * (its g3 tightened from "200 or 403" to the 403 Better Auth's CSRF guard
+ * gives, and its observe-only g4 turned into an assertion), plus the owner's
+ * own delete (j1–j2), which the prototype never exercised: 26 steps.
  *
  * Every step records {step, request, expected, actual, ok, ms}. Expectations
  * are exact statuses plus semantic checks (the session belongs to the user who
@@ -212,13 +213,13 @@ async function ownNotes(
   return note?.id;
 }
 
-/** e1–e4: a second user sees nothing of alice's and can't delete her note (404, not 403). */
+/** e1–e4: a second user sees nothing of alice's and can't delete her note (404, not 403). Returns bob's jar. */
 async function isolation(
   d: FlowDriver,
   bob: Account,
   aliceJar: CookieJar,
   noteId: string | undefined,
-): Promise<void> {
+): Promise<CookieJar> {
   const bobJar = new CookieJar();
   let r = await d.call("POST", "/api/auth/sign-up/email", { jar: bobJar, json: bob });
   const hasSession = bobJar.session() !== undefined;
@@ -251,6 +252,7 @@ async function isolation(
     `alice's note intact=${intact}`,
     intact,
   );
+  return bobJar;
 }
 
 async function forgedCookies(d: FlowDriver, aliceJar: CookieJar): Promise<void> {
@@ -313,8 +315,13 @@ async function originAndCredentials(d: FlowDriver, alice: Account): Promise<void
   );
 }
 
-/** g1–g2: sign-out revokes the server-side session, so the old cookie stops working. */
-async function signOut(d: FlowDriver, aliceJar: CookieJar): Promise<void> {
+/**
+ * g1–g4: sign-out revokes the server-side session, so the old cookie stops
+ * working; a cookie-bearing sign-out without an Origin header (a cross-site
+ * form post or a non-browser client) is refused by Better Auth's CSRF guard
+ * and leaves that session alive.
+ */
+async function signOut(d: FlowDriver, aliceJar: CookieJar, bobJar: CookieJar): Promise<void> {
   const before = aliceJar.clone();
   // Better Auth POSTs need a JSON body (the official client sends {}) and a trusted Origin.
   let r = await d.call("POST", "/api/auth/sign-out", {
@@ -331,6 +338,25 @@ async function signOut(d: FlowDriver, aliceJar: CookieJar): Promise<void> {
   );
   r = await d.call("GET", "/api/notes", { jar: before });
   d.record("g2", "GET /api/notes with the pre-sign-out cookie", [401], r, `status ${r.status}`);
+  r = await d.call("POST", "/api/auth/sign-out", { jar: bobJar.clone(), json: {} });
+  const code = (r.body as { code?: unknown } | null)?.code;
+  d.record(
+    "g3",
+    "POST /api/auth/sign-out (bob, session cookie, no Origin)",
+    [403],
+    r,
+    `status ${r.status}, code ${String(code)}`,
+  );
+  r = await d.call("GET", "/api/notes", { jar: bobJar });
+  const alive = Array.isArray((r.body as { notes?: unknown } | null)?.notes);
+  d.record(
+    "g4",
+    "GET /api/notes (bob, after the refused sign-out)",
+    [200],
+    r,
+    `bob's session still valid=${alive}`,
+    alive,
+  );
 }
 
 /** h1–j2: sign-in restores access; a bearer token is not a credential; the owner can delete. */
@@ -400,10 +426,10 @@ export async function runAuthFlow(base: string, signal: AbortSignal): Promise<Fl
   try {
     const aliceId = await signUpAndSession(driver, alice, aliceJar);
     const noteId = await ownNotes(driver, aliceJar, aliceId);
-    await isolation(driver, bob, aliceJar, noteId);
+    const bobJar = await isolation(driver, bob, aliceJar, noteId);
     await forgedCookies(driver, aliceJar);
     await originAndCredentials(driver, alice);
-    await signOut(driver, aliceJar);
+    await signOut(driver, aliceJar, bobJar);
     await signInAndDelete(driver, alice, noteId);
   } catch (error) {
     driver.steps.push({
