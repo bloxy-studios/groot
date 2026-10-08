@@ -5,12 +5,16 @@
  *    client.ts, migrate.ts) and <app>/drizzle.config.ts;
  * 2. the starter schema <src>/db/schema.ts (human-owned from then on);
  * 3. the static migration 0000_data_init + its snapshot, and drizzle-kit's
- *    journal holding exactly that entry;
+ *    journal holding exactly that entry (once the journal starts with it, the
+ *    schema and journal starters belong to the human and drizzle-kit, and
+ *    re-planning leaves them alone);
  * 4. package.json: db:generate/db:migrate scripts, then one deps.add with
  *    exact versions;
- * 5. .gitignore lines for .env.local and the SQLite directory (only when git
- *    doesn't already ignore them), DATABASE_URL in .env.example (placeholder)
- *    and in .env.local (local default, computed at apply time).
+ * 5. .gitignore lines for .env.local and the SQLite directory (only when the
+ *    repository's own .gitignore files don't already ignore them — the
+ *    database and its -wal/-shm/-journal files), DATABASE_URL in .env.example
+ *    (placeholder) and in .env.local (local default, computed at apply time,
+ *    unless the file already assigns it).
  *
  * The data layout is published in `shared` so auth, planned next in the same
  * operation, mounts against the same database module.
@@ -21,7 +25,13 @@ import type { OwnedArtifact, RecipeLock } from "../../contracts/lock.ts";
 import { joinRel } from "../../fs/paths.ts";
 import type { PlanBuilder } from "../../planner/builder.ts";
 import { envFor, verificationFor } from "../contracts.ts";
-import { inSrc, layoutCompatibility, type RecipeLayout, requireLayout } from "../layout.ts";
+import {
+  inSrc,
+  layoutCompatibility,
+  type RecipeLayout,
+  requireLayout,
+  scriptWord,
+} from "../layout.ts";
 import {
   DATA_MIGRATION,
   journalFile,
@@ -59,11 +69,32 @@ export const DEFAULT_DATABASE_URL = "./data/app.db";
 export function dataScripts(layout: RecipeLayout): Record<string, string> {
   return {
     "db:generate": "drizzle-kit generate",
-    "db:migrate": `bun run ${inSrc(layout, "db", "migrate.ts")}`,
+    "db:migrate": `bun run ${scriptWord(inSrc(layout, "db", "migrate.ts"))}`,
   };
 }
 
-async function planModules(builder: PlanBuilder, layout: RecipeLayout): Promise<OwnedArtifact[]> {
+/**
+ * True once data was applied — drizzle-kit's journal starts with
+ * 0000_data_init. From then on the starter schema and the journal belong to
+ * the human and drizzle-kit (auth extends both), so re-planning leaves them
+ * alone instead of comparing them with the starter bytes.
+ */
+async function startersApplied(builder: PlanBuilder, layout: RecipeLayout): Promise<boolean> {
+  const journal = await builder.currentContent(layout.journal);
+  if (journal === null) return false;
+  try {
+    const entries = (JSON.parse(journal) as { entries?: { tag?: unknown }[] }).entries;
+    return Array.isArray(entries) && entries[0]?.tag === DATA_MIGRATION.entry.tag;
+  } catch {
+    return false;
+  }
+}
+
+async function planModules(
+  builder: PlanBuilder,
+  layout: RecipeLayout,
+  applied: boolean,
+): Promise<OwnedArtifact[]> {
   const sqlite = await writeOwned(builder, {
     path: `${layout.db}/sqlite.ts`,
     content: SQLITE_TS,
@@ -74,19 +105,22 @@ async function planModules(builder: PlanBuilder, layout: RecipeLayout): Promise<
     content: CLIENT_TS,
     description: `create ${layout.db}/client.ts (the Drizzle client \`db\`)`,
   });
-  await writeStarter(
-    builder,
-    {
-      path: `${layout.db}/schema.ts`,
-      content: SCHEMA_TS,
-      description: `create the starter schema ${layout.db}/schema.ts (yours to edit)`,
-    },
-    {
-      owner: "human",
-      parts: [],
-      note: "starter schema from data.drizzle-sqlite — yours to edit; recipes only add managed regions",
-    },
-  );
+  const schemaPath = `${layout.db}/schema.ts`;
+  if (!applied || (await builder.currentContent(schemaPath)) === null) {
+    await writeStarter(
+      builder,
+      {
+        path: schemaPath,
+        content: SCHEMA_TS,
+        description: `create the starter schema ${schemaPath} (yours to edit)`,
+      },
+      {
+        owner: "human",
+        parts: [],
+        note: "starter schema from data.drizzle-sqlite — yours to edit; recipes only add managed regions",
+      },
+    );
+  }
   const migrate = await writeOwned(builder, {
     path: `${layout.db}/migrate.ts`,
     content: migrateTs(layout),
@@ -100,7 +134,11 @@ async function planModules(builder: PlanBuilder, layout: RecipeLayout): Promise<
   return [sqlite, client, migrate, config];
 }
 
-async function planMigration(builder: PlanBuilder, layout: RecipeLayout): Promise<OwnedArtifact[]> {
+async function planMigration(
+  builder: PlanBuilder,
+  layout: RecipeLayout,
+  applied: boolean,
+): Promise<OwnedArtifact[]> {
   const sql = await writeOwned(builder, {
     path: `${layout.drizzle}/${sqlFileName(DATA_MIGRATION.entry)}`,
     content: DATA_MIGRATION.sql,
@@ -111,19 +149,21 @@ async function planMigration(builder: PlanBuilder, layout: RecipeLayout): Promis
     content: snapshotFile(DATA_MIGRATION),
     description: `add drizzle-kit's schema snapshot for ${DATA_MIGRATION.entry.tag}`,
   });
-  await writeStarter(
-    builder,
-    {
-      path: layout.journal,
-      content: journalFile([DATA_MIGRATION.entry]),
-      description: `create drizzle-kit's migration journal with entry ${DATA_MIGRATION.entry.tag}`,
-    },
-    {
-      owner: "shared",
-      parts: ["/entries/0"],
-      note: "drizzle-kit appends entries on db:generate; data.drizzle-sqlite wrote entry 0000",
-    },
-  );
+  if (!applied) {
+    await writeStarter(
+      builder,
+      {
+        path: layout.journal,
+        content: journalFile([DATA_MIGRATION.entry]),
+        description: `create drizzle-kit's migration journal with entry ${DATA_MIGRATION.entry.tag}`,
+      },
+      {
+        owner: "shared",
+        parts: ["/entries/0"],
+        note: "drizzle-kit appends entries on db:generate; data.drizzle-sqlite wrote entry 0000",
+      },
+    );
+  }
   return [sql, snapshot];
 }
 
@@ -163,6 +203,7 @@ async function planProjectFiles(input: RecipePlanInput, layout: RecipeLayout): P
   );
   await addEnvLocal(
     builder,
+    root,
     layout,
     [{ name: "DATABASE_URL", value: DEFAULT_DATABASE_URL, comment: "local SQLite database" }],
     DATA_RECIPE_ID,
@@ -233,9 +274,10 @@ function contribution(
 async function planData(input: RecipePlanInput): Promise<RecipeContribution> {
   const layout = requireLayout(input.target, DATA_RECIPE_ID);
   await assertUntracked(input.root, layout.envLocal, DATA_RECIPE_ID);
+  const applied = await startersApplied(input.builder, layout);
   const artifacts = [
-    ...(await planModules(input.builder, layout)),
-    ...(await planMigration(input.builder, layout)),
+    ...(await planModules(input.builder, layout, applied)),
+    ...(await planMigration(input.builder, layout, applied)),
   ];
   await planProjectFiles(input, layout);
   input.shared.set(dataLayoutKey(input.target.app.id), layout);

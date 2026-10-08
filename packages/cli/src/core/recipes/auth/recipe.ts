@@ -31,6 +31,7 @@ import {
   layoutCompatibility,
   type RecipeLayout,
   requireLayout,
+  scriptWord,
 } from "../layout.ts";
 import {
   AUTH_MIGRATION,
@@ -59,11 +60,14 @@ import { AUTH_RECIPE_ID, AUTH_RECIPE_VERSION, DATA_RECIPE_ID, PINS } from "../ve
 import { AUTH_DESCRIPTOR } from "./descriptor.ts";
 import {
   analyzeEntry,
+  assertMountedAfterStatement,
+  assertStillParses,
   type EntryAnalysis,
   IMPORTS_REGION,
   importsEdit,
   ROUTES_REGION,
   routesEdit,
+  type SourceAnchorEdit,
 } from "./entry.ts";
 import {
   AUTH_ROUTES_TS,
@@ -82,7 +86,7 @@ export const SECRET_NAME = "BETTER_AUTH_SECRET";
 export function authScripts(layout: RecipeLayout): Record<string, string> {
   // :memory: keeps the CLI from creating a database file when it loads auth.ts.
   return {
-    "auth:generate": `DATABASE_URL=:memory: bunx --bun auth@${PINS.authCli} generate --yes --config ${inSrc(layout, "auth.ts")} --output ${inSrc(layout, "db", "auth-schema.ts")}`,
+    "auth:generate": `DATABASE_URL=:memory: bunx --bun auth@${PINS.authCli} generate --yes --config ${scriptWord(inSrc(layout, "auth.ts"))} --output ${scriptWord(inSrc(layout, "db", "auth-schema.ts"))}`,
   };
 }
 
@@ -222,6 +226,29 @@ async function regionArtifact(
   };
 }
 
+/** Plan one entry region, then confirm it landed right after its anchor's statement. */
+async function mount(
+  builder: PlanBuilder,
+  path: string,
+  edit: SourceAnchorEdit,
+  description: string,
+): Promise<void> {
+  const before = (await builder.currentContent(path)) ?? "";
+  await builder.editFile({
+    path,
+    edit,
+    description,
+    owns: [edit.regionId],
+    createIfMissing: false,
+  });
+  assertMountedAfterStatement(before, (await builder.currentContent(path)) ?? before, edit, path);
+}
+
+/** What the preview must say about where the routes sit relative to the app's own middleware. */
+export function routesOrderNote(appVar: string, entry: string): string {
+  return `Groot mounts /api/auth and /api/notes right after \`${appVar} = new Hono()\` in ${entry}, ahead of any middleware added later with ${appVar}.use(…) (logging, secure headers, rate limits) — that middleware doesn't run for these routes. To put them behind it, move the groot:begin/end auth.routes block below it; Groot refreshes the block where it stands.`;
+}
+
 async function planRegions(
   builder: PlanBuilder,
   layout: RecipeLayout,
@@ -248,20 +275,21 @@ async function planRegions(
     });
   }
   const analysis = analyzeEntry(entryText, layout.entry);
-  await builder.editFile({
-    path: layout.entry,
-    edit: importsEdit(analysis.style),
-    description: `import the auth and notes routes in ${layout.entry} (managed region ${IMPORTS_REGION})`,
-    owns: [IMPORTS_REGION],
-    createIfMissing: false,
-  });
-  await builder.editFile({
-    path: layout.entry,
-    edit: routesEdit(analysis),
-    description: `mount /api/auth and /api/notes on ${analysis.appVar} in ${layout.entry} (managed region ${ROUTES_REGION})`,
-    owns: [ROUTES_REGION],
-    createIfMissing: false,
-  });
+  await mount(
+    builder,
+    layout.entry,
+    importsEdit(analysis),
+    `import the auth and notes routes in ${layout.entry} (managed region ${IMPORTS_REGION})`,
+  );
+  await mount(
+    builder,
+    layout.entry,
+    routesEdit(analysis),
+    `mount /api/auth and /api/notes on ${analysis.appVar} in ${layout.entry} (managed region ${ROUTES_REGION})`,
+  );
+  const planned = (await builder.currentContent(layout.entry)) ?? entryText;
+  assertStillParses(entryText, planned, layout.entry);
+  if (!analysis.routesPlaced) builder.assume(routesOrderNote(analysis.appVar, layout.entry));
   return {
     analysis,
     artifacts: [
@@ -314,6 +342,7 @@ async function planProjectFiles(
   );
   await addEnvLocal(
     builder,
+    root,
     layout,
     [{ name: "BETTER_AUTH_URL", value: url, comment: "this API's local origin" }],
     AUTH_RECIPE_ID,
@@ -357,7 +386,7 @@ function decisions(input: RecipePlanInput, layout: RecipeLayout, plan: AuthPlan)
     decision(
       "auth.routes",
       `Better Auth at /api/auth and per-user notes (the protected example) at /api/notes, mounted on ${plan.analysis.appVar} in ${layout.entry}`,
-      "Better Auth's default basePath; the notes routes prove the authorization boundary.",
+      `Better Auth's default basePath; the notes routes prove the authorization boundary. ${routesOrderNote(plan.analysis.appVar, layout.entry)}`,
     ),
     decision(
       "auth.origin",

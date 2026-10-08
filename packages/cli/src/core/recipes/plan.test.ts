@@ -5,13 +5,14 @@
  * secrets that never enter a plan.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OperationPlan, type PlannedAction } from "../contracts/plan.ts";
 import { envContractViolations } from "../env.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { joinRel } from "../fs/paths.ts";
 import { removeRegion } from "../transforms/index.ts";
+import { dataDrizzleSqlite } from "./data/recipe.ts";
 import { SCHEMA_TS } from "./data/templates.ts";
 import { materializePlan } from "./testing/apply.ts";
 import {
@@ -22,7 +23,8 @@ import {
   removeScratchDirs,
   singleApp,
 } from "./testing/fixtures.ts";
-import { ADOPTED_AGENTS, CREATE_HONO_INDEX } from "./testing/projects.ts";
+import { observeUnit } from "./testing/plan.ts";
+import { ADOPTED_AGENTS, CREATE_HONO_INDEX, commitAll } from "./testing/projects.ts";
 
 const TIMEOUT = 60_000;
 
@@ -325,6 +327,24 @@ describe("adopted custom layout (server/main.ts, port 4310, dirty tree)", () => 
   );
 
   test(
+    "the preview discloses that the routes are registered ahead of the app's later middleware",
+    async () => {
+      // Arrange — server/main.ts registers `api.use("*", …)` after its declaration.
+      const fx = await adoptedApp();
+      // Act
+      const { plan, contributions } = await planBoth(fx);
+      // Assert
+      const note = plan.assumptions.find((text) => text.includes("auth.routes block"));
+      expect(note).toContain("right after `api = new Hono()` in server/main.ts");
+      expect(note).toContain("middleware added later with api.use(…)");
+      expect(note).toContain("doesn't run for these routes");
+      const decision = contributions[1]?.decisions.find((entry) => entry.topic === "auth.routes");
+      expect(decision?.rationale).toContain(note as string);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "human work is preserved: dirty edits flagged (not clobbered), AGENTS.md and scripts untouched",
     async () => {
       // Arrange
@@ -348,6 +368,101 @@ describe("adopted custom layout (server/main.ts, port 4310, dirty tree)", () => 
         typecheck: "tsc --noEmit",
       });
       expect(pkg.version).toBe("0.3.0");
+    },
+    TIMEOUT,
+  );
+});
+
+describe("a CRLF entry", () => {
+  test(
+    "anchors, the chain guard, and the placement checks read it; removing Groot's regions gives back the human's lines",
+    async () => {
+      // Arrange
+      const crlf = CREATE_HONO_INDEX.replace(/\n/g, "\r\n");
+      const fx = await singleApp((root) => writeFileSync(join(root, "src/index.ts"), crlf));
+      const { plan } = await planBoth(fx);
+      // Act
+      await materializePlan(fx.root, plan);
+      // Assert — the line endings themselves are the shared transform's to keep, so compare lines.
+      const entry = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      const restored = removeRegion(removeRegion(entry, "auth.imports", "e"), "auth.routes", "e");
+      expect(restored.replace(/\r\n/g, "\n")).toBe(CREATE_HONO_INDEX);
+      expect(entry.replace(/\r\n/g, "\n")).toContain(
+        "const app = new Hono()\n// groot:begin auth.routes",
+      );
+    },
+    TIMEOUT,
+  );
+});
+
+describe("an entry directory with a space (my server/main.ts)", () => {
+  test(
+    "scripts quote the path and TypeScript literals escape it",
+    async () => {
+      // Arrange
+      const fx = await singleApp((root) => {
+        mkdirSync(join(root, "my server"));
+        renameSync(join(root, "src/index.ts"), join(root, "my server/main.ts"));
+      });
+      const app = { ...fx.app, entry: "my server/main.ts" };
+      // Act
+      const { plan } = await planBoth({ ...fx, app, blueprint: { ...fx.blueprint, apps: [app] } });
+      await materializePlan(fx.root, plan);
+      // Assert
+      const pkg = JSON.parse(readFileSync(join(fx.root, "package.json"), "utf8"));
+      expect(pkg.scripts["db:migrate"]).toBe("bun run 'my server/db/migrate.ts'");
+      expect(pkg.scripts["auth:generate"]).toContain(
+        "--config 'my server/auth.ts' --output 'my server/db/auth-schema.ts'",
+      );
+      // bun runs scripts through bash/sh/zsh on POSIX: the quoted path stays one word.
+      const words = Bun.spawnSync(
+        ["sh", "-c", pkg.scripts["db:migrate"].replace(/^bun run/, "printf '[%s]\\n'")],
+        { stdout: "pipe" },
+      );
+      expect(words.stdout.toString()).toBe("[my server/db/migrate.ts]\n");
+      expect(readFileSync(join(fx.root, "drizzle.config.ts"), "utf8")).toContain(
+        'schema: "./my server/db/schema.ts",',
+      );
+      expect(readFileSync(join(fx.root, "my server/main.ts"), "utf8")).toContain(
+        "app.route('/api/auth', authRoutes)",
+      );
+    },
+    TIMEOUT,
+  );
+});
+
+describe("re-planning an applied project", () => {
+  test(
+    "data + auth again: nothing to do — starters, the journal, and assigned env values are left alone",
+    async () => {
+      // Arrange
+      const fx = await singleApp();
+      await materializePlan(fx.root, (await planBoth(fx)).plan);
+      commitAll(fx.root, "add data and auth");
+      const applied = { ...fx, observation: await observeUnit(fx.root, fx.app, "single") };
+      // Act
+      const { plan, contributions } = await planBoth(applied);
+      // Assert
+      expect(plan.actions.map(outline)).toEqual([]);
+      const secret = contributions[1]?.decisions.find((entry) => entry.topic === "auth.secret");
+      expect(secret?.value).toBe("kept the existing BETTER_AUTH_SECRET in .env.local");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "data again after data alone, with the starter schema edited by its owner: nothing to do",
+    async () => {
+      // Arrange
+      const fx = await singleApp();
+      await materializePlan(fx.root, (await planBoth(fx, [dataDrizzleSqlite])).plan);
+      appendFileSync(join(fx.root, "src/db/schema.ts"), "\nexport const owners = 1;\n");
+      commitAll(fx.root, "add data, then edit the schema");
+      const applied = { ...fx, observation: await observeUnit(fx.root, fx.app, "single") };
+      // Act
+      const { plan } = await planBoth(applied, [dataDrizzleSqlite]);
+      // Assert
+      expect(plan.actions.map(outline)).toEqual([]);
     },
     TIMEOUT,
   );

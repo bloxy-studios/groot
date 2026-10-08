@@ -1,7 +1,8 @@
 /**
  * File templates for data.drizzle-sqlite, taken from the certified 2026-10-07
  * prototype (Bun + Hono + Drizzle ORM on bun:sqlite). Only layout-dependent
- * paths vary; everything else is byte-stable, so plans preview exactly and the
+ * paths vary (written as JSON string literals, so any path stays one valid
+ * literal); everything else is byte-stable, so plans preview exactly and the
  * content hashes recorded in groot.lock.json stay meaningful.
  *
  * The schema template is the source the static migration 0000 was generated
@@ -95,7 +96,7 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { openSqlite } from "./sqlite";
 
 // Resolved from this file so the script works from any cwd.
-const migrationsFolder = join(import.meta.dir, "${layout.migrationsFromDb}");
+const migrationsFolder = join(import.meta.dir, ${JSON.stringify(layout.migrationsFromDb)});
 
 const sqlite = openSqlite({ foreignKeys: false });
 try {
@@ -124,7 +125,7 @@ import { defineConfig } from "drizzle-kit";
 
 export default defineConfig({
   dialect: "sqlite",
-  schema: "${layout.schemaForKit}",
+  schema: ${JSON.stringify(layout.schemaForKit)},
   out: "./drizzle",
   // Only drizzle-kit migrate/push/studio connect; generate is fully offline.
   dbCredentials: { url: process.env.DATABASE_URL || "./data/app.db" },
