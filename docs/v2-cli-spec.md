@@ -44,7 +44,7 @@ All commands accept `--json` and `--events`. Paths in documents are project-rela
 
 ### `groot inspect [dir]`
 
-Read-only discovery. Reads manifests and configuration statically — never executes repository code; may run toolchain `--version` probes and read-only git commands. Data: [`project.schema.json`](../schemas/v2/project.schema.json) — units, topology, package manager, toolchains, agent files (with managed-region state), capability observations, git state (staged/unstaged/untracked), registration (`unregistered | v1 | v2 | invalid | unsupported-version`), writable support level (`certified | inspect-only | unsupported`) with reasons and a next step, unknowns, and contradictions. Every inferred value carries source, method, confidence, observation time, and the source fingerprint. Env variable **names** only. Exit 0 for any readable directory.
+Read-only discovery. Reads manifests and configuration statically — never runs project scripts or imports project code; may run toolchain `--version` probes and read-only git commands. Git runs with every `GIT_*` environment variable removed, `core.fsmonitor` disabled, and `--no-ext-diff --no-textconv`, but clean/smudge filter drivers configured in the repository's own `.git/config` can still run during `git status`/`git diff` — clone an untrusted repository (for example an extracted archive containing `.git`) with `git clone --no-local` instead of inspecting it in place. Data: [`project.schema.json`](../schemas/v2/project.schema.json) — units, topology, package manager, toolchains, agent files (with managed-region state), capability observations, git state (staged/unstaged/untracked), registration (`unregistered | v1 | v2 | invalid | unsupported-version`), writable support level (`certified | inspect-only | unsupported`) with reasons and a next step, unknowns, and contradictions. Every inferred value carries source, method, confidence, observation time, and the source fingerprint. Env variable **names** only. Exit 0 for any readable directory.
 
 ### `groot adopt [dir] [--dry-run]`
 
@@ -78,7 +78,7 @@ Previews ([`rollback.schema.json`](../schemas/v2/rollback.schema.json)) or execu
 
 ### `groot verify [--profile <p>[,<p>]] [--capability <id>] [--unit <path>]`
 
-Runs verification contracts — the blueprint's plus defaults — for the selected profiles (default `structural,build`): **structural** (offline, no processes), **build** (the unit's own typecheck/build scripts or local compiler), **runtime** (start the app on an ephemeral loopback port and probe it), **product-flow** (drive the declared flow against real wiring, e.g. sign-up → protected write → unauthorized rejection). Each check yields evidence ([`evidence.schema.json`](../schemas/v2/evidence.schema.json)) with `pass | fail | skipped | blocked`, the revision (HEAD + worktree fingerprint) and environment it ran against, timing, redacted artifacts, limitations, and — for skipped/blocked — the reason and next step. Report: [`verification.schema.json`](../schemas/v2/verification.schema.json) with one summary per profile. Exit 5 if any check failed; otherwise exit 7 if a requested check was blocked; else 0.
+Runs verification contracts — the blueprint's plus defaults — for the selected profiles (default `structural,build`): **structural** (offline, no processes), **build** (the unit's own typecheck/build scripts or local compiler), **runtime** (start the app on an ephemeral loopback port and probe it), **product-flow** (drive the declared flow against real wiring, e.g. sign-up → protected write → unauthorized rejection). Each check yields evidence ([`evidence.schema.json`](../schemas/v2/evidence.schema.json)) with `pass | fail | skipped | blocked`, the revision (HEAD + worktree fingerprint; before the first commit the fingerprint covers working-tree content) and environment it ran against, timing, redacted artifacts, limitations, and — for skipped/blocked — the reason and next step. Report: [`verification.schema.json`](../schemas/v2/verification.schema.json) with one summary per profile. Exit 5 if any check failed; otherwise exit 7 if a requested check was blocked; else 0.
 
 ### `groot evidence [id]`
 
@@ -122,7 +122,7 @@ Lists contracts (with schema URLs), commands, capabilities and recipes in this b
 
 ## Action classes and policy
 
-Plans declare the classes of effect they need: `fs.create`, `fs.edit`, `fs.delete`, `fs.move`, `deps.change`, `install`, `generator`, `command`, `network`, `git`, `process`, `external`. `groot.json` `policy.allow` lists what runs without extra approval (default: everything local); `policy.external` (`deny` | `ask`) governs effects on provider accounts, which always need an explicit `--allow external` and an adapter that supports them. The CLI, MCP tools, and task runners all go through the same executor check.
+Plans declare the classes of effect they need: `fs.create`, `fs.edit`, `fs.delete`, `fs.move`, `deps.change`, `install`, `generator`, `command`, `network`, `git`, `process`, `external`. `groot.json` `policy.allow` lists what runs without extra approval (default: everything local) and cannot list `external`; `policy.external` (`deny` | `ask`) governs effects on provider accounts, which always need an explicit `--allow external` from a human in a terminal and an adapter that supports them — MCP `operation_apply` refuses an agent-supplied `external` approval with `GROOT_E_POLICY_DENIED`. A plan file is untrusted: besides the classes it declares, every action type implies its own (`file.write`/`file.edit` need `fs.create` when the path is expected absent, else `fs.edit`; `env.secret` needs `fs.edit`; `command.run` needs `command` unless declared as `install`/`git`/`process`, plus `network` when it uses the network; `deps.add` needs `deps.change`; `generator.run` needs `generator`; deletes and moves need `fs.delete`/`fs.move`). The CLI, MCP tools, and task runners all go through the same executor check.
 
 ## State files
 
@@ -130,7 +130,7 @@ Plans declare the classes of effect they need: `fs.create`, `fs.edit`, `fs.delet
 | --- | --- | --- |
 | `groot.json` | yes | Blueprint v2 (or a v1 manifest until migrated) |
 | `groot.lock.json` | yes | Exact generator versions/integrity, recipe versions and dependencies, Groot-owned artifacts with content hashes |
-| `.groot/` | no (self-ignoring) | plans, operation journals and backups, evidence, tasks, reviews, worktrees, the writer lock |
+| `.groot/` | no (self-ignoring) | plans, operation journals and backups, evidence, tasks, reviews, worktrees, the writer lock. Must be a real directory inside the project — a symlinked `.groot`, `.groot/.gitignore`, or state subdirectory is refused with `GROOT_E_PATH_OUTSIDE_PROJECT` |
 
 ## Bare-word routing
 

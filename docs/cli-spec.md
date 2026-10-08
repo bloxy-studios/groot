@@ -20,7 +20,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 
 | Flag | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `--name <name>` | string | dir basename | Workspace/root package name |
+| `--name <name>` | string | dir basename | Workspace/root package name — must be non-empty (an empty or blank value is a usage error, exit 2) |
 | `--web <choice>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `react-router` \| `nuxt` \| `vite` \| `none` | prompt | Web app in `apps/web` |
 | `--mobile <choice>` | `expo` \| `react-native` \| `none` | prompt | Mobile app in `apps/mobile` |
 | `--desktop <choice>` | `tauri` \| `electron` \| `none` | prompt | Desktop app in `apps/desktop` (v1.1) |
@@ -36,7 +36,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | `--public` | — | off | With `--github`: make the created repository public (private otherwise) |
 | `--dir-conflict <policy>` | `error` \| `merge` \| `increment` | `error` | Non-empty target directory policy |
 | `--topology <shape>` | `monorepo` \| `single` | `monorepo` | `single` plants exactly one app at the project root (no trunk, workspaces, or backend package) — see [Topology](#topology) (v2) |
-| `--keep-failed` | — | off | Don't delete the target dir if a generator fails |
+| `--keep-failed` | — | off | Don't delete the target dir if a generator fails. With `--topology single`, the failed generator's partial output is moved into the target (or, when the target already existed, kept in the named staging directory — never merged into an existing target) |
 | `--verbose` | — | off | Stream generator output instead of spinners |
 | `--version`, `-v` / `--help`, `-h` | — | — | Standard |
 
