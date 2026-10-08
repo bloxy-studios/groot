@@ -9,6 +9,8 @@
  * when core code writes to console.log.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -19,7 +21,10 @@ import {
 } from "../../cli/test-support.ts";
 import type { BlockedDecision } from "../contracts/envelope.ts";
 import { GrootV2Error } from "../errors.ts";
-import { fail } from "./results.ts";
+import { createContext } from "../runtime.ts";
+import { blueprintFixture } from "../test-fixtures.ts";
+import { registerChecker, runVerification } from "../verify/engine.ts";
+import { fail, ok } from "./results.ts";
 import { verificationSummary } from "./tools-project.ts";
 
 const SERVER = join(import.meta.dir, "testing/fake-server.ts");
@@ -179,6 +184,49 @@ describe("verify_run results", () => {
       verificationReportFixture([evidenceFixture("build.typecheck.api", "pass")]),
     );
     expect(finished.summary).toContain("found no failures");
+  });
+
+  test("a check blocked on credentials still names them after the result redaction (real engine)", async () => {
+    // Arrange — the engine's own blocked evidence for a credential that isn't set.
+    registerChecker("test.mcp-credentialed", async () => ({
+      status: "pass",
+      summary: "ok",
+      method: { kind: "static", tool: "test", command: null },
+    }));
+    const report = await runVerification(createContext({ cwd: tmpdir(), env: {} }), {
+      root: mkdtempSync(join(tmpdir(), "groot-mcp-verify-")),
+      blueprint: blueprintFixture({
+        verification: [
+          {
+            id: "runtime.provider",
+            profile: "runtime",
+            description: "provider reachable",
+            checker: "test.mcp-credentialed",
+            capability: null,
+            unit: null,
+            needs: {
+              network: false,
+              processes: false,
+              credentials: ["PROVIDER_API_KEY"],
+              toolchains: [],
+            },
+          },
+        ],
+      }),
+      observation: null,
+      lock: null,
+      profiles: ["runtime"],
+    });
+
+    // Act — verify_run's result goes through the redaction every tool result gets.
+    const result = ok(verificationSummary(report)).structuredContent as {
+      evidence: { reason: string | null }[];
+      next: string[];
+    };
+
+    // Assert
+    expect(result.evidence[0]?.reason).toBe("credential not set: PROVIDER_API_KEY");
+    expect(result.next[0]).toContain("Set PROVIDER_API_KEY");
   });
 });
 

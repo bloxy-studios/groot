@@ -51,7 +51,7 @@ const NEXT_BY_ERROR: Partial<Record<ErrorId, string>> = {
   GROOT_E_INTERRUPTED:
     "The operation was interrupted at a checkpoint. Call operation_resume with its operationId.",
   GROOT_E_BLOCKED:
-    "A decision or prerequisite is missing — blocked[] has the question, the options, and resolveWith (a CLI flag such as --target or --recipe is the same-named tool argument). Resolve it with the user, then retry.",
+    "A decision or prerequisite is missing — blocked[] has the question, the options, and resolveWith. A CLI flag such as --target or --recipe is the same-named tool argument: `groot plan add a,b --target <app> --recipe <id>` is plan_add with capabilities [{capability: a, target, recipe}, {capability: b, target}]. Resolve it with the user, then retry.",
   GROOT_E_RUNNER_UNAVAILABLE:
     "The coding agent is not installed or not logged in. Ask the user to fix that, then retry.",
 };

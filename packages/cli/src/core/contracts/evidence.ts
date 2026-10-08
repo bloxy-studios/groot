@@ -133,7 +133,9 @@ export const VerificationReport = z
     /**
      * Verification was cancelled (SIGINT/SIGTERM, MCP cancellation) before
      * every selected check finished: the report is partial, `ok` is false,
-     * and the checks it never ran are `skipped` with reason "cancelled".
+     * and each check it never ran — or that failed while it was being
+     * cancelled — is `skipped` with reason "cancelled". A signal that arrives
+     * as the last check finishes leaves the report complete.
      */
     interrupted: z.boolean().optional(),
   })

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { VerificationContract } from "../contracts/common.ts";
 import { Evidence, VerificationReport } from "../contracts/evidence.ts";
 import { ephemeralPort } from "../ports.ts";
+import { redactValue } from "../redact.ts";
 import { createContext } from "../runtime.ts";
 import { appFixture, blueprintFixture } from "../test-fixtures.ts";
 import { defaultContracts, registerBuiltInCheckers } from "./checkers.ts";
@@ -169,7 +170,7 @@ describe("verification engine", () => {
     expect(runs).toBe(0);
     expect(missing.evidence[0]).toMatchObject({
       status: "blocked",
-      reason: "missing credential: GROOT_TEST_PROVIDER_TOKEN, GROOT_TEST_STORED_KEY",
+      reason: "credentials not set: GROOT_TEST_PROVIDER_TOKEN, GROOT_TEST_STORED_KEY",
     });
     expect(missing.evidence[0]?.nextStep).toContain("GROOT_TEST_STORED_KEY in apps/api/.env.local");
     expect(missing.profiles.runtime.status).toBe("blocked");
@@ -181,6 +182,49 @@ describe("verification engine", () => {
     expect(present.evidence[0]?.status).toBe("pass");
     expect(runs).toBe(1);
     expect(JSON.stringify([missing, present])).not.toContain(value);
+  });
+
+  test("a missing-credential record still names every credential after redaction", async () => {
+    // Arrange — stored evidence and MCP results are redacted, and these names
+    // look sensitive (…_API_KEY, …_TOKEN): only a `NAME: value` shape is masked.
+    const root = project();
+    registerChecker("test.credential-names", async () => ({
+      status: "pass",
+      summary: "ok",
+      method: STATIC_METHOD,
+    }));
+    const blueprint = blueprintFixture({
+      verification: [
+        contract("c.names", "test.credential-names", "runtime", {
+          credentials: ["PROVIDER_API_KEY", "PROVIDER_TOKEN"],
+        }),
+      ],
+    });
+    const run = (env: Record<string, string>) =>
+      runVerification(createContext({ cwd: tmpdir(), env }), {
+        root,
+        blueprint,
+        observation: null,
+        lock: null,
+        profiles: ["runtime"],
+      });
+
+    // Act
+    const both = (await run({})).evidence[0];
+    const one = (await run({ PROVIDER_TOKEN: "set" })).evidence[0];
+
+    // Assert
+    for (const entry of [both, one]) {
+      const naming = {
+        summary: entry?.summary,
+        reason: entry?.reason,
+        nextStep: entry?.nextStep,
+        details: entry?.details,
+      };
+      expect(redactValue(naming)).toEqual(naming);
+    }
+    expect(both?.reason).toBe("credentials not set: PROVIDER_API_KEY, PROVIDER_TOKEN");
+    expect(one?.reason).toBe("credential not set: PROVIDER_API_KEY");
   });
 
   test("a cancelled run is interrupted and not ok; a profile with unrun checks never reads as pass", async () => {
@@ -243,6 +287,72 @@ describe("verification engine", () => {
     );
 
     expect(report.evidence[0]).toMatchObject({ status: "skipped", reason: "cancelled" });
+    expect(report).toMatchObject({ interrupted: true, ok: false });
+  });
+
+  test("a run whose every check finished is not interrupted, though the signal fired during the last one", async () => {
+    // Arrange
+    const root = project();
+    const controller = new AbortController();
+    registerChecker("test.cancel-then-pass", async () => {
+      controller.abort("SIGINT");
+      return { status: "pass", summary: "ok", method: STATIC_METHOD };
+    });
+
+    // Act
+    const report = await runVerification(
+      createContext({ cwd: tmpdir(), signal: controller.signal }),
+      {
+        root,
+        blueprint: blueprintFixture({
+          verification: [contract("only.check", "test.cancel-then-pass", "build")],
+        }),
+        observation: null,
+        lock: null,
+        profiles: ["build"],
+      },
+    );
+
+    // Assert
+    expect(report).toMatchObject({ interrupted: false, ok: true });
+    expect(report.profiles.build.status).toBe("pass");
+  });
+
+  test.each([
+    ["blocked", "missing toolchain: docker"],
+    ["skipped", "no build script in apps/api"],
+  ] as const)("a check's own %s result stands when cancellation arrives while it runs", async (status, reason) => {
+    // Arrange — the first check ends with its own determination as the signal
+    // fires; the second never starts.
+    const root = project();
+    const controller = new AbortController();
+    registerChecker(`test.cancel-then-${status}`, async () => {
+      controller.abort("SIGTERM");
+      return { status, summary: reason, method: STATIC_METHOD, reason };
+    });
+
+    // Act
+    const report = await runVerification(
+      createContext({ cwd: tmpdir(), signal: controller.signal }),
+      {
+        root,
+        blueprint: blueprintFixture({
+          verification: [
+            contract("own.result", `test.cancel-then-${status}`, "build"),
+            contract("never.run", `test.cancel-then-${status}`, "build"),
+          ],
+        }),
+        observation: null,
+        lock: null,
+        profiles: ["build"],
+      },
+    );
+
+    // Assert
+    expect(report.evidence.map((entry) => [entry.check, entry.status, entry.reason])).toEqual([
+      ["own.result", status, reason],
+      ["never.run", "skipped", "cancelled"],
+    ]);
     expect(report).toMatchObject({ interrupted: true, ok: false });
   });
 

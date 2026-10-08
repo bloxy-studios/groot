@@ -401,3 +401,47 @@ describe("compatibility solver: one solve equals the same steps taken one at a t
     }
   });
 });
+
+describe("compatibility solver: recipe choices", () => {
+  /** auth.any accepts data from any recipe, and two recipes supply data. */
+  const ANY_DATA = [
+    fakeRecipe(descriptor({ id: "data.a", capability: "data" })),
+    fakeRecipe(descriptor({ id: "data.b", capability: "data" })),
+    fakeRecipe(
+      descriptor({
+        id: "auth.any",
+        capability: "auth",
+        requires: [{ capability: "data", recipes: [] }],
+      }),
+    ),
+  ];
+  const base = { blueprint: blueprintFixture(), observation, recipes: ANY_DATA };
+
+  test("a dependency's recipe choice names the capability to request and what requires it", () => {
+    const result = solve({ ...base, requested: [{ capability: "auth" }] });
+
+    expect(result.refusals).toEqual([
+      {
+        code: "ambiguous-choice",
+        message:
+          "auth.any requires data (typed persistence) on api, and several recipes supply it (data.a, data.b); choose one by requesting data with --recipe.",
+        alternatives: ["--recipe data.a", "--recipe data.b"],
+      },
+    ]);
+  });
+
+  test("a choice reached both as a request and as a requirement is refused once", () => {
+    for (const result of bothOrders([{ capability: "data" }, { capability: "auth" }], base)) {
+      expect(codes(result)).toEqual(["ambiguous-choice"]);
+      expect(result.refusals[0]?.message).toStartWith("Several recipes supply typed persistence");
+    }
+    // Requesting it with a recipe settles the requirement as well, in either order.
+    for (const result of bothOrders(
+      [{ capability: "data", recipe: "data.b" }, { capability: "auth" }],
+      base,
+    )) {
+      expect(result.ok).toBe(true);
+      expect(result.selections.map((s) => s.recipe)).toEqual(["data.b", "auth.any"]);
+    }
+  });
+});

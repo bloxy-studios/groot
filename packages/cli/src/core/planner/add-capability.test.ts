@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CapabilityRequest } from "../capabilities/solver.ts";
 import type { RecipeDescriptor } from "../contracts/capability.ts";
 import { schemaUrl } from "../contracts/common.ts";
 import { GrootLock } from "../contracts/lock.ts";
@@ -331,5 +332,96 @@ describe("add-capability planner", () => {
       requested: [{ capability: "data" }, { capability: "auth", target: "nowhere" }],
     }).catch((error: unknown) => error);
     expect(mixed).toMatchObject({ id: "GROOT_E_INCOMPATIBLE", exitCode: 2 });
+  });
+
+  test("a recipe choice names its capability, and resolveWith is a command the CLI can follow", async () => {
+    // Arrange — auth.any-data takes data from any recipe, and two recipes supply data.
+    const { root, blueprint, lock, blueprintSha } = project();
+    const anyData = [
+      CATALOG[0] as Recipe,
+      fakeRecipe(descriptor({ id: "data.other-test", capability: "data" }), "other.ts", [
+        "kysely",
+        "0.28.0",
+      ]),
+      fakeRecipe(
+        descriptor({
+          id: "auth.any-data",
+          capability: "auth",
+          requires: [{ capability: "data", recipes: [] }],
+        }),
+        "auth.ts",
+        ["better-auth", "1.7.7"],
+      ),
+    ];
+    const base = {
+      root,
+      blueprint,
+      blueprintSha,
+      lock,
+      recipes: anyData,
+      observation: observationFixture([unitFixture({ path: "apps/api" })], root),
+    };
+    const blockedOn = async (requested: CapabilityRequest[]): Promise<GrootV2Error> => {
+      const error = await planAddCapability(ctx(), { ...base, requested }).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toMatchObject({ id: "GROOT_E_BLOCKED", exitCode: 7 });
+      return error as GrootV2Error;
+    };
+    const resolution = async (requested: CapabilityRequest[]): Promise<string[]> =>
+      (await blockedOn(requested)).blocked.map((decision) => decision.resolveWith);
+
+    // Act — `groot plan add auth`: the CLI would give --recipe to auth, so data is named first.
+    const dependency = await blockedOn([{ capability: "auth" }]);
+
+    // Assert
+    expect(dependency.blocked).toEqual([
+      {
+        id: "choice.1",
+        kind: "decision",
+        question:
+          "auth.any-data requires data (typed persistence) on api, and several recipes supply it (data.add-test, data.other-test); choose one by requesting data with --recipe.",
+        options: [
+          {
+            id: "data.add-test",
+            label: "--recipe data.add-test",
+            effect: "plan data with data.add-test",
+            recommended: false,
+          },
+          {
+            id: "data.other-test",
+            label: "--recipe data.other-test",
+            effect: "plan data with data.other-test",
+            recommended: false,
+          },
+        ],
+        resolveWith: "groot plan add data,auth --recipe <id>",
+      },
+    ]);
+    expect(dependency.hint).toBe("groot plan add data,auth --recipe <id>");
+    // Following it — `groot plan add data,auth --recipe data.other-test` — plans both.
+    const followed = await planAddCapability(ctx(), {
+      ...base,
+      requested: [{ capability: "data", recipe: "data.other-test" }, { capability: "auth" }],
+    });
+    expect(followed.capabilities.selections.map((selection) => selection.recipe)).toEqual([
+      "data.other-test",
+      "auth.any-data",
+    ]);
+    // Named, but not first: one decision, the same resolution; a shared --target is kept.
+    expect(await resolution([{ capability: "auth" }, { capability: "data" }])).toEqual([
+      "groot plan add data,auth --recipe <id>",
+    ]);
+    expect(await resolution([{ capability: "auth", target: "api" }])).toEqual([
+      "groot plan add data,auth --target api --recipe <id>",
+    ]);
+    // Named first: the flag alone.
+    expect(await resolution([{ capability: "data" }, { capability: "auth" }])).toEqual([
+      "--recipe <id>",
+    ]);
+    // The one --recipe already belongs to another capability: plan the choice on its own first.
+    expect(await resolution([{ capability: "auth", recipe: "auth.any-data" }])).toEqual([
+      "groot plan add data --recipe <id>, apply it, then plan auth again",
+    ]);
   });
 });

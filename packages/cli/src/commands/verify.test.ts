@@ -22,7 +22,7 @@ const PROCESS_TIMEOUT = 180_000;
 
 describe("groot verify exit mapping", () => {
   const credential = evidence("runtime.provider", "blocked", {
-    reason: "missing credential: PROVIDER_TOKEN",
+    reason: "credential not set: PROVIDER_TOKEN",
     nextStep: "Set PROVIDER_TOKEN (or export it in the environment), then re-run groot verify.",
     details: { missingCredentials: ["PROVIDER_TOKEN"] },
   });
@@ -46,7 +46,7 @@ describe("groot verify exit mapping", () => {
       {
         id: "verify.runtime.provider",
         kind: "credential",
-        question: "runtime.provider is blocked: missing credential: PROVIDER_TOKEN",
+        question: "runtime.provider is blocked: credential not set: PROVIDER_TOKEN",
         options: [],
         resolveWith: credential.nextStep as string,
       },

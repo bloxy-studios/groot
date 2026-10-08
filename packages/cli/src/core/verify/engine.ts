@@ -3,9 +3,10 @@
  * requested profiles, turns every outcome into stored evidence tied to the
  * revision and environment actually checked, and summarizes each profile
  * separately. Missing checkers, toolchains, or credentials become `blocked`
- * evidence with the exact prerequisite — never a silent pass. A cancelled run
- * is reported as interrupted (never ok), and the checks it did not finish are
- * `skipped` with reason "cancelled" — never a pass, never a failure.
+ * evidence with the exact prerequisite — never a silent pass. A run cancelled
+ * before every selected check finished is interrupted (never ok): the checks
+ * it did not finish are `skipped` with reason "cancelled" — never a pass, never
+ * a failure — and a check that did finish keeps its own result.
  */
 import type { BlueprintV2 } from "../contracts/blueprint.ts";
 import type {
@@ -149,11 +150,14 @@ function missingPrerequisite(
     const storage = request.blueprint.environment.find((entry) => entry.name === name)?.storage;
     return storage === undefined ? name : `${name} in ${storage}`;
   });
+  const one = credentials.length === 1;
   return {
     status: "blocked",
-    summary: `requires ${credentials.join(", ")} which ${credentials.length === 1 ? "is" : "are"} not set`,
+    summary: `requires ${credentials.join(", ")} which ${one ? "is" : "are"} not set`,
     method: ENGINE_METHOD,
-    reason: `missing credential: ${credentials.join(", ")}`,
+    // Never "credential: NAMES" — redaction (stored evidence, MCP results)
+    // reads a sensitive word before ':' as an assignment and masks the names.
+    reason: `${one ? "credential" : "credentials"} not set: ${credentials.join(", ")}`,
     nextStep: `Set ${where.join(", ")} (or export it in the environment), then re-run groot verify.`,
     details: { missingCredentials: credentials },
   };
@@ -213,10 +217,14 @@ async function runOne(
       reason: "internal checker error",
     };
   }
-  // Cut short by cancellation (a killed process, an aborted request): that is
-  // not the check's own result.
-  return ctx.signal.aborted && outcome.status !== "pass" ? cancelled(outcome) : outcome;
+  // A failure while cancellation is under way can be its artifact (a killed
+  // process, an aborted request), so it says nothing about the check. A pass,
+  // or the checker's own blocked/skipped determination, stands.
+  return ctx.signal.aborted && outcome.status === "fail" ? cancelled(outcome) : outcome;
 }
+
+/** The check did not finish: cancellation came before or while it ran. */
+const wasCancelled = (entry: Evidence): boolean => entry.reason === CANCELLED_REASON;
 
 function summarize(evidence: readonly Evidence[], requested: boolean): ProfileSummary {
   const count = (status: EvidenceStatus): number =>
@@ -228,7 +236,7 @@ function summarize(evidence: readonly Evidence[], requested: boolean): ProfileSu
     blocked: count("blocked"),
   };
   // A profile whose checks did not all run (cancelled) never reads as passed.
-  const complete = evidence.every((entry) => entry.reason !== CANCELLED_REASON);
+  const complete = !evidence.some(wasCancelled);
   let status: ProfileSummary["status"] = "not-run";
   if (requested && evidence.length > 0) {
     if (summary.fail > 0) status = "fail";
@@ -305,7 +313,9 @@ export async function runVerification(
       evidence.filter((entry) => entry.profile === profile),
       request.profiles.includes(profile),
     );
-  const interrupted = ctx.signal.aborted;
+  // Interrupted means a selected check did not finish — not merely that the
+  // signal fired (it may arrive while the last check completes anyway).
+  const interrupted = evidence.some(wasCancelled);
   return {
     $schema: schemaUrl("verification"),
     schemaVersion: 1,

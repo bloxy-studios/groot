@@ -75,12 +75,14 @@ interface Resolution {
 
 /**
  * Choose recipe + target for one capability. `forcedTarget` pins
- * requirements to the dependent's app (auth on apps/api → data on apps/api).
+ * requirements to the dependent's app (auth on apps/api → data on apps/api);
+ * `dependent` is the recipe that requires it when nothing requests it.
  */
 function resolveOne(
   request: CapabilityRequest,
   input: SolveInput,
   forcedTarget: BlueprintApp | null,
+  dependent: Recipe | null,
 ): { recipe: Recipe; app: BlueprintApp } | SolverRefusal {
   const { blueprint, observation } = input;
   const capability = CAPABILITIES.find((entry) => entry.id === request.capability);
@@ -173,9 +175,14 @@ function resolveOne(
   // Never pick silently between recipes that could both supply the capability.
   const distinctRecipes = [...new Set(fits.map((fit) => fit.recipe.descriptor.id))];
   if (distinctRecipes.length > 1) {
+    const choices = distinctRecipes.join(", ");
     return {
       code: "ambiguous-choice",
-      message: `Several recipes supply ${capability.title.toLowerCase()} for ${distinctApps[0]} (${distinctRecipes.join(", ")}); choose one with --recipe.`,
+      // --recipe applies to a request, so a dependency's choice is made by requesting it.
+      message:
+        dependent === null
+          ? `Several recipes supply ${capability.title.toLowerCase()} for ${distinctApps[0]} (${choices}); choose one with --recipe.`
+          : `${dependent.descriptor.id} requires ${capability.id} (${capability.title.toLowerCase()}) on ${distinctApps[0]}, and several recipes supply it (${choices}); choose one by requesting ${capability.id} with --recipe.`,
       alternatives: distinctRecipes.map((id) => `--recipe ${id}`),
     };
   }
@@ -348,7 +355,7 @@ function visitRequirement(
     recipe: explicit?.recipe ?? requirement.recipes[0] ?? null,
     target: app.id,
   };
-  visit(request, input, app, reason, out, visiting);
+  visit(request, input, app, reason, out, visiting, explicit === undefined ? recipe : null);
   // Whatever supplies the requirement — chosen earlier in this solve or named
   // by an explicit request — must be a recipe the dependent declares compatible.
   const chosen = out.selections.find((entry) => keyOf(entry) === key);
@@ -366,8 +373,9 @@ function visit(
   reason: SolverSelection["reason"],
   out: Resolution,
   visiting: Set<string>,
+  dependent: Recipe | null = null,
 ): void {
-  const resolved = resolveOne(request, input, forcedTarget);
+  const resolved = resolveOne(request, input, forcedTarget, dependent);
   if ("code" in resolved) {
     out.refusals.push(resolved);
     return;
@@ -419,12 +427,26 @@ function visit(
   });
 }
 
+/**
+ * Each refusal once: a capability both requested and required by another
+ * request is resolved twice, and an unresolved choice would be reported twice.
+ */
+function distinctRefusals(refusals: readonly SolverRefusal[]): SolverRefusal[] {
+  const seen = new Set<string>();
+  return refusals.filter((refusal) => {
+    const key = JSON.stringify([refusal.code, refusal.message, refusal.alternatives]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Resolve requested capabilities into ordered recipe applications or refusals. */
 export function solve(input: SolveInput): SolverResult {
   const out: Resolution = { selections: [], refusals: [] };
   for (const request of input.requested) {
     visit(request, input, null, "requested", out, new Set());
   }
-  out.refusals.push(...plannedConflicts(input, out.selections));
-  return { ok: out.refusals.length === 0, selections: out.selections, refusals: out.refusals };
+  const refusals = distinctRefusals([...out.refusals, ...plannedConflicts(input, out.selections)]);
+  return { ok: refusals.length === 0, selections: out.selections, refusals };
 }
