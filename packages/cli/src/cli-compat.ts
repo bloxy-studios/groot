@@ -11,6 +11,9 @@ const KNOWN_COMMANDS = new Set([
   "add",
   "doctor",
   // v2 (docs/v2-cli-spec.md#bare-word-routing — these words are reserved)
+  "inspect",
+  "adopt",
+  "migrate",
   "plan",
   "apply",
   "status",

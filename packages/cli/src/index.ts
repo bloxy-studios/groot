@@ -5,12 +5,15 @@ import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
 import { normalizeArgv } from "./cli-compat.ts";
 import { add } from "./commands/add.ts";
+import { adopt } from "./commands/adopt.ts";
 import { apply } from "./commands/apply.ts";
 import { context } from "./commands/context.ts";
 import { doctor } from "./commands/doctor.ts";
 import { evidence } from "./commands/evidence.ts";
 import { init } from "./commands/init.ts";
+import { inspect } from "./commands/inspect.ts";
 import { mcp } from "./commands/mcp.ts";
+import { migrate } from "./commands/migrate.ts";
 import { plan } from "./commands/plan.ts";
 import { resume } from "./commands/resume.ts";
 import { rollback } from "./commands/rollback.ts";
@@ -29,6 +32,9 @@ const main = defineCommand({
     init,
     add,
     doctor,
+    inspect,
+    adopt,
+    migrate,
     plan,
     apply,
     status,
