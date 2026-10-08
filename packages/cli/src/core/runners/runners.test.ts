@@ -20,6 +20,7 @@ import {
   bashRules,
   CLAUDE_SANDBOX_SETTINGS,
   claudeArgv,
+  missingClaudeFlags,
   parseClaudeAuth,
   permissionModes,
 } from "./claude.ts";
@@ -27,7 +28,7 @@ import { ClaudeStreamParser, claudeUsage } from "./claude-stream.ts";
 import { classifyCodexLogin, codexArgv, parseCodexHelp } from "./codex.ts";
 import { CodexStreamParser, classifyCodexText } from "./codex-stream.ts";
 import { assertSafeArg, buildCapabilities, flagBlock, parseVersion } from "./common.ts";
-import { isScrubbed, knownSecretsFromEnv, runnerEnv } from "./env.ts";
+import { credentialFreeEnv, isScrubbed, knownSecretsFromEnv, runnerEnv } from "./env.ts";
 import { codexNativeBehindLauncher, isWrapperShim, resolveExecutable } from "./resolve.ts";
 import type { SupervisedExit } from "./supervise.ts";
 import type { RunnerInvocation } from "./types.ts";
@@ -90,13 +91,22 @@ describe("Claude Code argv", () => {
     expect(pairs("--permission-mode")).toBe("acceptEdits");
     expect(pairs("--permission-prompts")).toBe("none");
     expect(argv).toContain("--strict-mcp-config");
+    // User/project hooks and installed plugins stay out; auth keeps working.
+    expect(argv).toContain("--safe-mode");
+    // Only these built-in tools exist for the agent: no Task/Workflow/agents/cron/messaging.
+    expect(pairs("--tools")).toBe("Read,Edit,Write,Glob,Grep,Bash");
     expect(pairs("--max-turns")).toBe("12");
     expect(pairs("--max-budget-usd")).toBe("0.75");
     expect(pairs("--model")).toBe("opus");
     expect(pairs("--effort")).toBe("low");
     expect(pairs("--settings")).toBe(CLAUDE_SANDBOX_SETTINGS);
     expect(JSON.parse(CLAUDE_SANDBOX_SETTINGS)).toEqual({
-      sandbox: { enabled: true, allowUnsandboxedCommands: false },
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        autoAllowBashIfSandboxed: false,
+        allowUnsandboxedCommands: false,
+      },
     });
     expect(pairs("--append-system-prompt")).toBe("task rules");
     const allowed = argv.slice(
@@ -115,7 +125,12 @@ describe("Claude Code argv", () => {
       "Bash(git status *)",
     ]);
     const denied = argv.slice(argv.indexOf("--disallowedTools") + 1, argv.indexOf("--settings"));
-    expect(denied).toEqual(["Bash(git push *)", "Bash(git commit *)", "WebFetch", "WebSearch"]);
+    for (const command of ["push", "commit", "update-ref", "branch", "checkout", "reset"]) {
+      expect(denied).toContain(`Bash(git ${command})`);
+      expect(denied).toContain(`Bash(git ${command} *)`);
+    }
+    expect(denied).toEqual(expect.arrayContaining(["WebFetch", "WebSearch"]));
+    expect(denied.some((rule) => rule.startsWith("Bash(git status"))).toBe(false);
     const joined = argv.join(" ");
     expect(joined).not.toContain("SECRET-PROMPT-TEXT");
     for (const forbidden of ["dangerously", "--yolo", "bypassPermissions", "--bare"]) {
@@ -154,6 +169,46 @@ describe("Claude Code argv", () => {
       "Bash(bun run lint)",
       "Bash(bun run lint *)",
     ]);
+  });
+
+  test("protected paths (the repository's git directory) are write-denied inside the sandbox", () => {
+    // Act
+    const argv = claudeArgv(
+      "/bin/claude",
+      invocation({ protectedPaths: ["/repo/.git", "/repo with space/.git"] }),
+    );
+
+    // Assert
+    expect(JSON.parse(argv[argv.indexOf("--settings") + 1] as string)).toEqual({
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        autoAllowBashIfSandboxed: false,
+        allowUnsandboxedCommands: false,
+        filesystem: { denyWrite: ["/repo/.git", "/repo with space/.git"] },
+      },
+    });
+  });
+
+  test("a Claude Code whose help lacks a containment flag is refused (flags named)", () => {
+    // Arrange
+    const help = [
+      "  --allowedTools, --allowed-tools <tools...>",
+      "  --append-system-prompt <prompt>",
+      "  --disallowedTools, --disallowed-tools <tools...>",
+      "  --output-format <format>",
+      "  --permission-mode <mode>",
+      "  --permission-prompts <target>",
+      "  -r, --resume [value]",
+      "  --session-id <uuid>",
+      "  --settings <file-or-json>",
+      "  --strict-mcp-config",
+      "  --verbose",
+    ].join("\n");
+
+    // Act / Assert
+    expect(missingClaudeFlags(help)).toEqual(["--tools", "--safe-mode"]);
+    expect(missingClaudeFlags(`${help}\n  --tools <tools...>\n  --safe-mode`)).toEqual([]);
   });
 });
 
@@ -345,6 +400,68 @@ describe("Claude Code stream-json", () => {
       lines({ type: "result", subtype: "success", is_error: false, terminal_reason: "completed" }),
     );
     expect(parser.finish(exitOf({ exitCode: 1 })).status).toBe("failed");
+  });
+
+  test("a resume target Claude Code does not know is not resumable (never retried as a resume)", () => {
+    // Act
+    const result = new ClaudeStreamParser(CONTEXT).finish(
+      exitOf({ exitCode: 1, stderrTail: `No conversation found with session ID: ${SESSION}` }),
+    );
+
+    // Assert
+    expect(result.status).toBe("failed");
+    expect(result.sessionId).toBeNull();
+    expect(result.error?.id).toBe("GROOT_E_NOT_RESUMABLE");
+    expect(result.error?.details).toMatchObject({ cause: "session-not-found" });
+  });
+
+  test("a sandbox that cannot start blocks the run (Groot requires it: failIfUnavailable)", () => {
+    // Arrange — the stream-json path also writes an error result before exiting.
+    const reason =
+      "sandbox is enabled but dependencies are missing: bubblewrap · install missing tools";
+    const withResult = new ClaudeStreamParser(CONTEXT);
+    feed(
+      withResult,
+      lines({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: [`Sandbox required but unavailable: ${reason}`],
+      }),
+    );
+
+    // Act
+    const bare = new ClaudeStreamParser(CONTEXT).finish(
+      exitOf({ exitCode: 1, stderrTail: `Error: sandbox required but unavailable: ${reason}.` }),
+    );
+    const reported = withResult.finish(exitOf({ exitCode: 1 }));
+
+    // Assert
+    for (const result of [bare, reported]) {
+      expect(result.status).toBe("failed");
+      expect(result.error?.id).toBe("GROOT_E_BLOCKED");
+      expect(result.error?.details).toMatchObject({ cause: "sandbox-unavailable" });
+      expect(result.error?.hint).toContain("sandbox");
+    }
+  });
+
+  test("tools the init event reports beyond Groot's --tools list are recorded as a warning", () => {
+    // Arrange
+    const contained = new ClaudeStreamParser({ ...CONTEXT, tools: ["Read", "Bash"] });
+    const exposed = new ClaudeStreamParser({ ...CONTEXT, tools: ["Read", "Bash"] });
+    const init = (tools: string[]) =>
+      lines({ type: "system", subtype: "init", session_id: SESSION, tools });
+    feed(contained, init(["Read", "Bash"]));
+    feed(exposed, init(["Read", "Bash", "Task", "CronCreate"]));
+
+    // Act
+    const quiet = contained.finish(exitOf()).notes.join(" ");
+    const loud = exposed.finish(exitOf()).notes.join(" ");
+
+    // Assert
+    expect(quiet).not.toContain("WARNING");
+    expect(loud).toContain("WARNING");
+    expect(loud).toContain("Task, CronCreate");
   });
 });
 
@@ -609,6 +726,49 @@ describe("runner child environment", () => {
         SHORT_TOKEN: "abc",
       }),
     ).toEqual(["tok-1234567890"]);
+  });
+
+  test("the credential-free env (unreviewed code) drops credentials and keeps what tests need", () => {
+    // Arrange
+    const kept = {
+      PATH: "/usr/bin",
+      HOME: "/Users/someone",
+      TMPDIR: "/tmp/x",
+      LANG: "en_US.UTF-8",
+      LC_ALL: "C",
+      CI: "1",
+      BUN_INSTALL: "/Users/someone/.bun",
+      USER: "someone",
+      TERM: "xterm-256color",
+      HTTPS_PROXY: "http://proxy.internal:3128",
+      GITHUB_ACTIONS: "true",
+    };
+    const dropped = {
+      MY_SERVICE_API_TOKEN: "tok-abcdef1234567890",
+      SHORT_TOKEN: "abc",
+      GH_TOKEN: "x",
+      DB_PASSWORD: "hunter22",
+      BUN_CONFIG_TOKEN: "registry-token",
+      AWS_ACCESS_KEY_ID: "AKIAEXAMPLE",
+      AWS_PROFILE: "prod",
+      GOOGLE_APPLICATION_CREDENTIALS: "/keys/sa.json",
+      AZURE_CLIENT_ID: "client",
+      ANTHROPIC_BASE_URL: "https://gateway.example",
+      OPENAI_ORG_ID: "org",
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+      CODEX_HOME: "/Users/someone/.codex",
+      SSH_AUTH_SOCK: "/tmp/ssh-agent.sock",
+      KUBECONFIG: "/Users/someone/.kube/config",
+      DATABASE_URL: "postgres://app:s3cret@db.internal:5432/app",
+      CLAUDECODE: "1",
+      NODE_OPTIONS: "--require /tmp/preload.js",
+    };
+
+    // Act
+    const env = credentialFreeEnv({ ...kept, ...dropped });
+
+    // Assert
+    expect(env).toEqual(kept);
   });
 });
 

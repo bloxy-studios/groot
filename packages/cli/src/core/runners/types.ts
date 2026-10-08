@@ -39,8 +39,20 @@ export interface RunnerInvocation {
   readonly model?: string | null;
   readonly effort?: string | null;
   readonly limits: RunnerLimits;
-  /** Command prefixes the agent may run (become `Bash(<cmd> *)` allow rules for Claude). */
+  /**
+   * Commands the agent may run. Claude Code: `Bash(<cmd>)` + `Bash(<cmd> *)`
+   * allow rules — the only Bash commands it can run (sandboxed commands are
+   * not auto-approved). Codex has no per-command rules: there they are
+   * prompt guidance, and its workspace-write sandbox is the boundary.
+   */
   readonly allowedCommands: readonly string[];
+  /**
+   * Absolute paths the agent's sandboxed commands must never write — the
+   * repository's git directory, so no command can move the user's refs.
+   * Claude Code: sandbox `filesystem.denyWrite`. Codex has no per-path
+   * setting; the task layer still compares refs before and after every attempt.
+   */
+  readonly protectedPaths?: readonly string[];
   /** Absolute path of the redacted JSONL event log for this attempt. */
   readonly eventsLogPath: string;
   readonly signal: AbortSignal;
@@ -49,6 +61,12 @@ export interface RunnerInvocation {
   /** Base environment (CoreContext.env); scrubbed before it reaches the agent. */
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly grace?: CancelGrace;
+  /**
+   * Called once the runner process exists, with its pid — also its process
+   * group id (runners lead their own group). Lets a caller record the group
+   * so a later Groot can find a runner its crashed predecessor left behind.
+   */
+  readonly onSpawn?: (pid: number) => void;
 }
 
 /** A normalized view of one provider event (the raw line is in the attempt log). */

@@ -5,6 +5,9 @@
  * effort, inject Node preload modules, or re-activate wrapper shims. They are
  * removed. Provider selectors (CLAUDE_CODE_USE_FOUNDRY, ANTHROPIC_*, OPENAI_*)
  * are kept — Groot reuses each tool's own login and never reads credentials.
+ *
+ * Code nobody has reviewed yet (the agent's change under pre-review acceptance
+ * checks) gets `credentialFreeEnv` instead: no credentials at all.
  */
 import type { RunnerId } from "../contracts/task.ts";
 
@@ -78,4 +81,58 @@ export function knownSecretsFromEnv(env: Readonly<Record<string, string | undefi
       ([name, value]) => value !== undefined && value.length >= 8 && SENSITIVE_NAME.test(name),
     )
     .map(([, value]) => value as string);
+}
+
+/** Cloud, model-provider, and agent namespaces: credentials and account selection. */
+const CREDENTIAL_PREFIXES: readonly string[] = [
+  "AWS_",
+  "AZURE_",
+  "ARM_",
+  "GOOGLE_",
+  "GCLOUD_",
+  "GCP_",
+  "CLOUDSDK_",
+  "ANTHROPIC_",
+  "OPENAI_",
+  "CLAUDE_CODE_",
+  "CODEX_",
+];
+
+/** Access to keys or credential files without a secret-looking name. */
+const CREDENTIAL_NAMES: readonly string[] = [
+  "SSH_AUTH_SOCK",
+  "SSH_ASKPASS",
+  "GIT_ASKPASS",
+  "KUBECONFIG",
+];
+
+/** A URL carrying a password (`scheme://user:pass@host`), e.g. DATABASE_URL. */
+const URL_WITH_PASSWORD = /[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]+@/i;
+
+function isCredential(name: string, value: string): boolean {
+  return (
+    SENSITIVE_NAME.test(name) ||
+    CREDENTIAL_PREFIXES.some((prefix) => name.startsWith(prefix)) ||
+    CREDENTIAL_NAMES.includes(name) ||
+    URL_WITH_PASSWORD.test(value)
+  );
+}
+
+/**
+ * The environment for code nobody has reviewed yet (pre-review acceptance
+ * checks run what the agent wrote): every credential-looking variable —
+ * sensitive names, cloud/provider/agent namespaces, key-agent sockets, URLs
+ * with passwords — and the agent-session variables are removed. What tests
+ * need (PATH, HOME, TMPDIR, LANG/LC_*, CI, BUN_*, proxies without
+ * credentials) stays. Files under HOME stay readable: this is not a sandbox.
+ */
+export function credentialFreeEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined || isScrubbed(name) || isCredential(name, value)) continue;
+    out[name] = value;
+  }
+  return out;
 }
