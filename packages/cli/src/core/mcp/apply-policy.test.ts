@@ -29,6 +29,7 @@ interface ToolCall {
   content: { type: string; text: string }[];
   structuredContent: {
     summary: string;
+    next?: string[];
     error?: { id: string; hint: string | null; details: Record<string, unknown> | null };
     plan?: { planId: string };
   };
@@ -59,6 +60,9 @@ describe("operation_apply (MCP)", () => {
     expect(refused.structuredContent.error?.id).toBe("GROOT_E_POLICY_DENIED");
     expect(refused.structuredContent.error?.details).toMatchObject({ denied: ["external"] });
     expect(refused.content[0]?.text).toContain(`groot apply ${planId} --allow external`);
+    // The follow-up is a person at a terminal — never "retry with allow=external".
+    expect(refused.structuredContent.next?.[0]).toContain(`groot apply ${planId} --allow external`);
+    expect(refused.structuredContent.next?.join(" ")).not.toContain("operation_apply again");
     expect(status.structuredContent.summary).toBe("No operations yet.");
   }, 60_000);
 });

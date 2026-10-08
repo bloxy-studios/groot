@@ -93,7 +93,7 @@ export function registerProjectTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Inspect project",
       description:
-        "Read-only discovery: apps/packages, topology, package manager, toolchains, agent instruction files, git state, registration, support level, unknowns and contradictions. Facts carry source and confidence. Never executes project code.",
+        "Read-only discovery: apps/packages, topology, package manager, toolchains, agent instruction files, git state, registration, support level, unknowns and contradictions. Facts carry source and confidence. Never runs project scripts or code (read-only git commands may still run filter drivers configured in the repository's own .git/config — clone untrusted repositories with git clone --no-local first).",
       inputSchema: z.strictObject({ root: Root }),
       outputSchema: Summary,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },

@@ -56,9 +56,27 @@ const NEXT_BY_ERROR: Partial<Record<ErrorId, string>> = {
     "The coding agent is not installed or not logged in. Ask the user to fix that, then retry.",
 };
 
+/**
+ * The follow-up for an error. A denied `external` class is never something
+ * the agent can approve (operation_apply refuses allow=external), so it gets
+ * a person-at-a-terminal step instead of the generic "approve and retry".
+ */
+function nextStepFor(info: ErrorInfo): string | undefined {
+  const details = (info.details ?? {}) as { denied?: unknown; planId?: unknown };
+  if (
+    info.id === "GROOT_E_POLICY_DENIED" &&
+    Array.isArray(details.denied) &&
+    details.denied.includes("external")
+  ) {
+    const plan = typeof details.planId === "string" ? details.planId : "<planId>";
+    return `External effects need a person's approval: ask the user to review the plan and run \`groot apply ${plan} --allow external\` in a terminal, then call operation_status to follow the operation.`;
+  }
+  return NEXT_BY_ERROR[info.id];
+}
+
 export function fail(error: unknown): ToolResult {
   const info: ErrorInfo = toErrorInfo(error);
-  const next = NEXT_BY_ERROR[info.id];
+  const next = nextStepFor(info);
   const text = `${info.id}: ${info.message}${info.hint ? ` — ${info.hint}` : ""}${next ? ` Next: ${next}` : ""}`;
   // Like the CLI envelope: a blocked (exit 7) error always lists what resolves it.
   const blocked = blockedDecisions(error, info);
