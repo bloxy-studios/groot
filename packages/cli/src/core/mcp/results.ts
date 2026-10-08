@@ -8,7 +8,7 @@
  */
 import type { ErrorId, ErrorInfo } from "../contracts/envelope.ts";
 import type { OperationPlan } from "../contracts/plan.ts";
-import { toErrorInfo } from "../errors.ts";
+import { blockedDecisions, toErrorInfo } from "../errors.ts";
 import { redactValue } from "../redact.ts";
 
 export interface ToolResult {
@@ -51,7 +51,7 @@ const NEXT_BY_ERROR: Partial<Record<ErrorId, string>> = {
   GROOT_E_INTERRUPTED:
     "The operation was interrupted at a checkpoint. Call operation_resume with its operationId.",
   GROOT_E_BLOCKED:
-    "A prerequisite or decision is missing — see the message; resolve it with the user, then retry.",
+    "A decision or prerequisite is missing — blocked[] has the question, the options, and resolveWith. A CLI flag such as --target or --recipe is the same-named tool argument: `groot plan add a,b --target <app> --recipe <id>` is plan_add with capabilities [{capability: a, target, recipe}, {capability: b, target}]. Resolve it with the user, then retry.",
   GROOT_E_RUNNER_UNAVAILABLE:
     "The coding agent is not installed or not logged in. Ask the user to fix that, then retry.",
 };
@@ -60,7 +60,9 @@ export function fail(error: unknown): ToolResult {
   const info: ErrorInfo = toErrorInfo(error);
   const next = NEXT_BY_ERROR[info.id];
   const text = `${info.id}: ${info.message}${info.hint ? ` — ${info.hint}` : ""}${next ? ` Next: ${next}` : ""}`;
-  const structured = redactValue({ summary: text, error: info, next: next ? [next] : [] });
+  // Like the CLI envelope: a blocked (exit 7) error always lists what resolves it.
+  const blocked = blockedDecisions(error, info);
+  const structured = redactValue({ summary: text, error: info, blocked, next: next ? [next] : [] });
   return {
     isError: true,
     content: [{ type: "text", text: redactValue(text) }],

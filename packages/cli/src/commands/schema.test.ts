@@ -52,6 +52,30 @@ describe("groot schema (process-level)", () => {
     });
   }, 60_000);
 
+  test.skipIf(process.platform === "win32")(
+    "human output larger than a pipe buffer arrives whole through a slow reader (schema plan, ~67 KB)",
+    async () => {
+      // A consumer that doesn't drain at once (`| jq`, an agent harness) lets
+      // the 64 KiB pipe buffer fill; Bun then lost the rest of a large
+      // console.log at exit. A reader that starts late makes that certain.
+      const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+      const pipeline = `${quote(process.execPath)} ${quote(CLI_ENTRY)} schema plan | (sleep 3; cat)`;
+      const proc = Bun.spawn(["sh", "-c", pipeline], {
+        cwd: tmpdir(),
+        stdout: "pipe",
+        stderr: "ignore",
+        stdin: new TextEncoder().encode(""),
+      });
+      const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      expect(exitCode).toBe(0);
+      expect(stdout.length).toBeGreaterThan(65_536);
+      expect((JSON.parse(stdout) as { $id: string }).$id).toBe(
+        "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/plan.schema.json",
+      );
+    },
+    60_000,
+  );
+
   test("a named contract prints its JSON Schema", async () => {
     const { stdout, exitCode } = await runCli(["schema", "plan", "--json"]);
     expect(exitCode).toBe(0);

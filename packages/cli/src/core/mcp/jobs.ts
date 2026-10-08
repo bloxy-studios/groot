@@ -57,15 +57,26 @@ export class JobTracker {
         job.error = error;
       },
     );
+    // Re-insert so iteration order stays start order (a restarted key is the newest).
+    this.jobs.delete(key);
     this.jobs.set(key, job as Job<unknown>);
     return job;
   }
 
-  /** Find a job by its key or by the operation id it was linked to. */
+  /**
+   * Find a job by its key, or by the operation it was linked to: the newest
+   * job still running for that operation (a resume or rollback outlives the
+   * apply that started it), else the newest one.
+   */
   find(keyOrOperationId: string): Job<unknown> | undefined {
     const direct = this.jobs.get(keyOrOperationId);
     if (direct !== undefined) return direct;
-    return [...this.jobs.values()].find((job) => job.operationId === keyOrOperationId);
+    const linked = this.linkedTo(keyOrOperationId);
+    return linked.findLast((job) => !job.done) ?? linked.at(-1);
+  }
+
+  private linkedTo(operationId: string): Job<unknown>[] {
+    return [...this.jobs.values()].filter((job) => job.operationId === operationId);
   }
 
   /**
@@ -93,12 +104,17 @@ export class JobTracker {
     return outcome;
   }
 
-  /** Cooperatively cancel a running job (the executor checkpoints and stops). */
+  /**
+   * Cooperatively cancel a running job — or every job still running for an
+   * operation (the executor checkpoints and stops). False when none ran.
+   */
   cancel(keyOrOperationId: string): boolean {
-    const job = this.find(keyOrOperationId);
-    if (job === undefined || job.done) return false;
-    job.controller.abort("cancelled via operation_cancel");
-    return true;
+    const direct = this.jobs.get(keyOrOperationId);
+    const running = (direct !== undefined ? [direct] : this.linkedTo(keyOrOperationId)).filter(
+      (job) => !job.done,
+    );
+    for (const job of running) job.controller.abort("cancelled via operation_cancel");
+    return running.length > 0;
   }
 
   /** Abort everything (server shutdown). */

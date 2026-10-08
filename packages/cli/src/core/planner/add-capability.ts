@@ -20,6 +20,7 @@ import type {
   Sha256,
   VerificationContract,
 } from "../contracts/common.ts";
+import type { BlockedDecision } from "../contracts/envelope.ts";
 import type { GrootLock, RecipeLock } from "../contracts/lock.ts";
 import type { JsonOp, OperationPlan } from "../contracts/plan.ts";
 import type { ProjectObservation } from "../contracts/project.ts";
@@ -45,18 +46,110 @@ export interface AddCapabilityInput {
 
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
-function refusalError(refusals: readonly SolverRefusal[]): GrootV2Error {
+const MAX_HINTS = 6;
+
+/** What a choice is made against: the request as given, and the recipe catalog. */
+interface ChoiceContext {
+  readonly requested: readonly CapabilityRequest[];
+  readonly catalog: readonly Recipe[];
+}
+
+/**
+ * How to choose a recipe for `capability`. `groot plan add` gives its one
+ * --recipe to the first capability it names, so a choice for any other — a
+ * dependency, or a capability named later — names that capability first; and
+ * when another capability already carries the flag, the choice is planned and
+ * applied on its own first. (MCP sets `recipe` on that capability's entry.)
+ */
+function recipeResolution(capability: string, requested: readonly CapabilityRequest[]): string {
+  if (requested[0]?.capability === capability) return "--recipe <id>";
+  const targets = new Set(requested.map((request) => request.target ?? null));
+  const [shared] = targets;
+  const target = targets.size === 1 && shared ? ` --target ${shared}` : "";
+  const others = [...new Set(requested.map((request) => request.capability))].filter(
+    (name) => name !== capability,
+  );
+  if (requested.some((request) => request.capability !== capability && request.recipe)) {
+    return `groot plan add ${capability}${target} --recipe <id>, apply it, then plan ${others.join(",")} again`;
+  }
+  return `groot plan add ${[capability, ...others].join(",")}${target} --recipe <id>`;
+}
+
+/** The value an alternative chooses ("--recipe data.a" → "data.a"). */
+const chosen = (alternative: string): string => alternative.replace(/^--\w+ /, "");
+
+/**
+ * An ambiguous-choice refusal as the decision that resolves it. The solver
+ * lists the choices as "--target <app>" or "--recipe <id>" alternatives; every
+ * recipe of one choice supplies the same capability.
+ */
+function choiceDecision(
+  refusal: SolverRefusal,
+  index: number,
+  context: ChoiceContext,
+): BlockedDecision {
+  const byRecipe = refusal.alternatives.every((entry) => entry.startsWith("--recipe "));
+  const first = chosen(refusal.alternatives[0] ?? "");
+  const capability = byRecipe
+    ? context.catalog.find((recipe) => recipe.descriptor.id === first)?.descriptor.capability
+    : undefined;
+  return {
+    id: `choice.${index + 1}`,
+    kind: "decision",
+    question: refusal.message,
+    options: refusal.alternatives.map((alternative) => {
+      const value = chosen(alternative);
+      return {
+        id: value,
+        label: alternative,
+        effect: byRecipe ? `plan ${capability ?? "it"} with ${value}` : `plan it for ${value}`,
+        recommended: false,
+      };
+    }),
+    resolveWith: !byRecipe
+      ? "--target <app>"
+      : capability === undefined
+        ? "--recipe <id>"
+        : recipeResolution(capability, context.requested),
+  };
+}
+
+/** A bare flag lists its choices; a command is the resolution itself. */
+function choiceHint(blocked: readonly BlockedDecision[]): string {
+  return blocked
+    .flatMap((decision) =>
+      decision.resolveWith.startsWith("--")
+        ? decision.options.map((option) => option.label)
+        : [decision.resolveWith],
+    )
+    .slice(0, MAX_HINTS)
+    .join(" · ");
+}
+
+function refusalError(refusals: readonly SolverRefusal[], context: ChoiceContext): GrootV2Error {
+  const message = refusals.map((refusal) => refusal.message).join(" ");
+  // A missing choice (several apps or recipes fit) is not an incompatibility:
+  // it is blocked on a decision that --target or --recipe resolves (exit 7).
+  if (refusals.every((refusal) => refusal.code === "ambiguous-choice")) {
+    const blocked = refusals.map((refusal, index) => choiceDecision(refusal, index, context));
+    return new GrootV2Error("GROOT_E_BLOCKED", message, {
+      hint: choiceHint(blocked),
+      details: { refusals },
+      blocked,
+    });
+  }
+  const hint = refusals
+    .flatMap((refusal) => refusal.alternatives)
+    .slice(0, MAX_HINTS)
+    .join(" · ");
   const unknown = refusals.every(
     (refusal) => refusal.code === "unknown-capability" || refusal.code === "unknown-recipe",
   );
   return new GrootV2Error(
     unknown ? "GROOT_E_UNKNOWN_CAPABILITY" : "GROOT_E_INCOMPATIBLE",
-    refusals.map((refusal) => refusal.message).join(" "),
+    message,
     {
-      hint: refusals
-        .flatMap((refusal) => refusal.alternatives)
-        .slice(0, 6)
-        .join(" · "),
+      hint,
       details: { refusals },
     },
   );
@@ -79,7 +172,7 @@ export async function planAddCapability(
     recipes: input.recipes,
   });
   const catalog = input.recipes ?? listRecipes();
-  if (!result.ok) throw refusalError(result.refusals);
+  if (!result.ok) throw refusalError(result.refusals, { requested: input.requested, catalog });
 
   const pending = result.selections.filter((selection) => !selection.alreadySatisfied);
   const names = input.requested.map((request) => request.capability).join(" + ");

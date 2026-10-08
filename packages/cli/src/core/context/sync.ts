@@ -57,6 +57,10 @@ export interface ContextSyncResult {
 
 const bytes = (text: string | null): number => (text === null ? 0 : Buffer.byteLength(text));
 
+/** Is `dir` strictly inside `ancestor`? (project-relative POSIX directories, "." = the root) */
+const isInside = (dir: string, ancestor: string): boolean =>
+  ancestor === "." ? dir !== "." : dir.startsWith(`${ancestor}/`);
+
 /** A compact, line-prefixed preview of what changes. */
 function previewDiff(before: string | null, after: string): string {
   if (before === null)
@@ -236,39 +240,48 @@ export async function planContextSync(input: ContextSyncInput): Promise<ContextS
     );
   }
 
+  const nested = observation.agentFiles.filter(
+    (file) => file.tool === "agents-md" && file.path !== agentsPath,
+  );
   if (blueprint.context.claudeMd !== null) {
     const target = claudeTarget(observation, blueprint.context.claudeMd);
     const importLine = target.startsWith(".claude/") ? "@../AGENTS.md" : renderClaudeImport();
     await session.region(target, CLAUDE_IMPORT_REGION_ID, importLine, "start", "");
-    const nested = observation.agentFiles.filter(
-      (file) => file.tool === "agents-md" && file.path !== agentsPath,
-    );
     for (const file of nested) {
-      const dir = dirname(file.path);
       await session.region(
-        `${dir}/CLAUDE.md`,
+        `${dirname(file.path)}/CLAUDE.md`,
         CLAUDE_IMPORT_REGION_ID,
         renderClaudeImport(),
         "start",
         "",
       );
-      const chain = bytes(rootAfter) + file.bytes;
-      const chainBefore = bytes(await readOriginal(builder, agentsPath)) + file.bytes;
-      if (chain > CHAIN_BUDGET_BYTES && chainBefore <= CHAIN_BUDGET_BYTES) {
-        throw new GrootV2Error(
-          "GROOT_E_BLOCKED",
-          `Syncing would push ${agentsPath} + ${file.path} to ${chain} bytes, past Codex's ${CHAIN_BUDGET_BYTES}-byte AGENTS.md budget (it truncates the most specific file first).`,
-          {
-            hint: "Shorten the nested AGENTS.md or move detail into skills/docs, then sync again.",
-            details: { chain },
-          },
-        );
-      }
-      if (chain > CHAIN_BUDGET_BYTES) {
-        session.warnings.push(
-          `${agentsPath} + ${file.path} already exceed Codex's ${CHAIN_BUDGET_BYTES}-byte budget`,
-        );
-      }
+    }
+  }
+
+  // Codex concatenates every AGENTS.md from the root down to the working
+  // directory, so each nested file's chain is the root plus all of its
+  // ancestors' AGENTS.md — whether or not the project uses CLAUDE.md.
+  const rootBefore = bytes(await readOriginal(builder, agentsPath));
+  for (const file of nested) {
+    const dir = dirname(file.path);
+    const above = nested.filter((other) => isInside(dir, dirname(other.path)));
+    const files = [agentsPath, ...above.map((other) => other.path).sort(), file.path];
+    const nestedBytes = [...above, file].reduce((sum, entry) => sum + entry.bytes, 0);
+    const chain = bytes(rootAfter) + nestedBytes;
+    if (chain > CHAIN_BUDGET_BYTES && rootBefore + nestedBytes <= CHAIN_BUDGET_BYTES) {
+      throw new GrootV2Error(
+        "GROOT_E_BLOCKED",
+        `Syncing would push ${files.join(" + ")} to ${chain} bytes, past Codex's ${CHAIN_BUDGET_BYTES}-byte AGENTS.md budget (it truncates the most specific file first).`,
+        {
+          hint: "Shorten the nested AGENTS.md or move detail into skills/docs, then sync again.",
+          details: { chain, files },
+        },
+      );
+    }
+    if (chain > CHAIN_BUDGET_BYTES) {
+      session.warnings.push(
+        `${files.join(" + ")} already exceed Codex's ${CHAIN_BUDGET_BYTES}-byte budget`,
+      );
     }
   }
 

@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { evidenceFixture } from "../../cli/test-support.ts";
 import type { BlueprintV2 } from "../contracts/blueprint.ts";
 import { schemaUrl } from "../contracts/common.ts";
 import { TaskContext } from "../contracts/context.ts";
@@ -379,6 +380,45 @@ describe("context sync", () => {
     expect(error instanceof GrootV2Error && error.id === "GROOT_E_BLOCKED").toBe(true);
   });
 
+  test("the chain budget holds without CLAUDE.md and counts every AGENTS.md on the way down", async () => {
+    const sync = async (files: Record<string, string>, claudeMd: string | null) => {
+      const root = project(files);
+      const doc = blueprint();
+      try {
+        await planContextSync({
+          builder: builder(root),
+          blueprint: { ...doc, context: { ...doc.context, claudeMd } },
+          observation: observation(
+            root,
+            Object.entries(files).map(([path, content]) => agentFile(path, content)),
+          ),
+          lock: emptyLock(),
+          skipConflicts: false,
+        });
+        return null;
+      } catch (caught) {
+        return caught;
+      }
+    };
+    const blocked = (error: unknown) =>
+      error instanceof GrootV2Error && error.id === "GROOT_E_BLOCKED";
+
+    // Opting out of CLAUDE.md doesn't opt out of Codex's budget.
+    const big = `# web\n\n${"x".repeat(31_500)}\n`;
+    expect(blocked(await sync({ "apps/web/AGENTS.md": big }, null))).toBe(true);
+
+    // Codex concatenates root → apps → apps/web: ~34 KB although each pair fits.
+    const half = (name: string) => `# ${name}\n\n${"y".repeat(16_000)}\n`;
+    const chain = { "apps/AGENTS.md": half("apps"), "apps/web/AGENTS.md": half("web") };
+    const refused = await sync(chain, "CLAUDE.md");
+    expect(blocked(refused)).toBe(true);
+    expect((refused as GrootV2Error).message).toContain("apps/AGENTS.md + apps/web/AGENTS.md");
+
+    // Siblings are separate chains: 16 KB + 16 KB under different directories fits.
+    const siblings = { "apps/api/AGENTS.md": half("api"), "apps/web/AGENTS.md": half("web") };
+    expect(await sync(siblings, "CLAUDE.md")).toBeNull();
+  });
+
   test("the managed region lists variable names and storage, never values", () => {
     const region = renderAgentsRegion(blueprint(), observation("/tmp/x"));
     expect(region).toContain("`BETTER_AUTH_SECRET`");
@@ -409,6 +449,35 @@ describe("task context", () => {
     expect(context.acceptance.map((entry) => entry.id)).toEqual(["auth.flow"]);
     expect(context.gaps).toContain("BETTER_AUTH_SECRET is not set in apps/api/.env.local");
     expect(JSON.stringify(context)).not.toContain(SECRET_VALUE);
+  });
+
+  test("a cancelled check's record never hides the last real result for that check", () => {
+    const root = project();
+    const scope = { capability: "auth", unit: "apps/api", operationId: null, taskId: null };
+    const failed = evidenceFixture("auth.flow", "fail", {
+      profile: "product-flow",
+      scope,
+      reason: "sign-up returned 500",
+    });
+    const cancelled = evidenceFixture("auth.flow", "skipped", {
+      profile: "product-flow",
+      scope,
+      summary: "not run — verification was cancelled",
+      reason: "cancelled",
+    });
+
+    const context = buildTaskContext({
+      blueprint: blueprint(),
+      observation: observation(root),
+      evidence: [cancelled, failed], // newest first, as listEvidence returns them
+      task: "fix sign up on the api",
+      root,
+    });
+
+    expect(context.evidence.map((entry) => [entry.id, entry.status])).toEqual([
+      [failed.id, "fail"],
+    ]);
+    expect(context.gaps).toContain("auth.flow is fail: sign-up returned 500");
   });
 
   test("without a task every app is in scope; unregistered projects say so", () => {
