@@ -136,6 +136,18 @@ describe("groot.json v1 and v2 both load", () => {
     const preset = await loadPreset(root);
     expect(preset.selections).toMatchObject({ web: "sveltekit", api: "hono", backend: "none" });
   });
+
+  test("a plan that would write an invalid blueprint is a usage error naming the first issue", () => {
+    let error: unknown;
+    try {
+      planToBlueprint({ ...plan({ web: "next" }), name: "" });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(GrootError);
+    expect((error as GrootError).exitCode).toBe(2);
+    expect((error as GrootError).message).toContain("project.name");
+  });
 });
 
 describe("add keeps the workspace's manifest version (process-level)", () => {

@@ -29,25 +29,37 @@ import { GeneratorLock } from "./lock.ts";
 // Structured edits
 // ---------------------------------------------------------------------------
 
+/**
+ * An RFC 6901 pointer ("" = the whole document). Tokens that reach prototype
+ * machinery (`__proto__`, `constructor`, `prototype`) are not JSON members and
+ * are refused, so an untrusted plan can never modify the process through an edit.
+ */
+export const JsonPointer = z
+  .string()
+  .regex(
+    /^(?:\/(?!(?:__proto__|constructor|prototype)(?:\/|$))[^/]*)*$/,
+    "expected an RFC 6901 JSON pointer without __proto__, constructor, or prototype tokens",
+  );
+
 /** JSON edit operations; pointers are RFC 6901. Formatting is preserved (indent + trailing newline). */
 export const JsonOp = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("set"), pointer: z.string(), value: z.unknown() }).strict(),
+  z.object({ op: z.literal("set"), pointer: JsonPointer, value: z.unknown() }).strict(),
   z
     .object({
       op: z.literal("set-if-absent"),
-      pointer: z.string(),
+      pointer: JsonPointer,
       value: z.unknown(),
     })
     .strict(),
   z
     .object({
       op: z.literal("merge"),
-      pointer: z.string(),
+      pointer: JsonPointer,
       value: z.record(z.string(), z.unknown()),
     })
     .strict(),
-  z.object({ op: z.literal("remove"), pointer: z.string() }).strict(),
-  z.object({ op: z.literal("append-unique"), pointer: z.string(), value: z.unknown() }).strict(),
+  z.object({ op: z.literal("remove"), pointer: JsonPointer }).strict(),
+  z.object({ op: z.literal("append-unique"), pointer: JsonPointer, value: z.unknown() }).strict(),
 ]);
 export type JsonOp = z.infer<typeof JsonOp>;
 
@@ -102,6 +114,24 @@ export const StructuredEdit = z.discriminatedUnion("kind", [
 ]);
 export type StructuredEdit = z.infer<typeof StructuredEdit>;
 
+/** Dotenv files by basename: `.env`, `.env.local`, `.env.production`, … */
+const DOTENV_FILE = /^\.env(?:\..+)?$/;
+
+/** Committed example dotenv files, which hold placeholders only. */
+const DOTENV_EXAMPLE = /^\.env\.(?:example|sample|template)$/;
+
+/**
+ * True when an edit's result may hold secret values: every `env` edit, and
+ * any edit of a dotenv file other than a committed example. A plan never
+ * carries such a result (`after` is null) — the executor computes it at apply
+ * time — so values never enter plans or journals.
+ */
+export function isSecretBearingEdit(path: string, edit: StructuredEdit): boolean {
+  if (edit.kind === "env") return true;
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return DOTENV_FILE.test(name) && !DOTENV_EXAMPLE.test(name);
+}
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -145,9 +175,11 @@ export const FileEditAction = z
     path: RelPath,
     edit: StructuredEdit,
     /**
-     * Precomputed when the file exists at planning time (exact preview):
-     * `expect` is its current hash and `after` the resulting content. Deferred
-     * edits (files produced by earlier steps) are computed during execution.
+     * Precomputed when the file's content is known at planning time (exact
+     * preview): `expect` pins that content and `after` is the result. Null
+     * (computed during execution) for files whose content an earlier step
+     * changes without a preview, and for secret-bearing edits — env edits
+     * and non-example dotenv files — whose `edit` is the preview instead.
      */
     expect: PathExpectation,
     after: z.object({ content: z.string(), sha256: Sha256 }).strict().nullable(),
@@ -155,7 +187,17 @@ export const FileEditAction = z
     owns: z.array(z.string()),
     createIfMissing: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((action, ctx) => {
+    if (action.after !== null && isSecretBearingEdit(action.path, action.edit)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["after"],
+        message:
+          "must be null for an env edit or an edit of a dotenv file (dotenv contents never enter a plan)",
+      });
+    }
+  });
 
 export const FileDeleteAction = z
   .object({

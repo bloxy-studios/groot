@@ -5,21 +5,37 @@
  *
  * Because a plan file is untrusted, the classes it needs are not taken only
  * from its own `requiredClasses`: every action's declared classes count too,
- * plus the classes an action type intrinsically implies (a command runs a
- * process, a dependency change edits a manifest, …). A hand-edited plan that
- * under-declares its effects is therefore still held to the policy.
+ * plus the classes an action type intrinsically implies (a write creates or
+ * replaces a file, a command runs a process, a dependency change edits a
+ * manifest, …). A hand-edited plan that under-declares its effects is
+ * therefore still held to the policy.
  */
 import type { Policy } from "../contracts/blueprint.ts";
 import type { ActionClass } from "../contracts/common.ts";
-import type { OperationPlan, PlannedAction } from "../contracts/plan.ts";
+import type { OperationPlan, PathExpectation, PlannedAction } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 
 /** Classes that already describe "a process runs" — a command needs one of them. */
 const EXECUTION_CLASSES: readonly ActionClass[] = ["command", "install", "git", "process"];
 
+/**
+ * A file step creates its path when the plan expects it absent, and otherwise
+ * changes a file that exists by then. The expectation is re-verified before
+ * the step runs, so a document cannot claim "absent" for a file it replaces.
+ */
+function fileClass(expect: PathExpectation): ActionClass {
+  return expect.state === "absent" ? "fs.create" : "fs.edit";
+}
+
 /** Classes an action needs regardless of what the document declares. */
 function intrinsicClasses(action: PlannedAction): ActionClass[] {
   switch (action.type) {
+    case "file.write":
+    case "file.edit":
+      return [fileClass(action.expect)];
+    case "env.secret":
+      // No class is specific to secrets: the step edits an env file (creating it when missing).
+      return ["fs.edit"];
     case "file.delete":
       return ["fs.delete"];
     case "file.move":

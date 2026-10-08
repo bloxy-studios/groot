@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { JsonOp, StructuredEdit } from "../contracts/plan.ts";
 import { applyEdit, findRegions, removeRegion, TransformConflict } from "./index.ts";
 
 describe("json edits", () => {
@@ -51,6 +52,64 @@ describe("json edits", () => {
       ),
     ).toThrow(/not an object/);
   });
+
+  test("pointers into the prototype chain are conflicts and leave Object.prototype untouched", () => {
+    const original = Object.getOwnPropertyDescriptors(Object.prototype);
+    const originalNames = Object.getOwnPropertyNames(Object.prototype).sort();
+    const originalHasOwn = Object.prototype.hasOwnProperty;
+    const attempts: JsonOp[] = [
+      { op: "remove", pointer: "/__proto__/hasOwnProperty" },
+      { op: "set", pointer: "/__proto__/isAdmin", value: true },
+      { op: "merge", pointer: "/__proto__", value: { polluted: "yes" } },
+      { op: "set", pointer: "/constructor/prototype/isAdmin", value: true },
+      { op: "append-unique", pointer: "/scripts/prototype", value: "x" },
+    ];
+    let outcomes: unknown[] = [];
+    let names: string[] = [];
+    let hasOwn: unknown;
+    try {
+      outcomes = attempts.map((op) => {
+        try {
+          return applyEdit(`{"name":"app","scripts":{}}\n`, { kind: "json", ops: [op] }, "a.json");
+        } catch (error) {
+          return error;
+        }
+      });
+      names = Object.getOwnPropertyNames(Object.prototype).sort();
+      hasOwn = Object.prototype.hasOwnProperty;
+    } finally {
+      // A regression must not leak into the rest of the test run.
+      for (const key of Object.getOwnPropertyNames(Object.prototype)) {
+        if (!(key in original)) delete (Object.prototype as Record<string, unknown>)[key];
+      }
+      Object.defineProperties(Object.prototype, original);
+    }
+    for (const outcome of outcomes) expect(outcome).toBeInstanceOf(TransformConflict);
+    expect(names).toEqual(originalNames);
+    expect(hasOwn).toBe(originalHasOwn);
+  });
+
+  test("inherited members are not JSON members: ops create own members instead", () => {
+    const out = applyEdit(
+      "{}\n",
+      {
+        kind: "json",
+        ops: [
+          { op: "set-if-absent", pointer: "/toString", value: "own" },
+          { op: "merge", pointer: "/valueOf", value: { a: 1 } },
+          { op: "append-unique", pointer: "/hasOwnProperty", value: "x" },
+          { op: "set", pointer: "/isPrototypeOf/deep", value: 1 },
+        ],
+      },
+      "a.json",
+    );
+    expect(JSON.parse(out)).toEqual({
+      toString: "own",
+      valueOf: { a: 1 },
+      hasOwnProperty: ["x"],
+      isPrototypeOf: { deep: 1 },
+    });
+  });
 });
 
 describe("managed regions", () => {
@@ -94,6 +153,37 @@ describe("managed regions", () => {
     const withRegion = applyEdit(base, edit("x"), "AGENTS.md");
     expect(removeRegion(withRegion, "project-context", "AGENTS.md").trimEnd()).toBe("Keep me");
   });
+
+  test("a begin marker with a missing or malformed hash is a conflict, never overwritten", () => {
+    for (const begin of [
+      "<!-- groot:begin project-context -->",
+      "<!-- groot:begin project-context sha256:DEADBEEF -->",
+    ]) {
+      const text = `# Notes\n\n${begin}\nmy hand-written notes\n<!-- groot:end project-context -->\n`;
+      expect(findRegions(text)[0]?.intact).toBe(false);
+      expect(findRegions(text)[0]?.recordedHash).toBeNull();
+      expect(() => applyEdit(text, edit("generated"), "AGENTS.md")).toThrow(/no valid sha256/);
+      expect(() => removeRegion(text, "project-context", "AGENTS.md")).toThrow(TransformConflict);
+    }
+  });
+
+  test("upsert then remove restores the original bytes (separator included)", () => {
+    const cases: ["start" | "end", string][] = [
+      ["start", "Prefer small commits.\n"],
+      ["end", "# Acme\nAlways run the smoke test.\n"],
+      ["start", ""],
+      ["end", ""],
+      ["start", "\n"],
+      ["end", "\n"],
+      ["start", "no final newline"],
+      ["end", "no final newline"],
+    ];
+    for (const [placement, original] of cases) {
+      const withRegion = applyEdit(original, { ...edit("@AGENTS.md"), placement }, "CLAUDE.md");
+      expect(withRegion).not.toBe(original);
+      expect(removeRegion(withRegion, "project-context", "CLAUDE.md")).toBe(original);
+    }
+  });
 });
 
 describe("source anchors", () => {
@@ -121,6 +211,38 @@ describe("source anchors", () => {
     const multi = `const app = new Hono({\n  strict: false,\n});\napp.get("/", () => {});\n`;
     const out = applyEdit(multi, mount, "src/index.ts");
     expect(out.indexOf("groot:begin")).toBeGreaterThan(out.indexOf("});"));
+  });
+
+  test("the semicolon-free create-hono shape gets the region right after the declaration", () => {
+    const plain = `import { Hono } from 'hono'\n\nconst app = new Hono()\n\napp.get('/', (c) => {\n  return c.text('Hello Hono!')\n})\n\nexport default app\n`;
+    const lines = applyEdit(plain, mount, "src/index.ts").split("\n");
+    expect(lines[3]).toMatch(/^\/\/ groot:begin auth-mount sha256:/);
+  });
+
+  test("a statement that continues on the next line (a chain) is a conflict, never split", () => {
+    const chained = `import { Hono } from "hono";\n\nconst app = new Hono()\n  .basePath("/api")\n  .get("/health", (c) => c.text("ok"));\n\nexport default app;\n`;
+    expect(() => applyEdit(chained, mount, "src/index.ts")).toThrow(
+      /line 3 continues on line 4 — refusing to insert mid-expression/,
+    );
+    const commented = `const app = new Hono()\n  // request logging\n  .use(logger());\nexport default app;\n`;
+    expect(() => applyEdit(commented, mount, "src/index.ts")).toThrow(TransformConflict);
+    const trailing = `const app =\n  new Hono();\n`;
+    expect(() => applyEdit(trailing, { ...mount, anchor: "^const app =" }, "src/index.ts")).toThrow(
+      /continues on line 2/,
+    );
+  });
+
+  test("a quote inside a comment of a multi-line statement cannot hide its end", () => {
+    const jsdoc = `const app = new Hono({\n  /** Don't strip trailing slashes */\n  strict: false,\n});\n\napp.get("/", (c) => c.text("hi"));\n\nexport default app;\n`;
+    const lines = applyEdit(jsdoc, mount, "src/index.ts").split("\n");
+    expect(lines[lines.indexOf("});") + 1]).toMatch(/^\/\/ groot:begin auth-mount sha256:/);
+  });
+
+  test("a statement whose end the scan cannot find is a conflict, not a guess", () => {
+    const stray = `const app = new Hono({\n  getPath: (req) => req.url.replace(/'/g, ""),\n});\nexport default app;\n`;
+    expect(() => applyEdit(stray, mount, "src/index.ts")).toThrow(
+      /could not find where the statement on line 1 ends/,
+    );
   });
 
   test("zero or several anchors are conflicts with a precise reason", () => {
@@ -161,5 +283,64 @@ describe("line and env edits", () => {
     expect(out).toBe(
       "DATABASE_URL=./data/custom.db\n\n# auth base URL\nBETTER_AUTH_URL=http://localhost:3001\n",
     );
+  });
+});
+
+describe("line endings", () => {
+  const crlf = (text: string): string => text.replace(/\n/g, "\r\n");
+  const region = {
+    kind: "managed-region" as const,
+    regionId: "project-context",
+    content: "## Layout\n- apps/api",
+    commentStyle: "html" as const,
+    placement: "end" as const,
+  };
+  const edits: [string, StructuredEdit][] = [
+    ["# Acme\n\nAlways run the smoke test.\n", region],
+    [
+      "const app = new Hono();\n\nexport default app;\n",
+      {
+        kind: "source-anchor",
+        anchor: String.raw`^const app = new Hono\b`,
+        anchorDescription: "the app declaration",
+        position: "after-line",
+        regionId: "auth-mount",
+        content: "app.use(auth);",
+        commentStyle: "slash",
+      },
+    ],
+    ["node_modules\n", { kind: "lines", lines: [".groot/"], header: "# groot" }],
+    ["A=1\n", { kind: "env", entries: [{ name: "B", value: "2", comment: "b" }] }],
+    [
+      '{\n  "name": "app"\n}\n',
+      { kind: "json", ops: [{ op: "set", pointer: "/private", value: true }] },
+    ],
+  ];
+
+  test("a CRLF file stays CRLF on every line: the LF result with CRLF endings", () => {
+    for (const [lf, edit] of edits) {
+      const out = applyEdit(crlf(lf), edit, "file");
+      expect(out).toBe(crlf(applyEdit(lf, edit, "file")));
+      expect(out.replace(/\r\n/g, "")).not.toContain("\n");
+    }
+  });
+
+  test("re-applying to a CRLF file returns it unchanged, so the no-op is detectable", () => {
+    for (const [lf, edit] of edits) {
+      const once = applyEdit(crlf(lf), edit, "file");
+      expect(applyEdit(once, edit, "file")).toBe(once);
+    }
+    const gitignore = "node_modules\r\n.env\r\n";
+    expect(applyEdit(gitignore, { kind: "lines", lines: [".env"], header: null }, "x")).toBe(
+      gitignore,
+    );
+  });
+
+  test("removeRegion keeps CRLF; a no-op leaves even a mixed file untouched", () => {
+    const original = crlf("# Acme\nNotes.\n");
+    const withRegion = applyEdit(original, region, "AGENTS.md");
+    expect(removeRegion(withRegion, "project-context", "AGENTS.md")).toBe(original);
+    const mixed = "a\r\nb\nc\r\n";
+    expect(applyEdit(mixed, { kind: "lines", lines: ["b"], header: null }, "x")).toBe(mixed);
   });
 });

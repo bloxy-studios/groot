@@ -75,6 +75,25 @@ describe("groot init (process-level, non-TTY)", () => {
     expect(stderr).toContain("--github needs the initial commit");
   });
 
+  test("an empty or blank --name → exit 2 with a usage error, never a raw ZodError", async () => {
+    const cwd = await scratch();
+    for (const name of ["", "   "]) {
+      const { stdout, stderr, exitCode } = await runCli(cwd, [
+        "init",
+        "demo",
+        "--name",
+        name,
+        "--yes",
+        "--dry-run",
+        "--json",
+      ]);
+      expect(exitCode).toBe(2);
+      expect(stderr).toContain("--name cannot be empty");
+      expect(stderr).not.toContain("ZodError");
+      expect(stdout).toBe("");
+    }
+  }, 60_000);
+
   test("--github shows in the dry-run plan summary (private by default, public opt-in)", async () => {
     const cwd = await scratch();
     // The identity precondition runs even on dry runs (truthful preview) —
