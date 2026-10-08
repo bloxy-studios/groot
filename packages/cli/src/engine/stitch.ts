@@ -11,7 +11,7 @@ import { basename, join } from "node:path";
 import { backendEnvLines } from "./env-names.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { planToManifest } from "./plan.ts";
-import type { FrameworkId, Plan, PlannedScaffold } from "./types.ts";
+import type { FrameworkId, Plan } from "./types.ts";
 
 /** Lockfiles a generator may have left inside its scaffold directory. */
 const NESTED_LOCKFILES = [
