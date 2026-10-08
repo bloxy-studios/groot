@@ -6,10 +6,16 @@
  */
 
 const KNOWN_COMMANDS = new Set([
+  // v1
   "init",
   "add",
   "doctor",
+  // v2 (docs/v2-cli-spec.md#bare-word-routing — these words are reserved)
   "plan",
+  "apply",
+  "status",
+  "resume",
+  "rollback",
   "verify",
   "evidence",
   "context",
