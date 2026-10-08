@@ -251,11 +251,9 @@ describe.skipIf(!e2e)("Groot v2 acceptance flow (real generators + installs)", (
       });
       expect(crashed.exitCode).not.toBe(0);
       const status = await json(root, ["status"]);
-      const operations = status.envelope.data as
-        | { operationId: string; status: string }[]
-        | { operations: { operationId: string }[] };
-      const list = Array.isArray(operations) ? operations : operations.operations;
-      const operationId = list[0]?.operationId as string;
+      const operationId = (status.envelope.data as { operations: { id: string }[] }).operations[0]
+        ?.id as string;
+      expect(operationId).toMatch(/^op_/);
       const resumed = await json(root, ["resume", operationId]);
       expect(resumed.exitCode).toBe(0);
       expect((resumed.envelope.data as { status: string }).status).toBe("completed");
