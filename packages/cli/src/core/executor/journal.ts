@@ -107,15 +107,25 @@ export class Journal {
   private constructor(
     readonly path: string,
     existing: readonly JournalRecord[],
+    private readonly writable: boolean,
   ) {
     this.entries = [...existing];
   }
 
-  /** Open for appending (truncating a torn tail first so no record fuses with it). */
+  /**
+   * Open for appending, truncating a torn tail first so no record fuses with
+   * it. Only the writer-lock holder may do this: to anyone else an
+   * unterminated last line may be a record a live writer is still appending.
+   */
   static open(path: string): Journal {
     const read = readJournal(path);
     if (read.tornTail) truncateSync(path, read.validBytes);
-    return new Journal(path, read.records);
+    return new Journal(path, read.records, true);
+  }
+
+  /** A read-only view (no lock needed; a torn tail is ignored, never repaired). */
+  static view(path: string): Journal {
+    return new Journal(path, readJournal(path).records, false);
   }
 
   get records(): readonly JournalRecord[] {
@@ -123,6 +133,15 @@ export class Journal {
   }
 
   append(draft: JournalDraft): JournalRecord {
+    if (!this.writable) {
+      throw new GrootV2Error(
+        "GROOT_E_INTERNAL",
+        "A read-only journal view cannot be appended to.",
+        {
+          details: { path: this.path },
+        },
+      );
+    }
     const last = this.entries[this.entries.length - 1];
     const record = JournalRecord.parse({
       ...draft,

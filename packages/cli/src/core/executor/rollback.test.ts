@@ -5,7 +5,7 @@
  * concealment in backups, the compensating install, and idempotence.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GrootV2Error } from "../errors.ts";
 import { hashTree } from "../fs/hash.ts";
@@ -18,6 +18,7 @@ import {
   buildPlan,
   journalRecords,
   MULTI_STEP_FILES,
+  operationDir,
   permissive,
   scratchProject,
   setMode,
@@ -135,6 +136,30 @@ describe("rollback: restoration", () => {
     expect(error.toInfo().exitCode).toBe(6);
     expect(snapshot(root)).toEqual(before);
     expect(journalRecords(root, applied.operationId)).toHaveLength(journalBefore);
+  });
+
+  test("a preview takes no lock and never repairs the journal", async () => {
+    // Arrange
+    const root = scratchProject({ "README.md": "# Demo\n" });
+    const plan = await buildPlan(root, async (b) => {
+      await b.writeFile({ path: "a.txt", content: "a\n", description: "create a.txt" });
+    });
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan,
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+    const journal = join(operationDir(root, applied.operationId), "journal.jsonl");
+    appendFileSync(journal, '{"seq":99,"type":"rollback.st'); // as if a writer were mid-append
+    const bytes = readFileSync(journal, "utf8");
+
+    // Act
+    const preview = await previewRollback(testContext(root).ctx, root, applied.operationId);
+
+    // Assert
+    expect(preview.possible).toBe(true);
+    expect(readFileSync(journal, "utf8")).toBe(bytes);
   });
 
   test("rolling back twice is a no-op the second time", async () => {

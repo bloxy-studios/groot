@@ -284,7 +284,8 @@ export async function previewRollback(
 ): Promise<RollbackPreview> {
   const canonical = realRoot(root);
   const loaded = loadOperation(canonical, operationId);
-  const ex = createExecution(ctx, canonical, loaded.plan, loaded.paths);
+  // Read-only: previews take no lock, so they must never repair the journal.
+  const ex = createExecution(ctx, canonical, loaded.plan, loaded.paths, "read");
   return toPreview(ex, await planUndo(ex, loaded.replayed));
 }
 
@@ -342,7 +343,7 @@ export async function rollbackOperation(
   const canonical = realRoot(root);
   const loaded = loadOperation(canonical, operationId);
   if (observedStatus(canonical, loaded) === "rolled-back") {
-    return rollbackResult(createExecution(ctx, canonical, loaded.plan, loaded.paths), []);
+    return rollbackResult(createExecution(ctx, canonical, loaded.plan, loaded.paths, "read"), []);
   }
   const lock = acquireProjectLock(canonical, { command: "rollback", operationId });
   try {

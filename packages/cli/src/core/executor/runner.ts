@@ -34,13 +34,19 @@ export interface Execution {
   readonly journal: Journal;
 }
 
+/**
+ * Bind an operation for execution. "write" (the default) repairs a torn
+ * journal tail and allows appends — callers must hold the writer lock;
+ * "read" is for lock-free readers such as rollback previews.
+ */
 export function createExecution(
   ctx: CoreContext,
   root: string,
   plan: OperationPlan,
   paths: OperationPaths,
+  mode: "write" | "read" = "write",
 ): Execution {
-  const journal = Journal.open(paths.journal);
+  const journal = mode === "write" ? Journal.open(paths.journal) : Journal.view(paths.journal);
   const sc: StepContext = {
     ctx,
     root,
