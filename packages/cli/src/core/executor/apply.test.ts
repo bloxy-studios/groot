@@ -6,7 +6,10 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { OperationPlan } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
+import { sha256Of } from "../fs/hash.ts";
+import { canonicalJson } from "../json.ts";
 import {
   applyPlan,
   checkPlanFreshness,
@@ -16,8 +19,10 @@ import {
   resumeOperation,
   savePlan,
 } from "./index.ts";
+import { requiredClasses } from "./policy.ts";
 import {
   addCommand,
+  addSecret,
   anyFileContains,
   buildPlan,
   journalRecords,
@@ -40,6 +45,15 @@ async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error
     return error as GrootV2Error;
   }
   throw new Error("expected a GrootV2Error");
+}
+
+/** A hand-edited plan declaring no classes at all (fingerprint recomputed, so it still loads). */
+function withoutDeclaredClasses(plan: OperationPlan): OperationPlan {
+  const actions = plan.actions.map((action) => ({ ...action, classes: [] }));
+  const fingerprint = sha256Of(
+    canonicalJson({ intent: plan.intent, actions, preconditions: plan.preconditions }),
+  );
+  return { ...plan, actions, requiredClasses: [], fingerprint };
 }
 
 describe("applyPlan: multi-step execution", () => {
@@ -208,18 +222,9 @@ describe("applyPlan: policy", () => {
   test("a plan cannot under-declare: action types imply their classes", async () => {
     // Arrange
     const root = scratchProject();
-    const built = await buildPlan(root, async (b) => {
-      addCommand(b, "true");
-    });
-    const forged = { ...built, requiredClasses: [] };
-    forged.actions = forged.actions.map((action) => ({ ...action, classes: [] }));
-    const { canonicalJson } = await import("../json.ts");
-    const { sha256Of } = await import("../fs/hash.ts");
-    forged.fingerprint = sha256Of(
-      canonicalJson({
-        intent: forged.intent,
-        actions: forged.actions,
-        preconditions: forged.preconditions,
+    const forged = withoutDeclaredClasses(
+      await buildPlan(root, async (b) => {
+        addCommand(b, "true");
       }),
     );
 
@@ -236,6 +241,79 @@ describe("applyPlan: policy", () => {
     // Assert
     expect(error.id).toBe("GROOT_E_POLICY_DENIED");
     expect(error.details?.denied).toEqual(["command"]);
+  });
+
+  test("file writes, edits, and secrets that declare no classes are still held to the policy", async () => {
+    // Arrange
+    const root = scratchProject({ "README.md": "# Demo\n", "owned.txt": "v1\n" });
+    const forged = withoutDeclaredClasses(
+      await buildPlan(root, async (b) => {
+        await b.writeFile({ path: "new.txt", content: "new\n", description: "create new.txt" });
+        await b.writeFile({
+          path: "owned.txt",
+          content: "v2\n",
+          description: "replace owned.txt",
+          replaceSha: sha256Of("v1\n"),
+        });
+        await b.editFile({
+          path: "README.md",
+          edit: { kind: "lines", lines: ["More."], header: null },
+          description: "extend README.md",
+          owns: [],
+          createIfMissing: false,
+        });
+        addSecret(b, ".env.local", "APP_SECRET");
+      }),
+    );
+
+    // Act
+    const error = await expectGrootError(
+      applyPlan(testContext(root).ctx, {
+        plan: forged,
+        root,
+        policy: { allow: ["command"], external: "deny" },
+        command: "apply",
+      }),
+    );
+
+    // Assert
+    expect(error.id).toBe("GROOT_E_POLICY_DENIED");
+    expect(error.details?.denied).toEqual(["fs.create", "fs.edit"]);
+    expect(existsSync(join(root, "new.txt"))).toBe(false);
+    expect(existsSync(join(root, ".groot"))).toBe(false);
+  });
+
+  test("a file step's intrinsic class follows its expectation: creating vs replacing", async () => {
+    // Arrange
+    const root = scratchProject({ "owned.txt": "v1\n" });
+
+    // Act
+    const create = withoutDeclaredClasses(
+      await buildPlan(root, async (b) => {
+        await b.writeFile({ path: "new.txt", content: "new\n", description: "create new.txt" });
+        await b.editFile({
+          path: "notes.md",
+          edit: { kind: "lines", lines: ["Notes."], header: null },
+          description: "create notes.md",
+          owns: [],
+          createIfMissing: true,
+        });
+      }),
+    );
+    const replace = withoutDeclaredClasses(
+      await buildPlan(root, async (b) => {
+        await b.writeFile({
+          path: "owned.txt",
+          content: "v2\n",
+          description: "replace owned.txt",
+          replaceSha: sha256Of("v1\n"),
+        });
+      }),
+    );
+
+    // Assert
+    expect(requiredClasses(create)).toEqual(["fs.create"]);
+    expect(requiredClasses(replace)).toEqual(["fs.edit"]);
   });
 
   test("external effects need policy 'ask' plus an explicit approval, then report no adapter", async () => {

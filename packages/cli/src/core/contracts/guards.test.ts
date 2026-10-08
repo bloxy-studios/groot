@@ -1,8 +1,10 @@
 /**
  * Contract guards for untrusted documents: a plan cannot carry the contents
- * of a dotenv file, and a JSON edit cannot address prototype machinery.
+ * of a dotenv file, a JSON edit cannot address prototype machinery, and a
+ * committed groot.json cannot pre-approve external effects.
  */
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_POLICY, Policy } from "./blueprint.ts";
 import { isSecretBearingEdit, JsonOp, PlannedAction, type StructuredEdit } from "./plan.ts";
 
 const SHA = `sha256:${"a".repeat(64)}`;
@@ -75,5 +77,14 @@ describe("JSON pointers", () => {
     ]) {
       expect(JsonOp.safeParse({ op: "remove", pointer }).success).toBe(true);
     }
+  });
+});
+
+describe("policy", () => {
+  test("policy.allow cannot pre-approve external effects", () => {
+    expect(Policy.safeParse({ allow: ["fs.edit", "external"], external: "ask" }).success).toBe(
+      false,
+    );
+    expect(Policy.safeParse(DEFAULT_POLICY).success).toBe(true);
   });
 });

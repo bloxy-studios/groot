@@ -66,6 +66,22 @@ async function linkOperation(
   }
 }
 
+/**
+ * External effects (provider accounts) need a person's approval: the agent
+ * calling this server cannot grant one to itself, so it is pointed at the
+ * terminal command instead.
+ */
+function externalApprovalRefused(planId: string): GrootV2Error {
+  return new GrootV2Error(
+    "GROOT_E_POLICY_DENIED",
+    "External effects can't be approved over MCP; a person approves them in a terminal.",
+    {
+      hint: `Ask the user to review the plan and run \`groot apply ${planId} --allow external\` in a terminal.`,
+      details: { denied: ["external"], planId },
+    },
+  );
+}
+
 function resultSummary(result: OperationResult): ToolResult {
   return ok({
     summary: result.alreadyApplied
@@ -128,7 +144,9 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
         allow: z
           .array(ActionClass)
           .optional()
-          .describe("Extra action classes the user approved for this run"),
+          .describe(
+            "Extra action classes the user approved for this run. Never external: external effects are approved by the user with `groot apply <planId> --allow external` in a terminal.",
+          ),
         waitMs: WaitMs,
       }),
       outputSchema: Summary,
@@ -143,6 +161,7 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
       try {
         const projectRoot = rootOf(root);
         const plan = await deps.api.getPlan(projectRoot, planId);
+        if (allow?.includes("external")) throw externalApprovalRefused(plan.planId);
         const job = deps.jobs.start(`apply:${plan.planId}`, plan.planId, (signal) =>
           deps.api.apply(background(projectRoot, signal), projectRoot, plan, allow ?? []),
         );
