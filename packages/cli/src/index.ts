@@ -7,6 +7,7 @@ import { normalizeArgv } from "./cli-compat.ts";
 import { add } from "./commands/add.ts";
 import { doctor } from "./commands/doctor.ts";
 import { init } from "./commands/init.ts";
+import { schema } from "./commands/schema.ts";
 
 const main = defineCommand({
   meta: {
@@ -14,7 +15,7 @@ const main = defineCommand({
     version: pkg.version,
     description: pkg.description,
   },
-  subCommands: { init, add, doctor },
+  subCommands: { init, add, doctor, schema },
   run({ args }) {
     // Bare invocation: show the banner and point at help.
     if (args._.length === 0) {
