@@ -556,7 +556,8 @@
               "command",
               "network",
               "git",
-              "process"
+              "process",
+              "external"
             ]
           }
         },

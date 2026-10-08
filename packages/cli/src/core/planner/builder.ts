@@ -113,8 +113,8 @@ export class PlanBuilder {
    * Is the content a path will have before the next step known now? Yes for
    * files on disk (or absent), and for the exact result of an earlier write
    * or previewed edit. No when an earlier step changes the path without a
-   * preview — deps.add, a deferred or secret-bearing edit, a move, a
-   * generator — so an edit of it is deferred to the executor.
+   * preview — deps.add, a generated secret, a deferred or secret-bearing
+   * edit, a move, a generator — so an edit of it is deferred to the executor.
    */
   private contentKnown(expect: PathExpectation): boolean {
     if (expect.state !== "produced") return true;
@@ -171,6 +171,11 @@ export class PlanBuilder {
       }
       case "generator.run":
         this.produced.set(action.produces, action.id);
+        break;
+      case "env.secret":
+        // Adds the secret to its env file (creating it when missing); later
+        // steps on that file expect the result, which is unknown until apply.
+        this.produced.set(action.path, action.id);
         break;
       default:
         break;

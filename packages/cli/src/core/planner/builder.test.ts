@@ -1,14 +1,15 @@
 /**
  * PlanBuilder previews: an edit carries an exact `after` only when the
  * content it applies to is known at planning time. Edits that follow a step
- * which changes the file without a preview (deps.add, a deferred or
- * secret-bearing edit) are deferred to the executor, and secret-bearing
- * edits (env edits, non-example dotenv files) never carry content at all.
+ * which changes the file without a preview (deps.add, a generated secret, a
+ * deferred or secret-bearing edit) are deferred to the executor, and
+ * secret-bearing edits (env edits, non-example dotenv files) never carry
+ * content at all.
  */
 import { describe, expect, test } from "bun:test";
 import type { FileEditAction, OperationPlan } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
-import { addDeps, buildPlan, scratchProject } from "../executor/test-support.ts";
+import { addDeps, addSecret, buildPlan, scratchProject } from "../executor/test-support.ts";
 import { sha256Of } from "../fs/hash.ts";
 import type { PlanBuilder } from "./builder.ts";
 
@@ -72,6 +73,24 @@ describe("PlanBuilder: exact previews only from known content", () => {
     const [edit] = edits(plan);
     expect(edit?.expect).toEqual({ state: "produced", byStep: "s01" });
     expect(edit?.after).toBeNull();
+  });
+
+  test("an edit after a generated secret in the same file is deferred: the secret step produced it", async () => {
+    // Arrange
+    const root = scratchProject({ ".env.local": "PORT=3000\n" });
+
+    // Act
+    const plan = await buildPlan(root, async (b) => {
+      addSecret(b, ".env.local", "BETTER_AUTH_SECRET");
+      await addEnvEntry(b, ".env.local", "BETTER_AUTH_URL");
+      await appendLine(b, ".env.local", "# managed by groot");
+    });
+
+    // Assert
+    expect(edits(plan).map((edit) => [edit.expect, edit.after])).toEqual([
+      [{ state: "produced", byStep: "s01" }, null],
+      [{ state: "produced", byStep: "s02" }, null],
+    ]);
   });
 
   test("an edit after a deferred edit of the same file is deferred too", async () => {
@@ -177,6 +196,22 @@ describe("PlanBuilder: secret-bearing edits carry no content", () => {
       null,
       "DATABASE_URL=\n\nBETTER_AUTH_URL=\n",
     ]);
+  });
+
+  test("a dotenv file spelled in another case carries no content either", async () => {
+    // Arrange: case-insensitive filesystems (default macOS, Windows) open .env.local for this name.
+    const root = scratchProject({ ".ENV.local": ENV_LOCAL });
+
+    // Act
+    const plan = await buildPlan(root, async (b) => {
+      await appendLine(b, ".ENV.local", "# managed by groot");
+    });
+
+    // Assert
+    const [edit] = edits(plan);
+    expect(edit?.expect).toEqual({ state: "sha256", sha256: sha256Of(ENV_LOCAL) });
+    expect(edit?.after).toBeNull();
+    expect(JSON.stringify(plan)).not.toContain(DB_PASSWORD);
   });
 
   test("transform conflicts are still detected for content-less edits", async () => {

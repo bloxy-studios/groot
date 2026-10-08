@@ -1,8 +1,9 @@
 /**
  * Builder previews meet the executor: edits the builder defers (after a
- * deps.add or a deferred edit of the same file) are computed at apply time
- * so no earlier change is lost, and secret-bearing dotenv edits apply their
- * entries without any value reaching a plan, a saved plan, or the journal.
+ * deps.add, a generated secret, or a deferred edit of the same file) are
+ * computed at apply time so no earlier change is lost, and secret-bearing
+ * dotenv edits apply their entries without any value reaching a plan, a
+ * saved plan, or the journal.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -13,6 +14,8 @@ import { canonicalJson } from "../json.ts";
 import { applyPlan, loadPlanFile, savePlan } from "./index.ts";
 import {
   addDeps,
+  addSecret,
+  anyFileContains,
   buildPlan,
   operationDir,
   permissive,
@@ -83,6 +86,47 @@ describe("deferred edits land on top of earlier changes", () => {
 
     // Assert
     expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("one\n\ntwo\n\nthree\n");
+  });
+});
+
+describe("an env edit after a generated secret in the same file", () => {
+  test.each([
+    ["an existing", { ".env.local": "PORT=3000\n" }, "PORT=3000\n\n"],
+    ["a missing", {}, ""],
+  ])("%s .env.local ends with both entries; the secret stays out of .groot", async (_label, files, before) => {
+    // Arrange
+    const root = scratchProject(files);
+    const plan = await buildPlan(root, async (b) => {
+      addSecret(b, ".env.local", "BETTER_AUTH_SECRET");
+      await b.editFile({
+        path: ".env.local",
+        edit: {
+          kind: "env",
+          entries: [{ name: "BETTER_AUTH_URL", value: "http://localhost:3000", comment: null }],
+        },
+        description: "add BETTER_AUTH_URL",
+        owns: [],
+        createIfMissing: true,
+      });
+    });
+
+    // Act
+    const result = await applyPlan(testContext(root).ctx, {
+      plan,
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+
+    // Assert
+    expect(result.status).toBe("completed");
+    const env = readFileSync(join(root, ".env.local"), "utf8");
+    const secret = /^BETTER_AUTH_SECRET=(\S+)$/m.exec(env)?.[1] ?? "";
+    expect(secret).toHaveLength(43);
+    expect(env).toBe(
+      `${before}BETTER_AUTH_SECRET=${secret}\n\nBETTER_AUTH_URL=http://localhost:3000\n`,
+    );
+    expect(anyFileContains(join(root, ".groot"), secret)).toBeNull();
   });
 });
 
