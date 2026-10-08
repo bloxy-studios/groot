@@ -24,6 +24,8 @@ const KNOWN_COMMANDS = new Set([
   "context",
   "mcp",
   "schema",
+  "task",
+  "review",
 ]);
 
 /**

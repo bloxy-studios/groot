@@ -16,9 +16,11 @@ import { mcp } from "./commands/mcp.ts";
 import { migrate } from "./commands/migrate.ts";
 import { plan } from "./commands/plan.ts";
 import { resume } from "./commands/resume.ts";
+import { review } from "./commands/review.ts";
 import { rollback } from "./commands/rollback.ts";
 import { schema } from "./commands/schema.ts";
 import { status } from "./commands/status.ts";
+import { task } from "./commands/task.ts";
 import { verify } from "./commands/verify.ts";
 import { bootstrapCore } from "./core/bootstrap.ts";
 
@@ -43,6 +45,8 @@ const main = defineCommand({
     verify,
     evidence,
     context,
+    task,
+    review,
     mcp,
     schema,
   },
