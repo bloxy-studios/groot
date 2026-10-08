@@ -58,7 +58,7 @@ Explicit, deterministic `groot.json` v1 → v2 migration (byte-identical output 
 
 Resolves capabilities (e.g. `auth`, `data`) into one plan ([`plan.schema.json`](../schemas/v2/plan.schema.json)): solver selections in application order, exact recipe and dependency versions, every file write/edit with exact previews and expected hashes, dependency changes, commands, environment contracts, external effects (none for local recipes), preconditions, ownership, required action classes, verification obligations, recovery mode and limits, and assumptions. Refusals happen here — unknown capability (`GROOT_E_UNKNOWN_CAPABILITY`), incompatible target or conflicting library (`GROOT_E_INCOMPATIBLE`), several candidate apps or recipes (`ambiguous-choice`, resolve with `--target`/`--recipe`) — with alternatives. The plan is saved under `.groot/plans/`; `--out` also writes it to a file. Requires a v2-registered project.
 
-`groot plan context-sync` and `groot plan init` produce plans for those operations with the same contract.
+`groot plan context-sync` produces the plan for managed instruction synchronization with the same contract. (`groot plan init` — creation as a journaled, resumable plan — is planned; see [v2-ledger.md](./v2-ledger.md). `groot init` remains the one-step creation command.)
 
 ### `groot apply <plan-file | planId> [--allow <class>...]`
 
