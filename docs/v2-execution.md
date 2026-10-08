@@ -2,20 +2,37 @@
 
 > Status: **living handoff record** for the v2 refactor (build brief: [GROOT_V2_BUILD_PROMPT.md](../GROOT_V2_BUILD_PROMPT.md)). Update it at every checkpoint. A fresh session resumes from **Next runnable task**.
 
-## Current state — ▶ RESUMED (2026-10-08)
+## Current state — ▶ INTEGRATING (2026-10-08)
 
 | Item | Value |
 | --- | --- |
-| Branch | `refactor/groot-v2-core`, local only — not pushed |
-| Current gate | **B → C** — operation core landing; compatibility path, single-app creation, MCP facade, context sync done |
-| Background work | workflow `groot-v2-core-units` (run `wf_51587296-f9b`): executor, discovery+blueprint, runners+tasks, auth/data recipes — each in an isolated worktree, each followed by an adversarial review |
+| Branches | `refactor/groot-v2-core` (reviewed coordinator work, HEAD `232a30c`) and **`wip/v2-integration`** (worktree `.claude/worktrees/integration`: main + executor + discovery units + integration glue). Local only — not pushed. `refactor/groot-v2-core` fast-forwards to the integration branch once every unit is merged and reviewed. |
+| Current gate | **C** — operation core merged (executor, discovery, adopt/migrate, lock with exact generator versions); auth/data recipes and runners still in flight |
+| Background work | (1) workflow `groot-v2-core-units` (run `wf_51587296-f9b`): runners+tasks (`worktree-wf_51587296-f9b-3`) and recipes (`-4`) implementers, then the executor and discovery adversarial reviews. (2) workflow `v2-review-fixes` (run `wf_5c648abe-1df`): fixes for the coordinator review in three file-disjoint groups (A safety primitives · B planning/transforms/policy · C solver/verification/CLI-MCP contract), each adversarially re-verified with the review's original probes |
+| Placeholders | `core/recipes/index.ts` and `core/tasks/index.ts` on the integration branch are **temporary** (commit `e030a96`) and are replaced by the recipes and runners unit merges |
 
 ### Next runnable task (resume here)
 
-1. When the workflow finishes: merge each unit branch into `refactor/groot-v2-core` (expect trivial conflicts in `src/index.ts` / `src/cli-compat.ts` command registration), address review findings, run lint/typecheck/test (Bun 1.4 + 1.3.14).
-2. Integration glue (coordinator): `core/api.ts` real `GrootApi` (discovery + planners + executor + verify + context + tasks), commands `plan` (add/context-sync/init), `verify`, `evidence`, `context` (+ `sync`), `mcp` (lazy import), register recipes/checkers at startup; wire `contextProvider` for tasks; lock file for init (exact generator resolution via `resolveSeries`).
-3. Gate C proof: fresh single-app + monorepo + adopted custom project → plan add auth → apply → verify all four profiles (product-flow real) → context sync → interrupted-operation recovery demo.
-4. Gate D/E: real Claude Code task run evidence (unit report), MCP end-to-end with the real API, docs (README, architecture, stability, roadmap ledger), changesets (prerelease), compiled-binary demos, draft PR.
+1. When `v2-review-fixes` finishes: merge its three branches into `wip/v2-integration`, regenerate `schemas/v2`, pin `policy.allow` in `contract.test.ts`, apply the cross-group needs the agents reported (e.g. `0o600` for generated secret files), run lint/typecheck/test.
+2. Wire dynamic port allocation (`core/ports.ts` `allocatePort`) into create (declared ports kept, collisions re-allocated, coupled URLs updated) and record adopted ports as observed — then correct the ledger row (review finding: allocation was never called).
+3. When `groot-v2-core-units` finishes: merge runners (`-3`) and recipes (`-4`) replacing the placeholders (recipes carry a copy of the anchor scanner — switch it to the fixed `insertAtAnchor` conflict), address the executor/discovery review findings, run checks on Bun 1.4 + 1.3.14.
+4. Gate C proof: `GROOT_E2E=1 bun test v2-flow.e2e` (fresh single-app + monorepo + adopted custom project → plan add auth → apply → verify all four profiles → context sync → crash/resume, stale plan, re-apply no-op, rollback conflict) + recipe certification; record evidence here.
+5. Gate D/E: real Claude Code task-run evidence, MCP end-to-end with the real API, docs (README, architecture, stability, roadmap ledger), changesets (prerelease `next`), compiled-binary demos, push + draft PR.
+
+### Integration branch commits (`232a30c..wip/v2-integration`, first parent)
+
+| Commit | Content |
+| --- | --- |
+| `a13e205` | core API (`createApi`) + `plan` / `verify` / `evidence` / `context` / `mcp` commands |
+| `174e707` | `v2-flow.e2e.test.ts` — the Gate C black-box acceptance flow (gated `GROOT_E2E=1`) |
+| `054375b` · `0b06a87` · `a4fdd14` | merge main, the executor unit (journaled apply/resume/rollback, crash hook, operation commands), the discovery unit (static discovery, blueprint I/O, v1→v2 migration, registry resolution, adopt/migrate) |
+| `e030a96` | temporary placeholders for the recipes and tasks units |
+| `8ba24da` | init/add resolve generators to exact versions + integrity before running and write `groot.lock.json`; lock edits via `planLockUpdate` |
+| `24d4201` | acceptance flow reads operation ids from `status` |
+
+### Coordinator review (run `wf_70549802-c31`, 10 agents) — outcome
+
+7 findings confirmed by skeptic verifiers (writer-lock double hold; git probes honouring repo/env-configured commands; dotenv contents embedded in plans; solver accepting same-solve incompatible combinations; stale exact previews after `deps.add`/deferred edits; anchor insertion mid-expression), 29 reported but not independently verified (process supervision with leftover pipe holders, chunked redaction, `.groot` symlink containment, dangling-symlink containment, `__proto__` pointers, policy classes, 64 KiB pipe truncation of human output, blocked-decision contract, context chain budget, cancelled verification, credential needs, CRLF, region hashes, mode preservation, console guard coverage, job lookup, RelPath newlines, v2 stability tripwire, `init --name ""`, `--keep-failed` in single topology, unwired port allocation). All are being fixed or rebutted with evidence by `v2-review-fixes`; the routing findings (#12/#20) were already addressed on the integration branch except `task`/`review` reservation.
 
 ## Baseline (2026-10-07, before any v2 change)
 
