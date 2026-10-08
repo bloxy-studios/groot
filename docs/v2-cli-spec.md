@@ -90,7 +90,27 @@ Lists stored evidence (newest first) or shows one record and its artifact paths.
 
 ### `groot task create|list|show|run|resume|integrate` · `groot review <taskId>`
 
-Bounded work for installed coding agents ([`task.schema.json`](../schemas/v2/task.schema.json)): objective, runner (`claude-code` | `codex`), dependencies, ownership globs, acceptance commands or verification profiles, limits (wall time, turns, budget where the runner enforces it, bounded attempts). `run` executes in an isolated git worktree after dependency, ownership-overlap, and runner capability/authentication checks; Groot commits the agent's changes and runs the acceptance checks (evidence). `review` summarizes the change set ([`review.schema.json`](../schemas/v2/review.schema.json)) — files, ownership violations, secret findings (locations only), acceptance results — and records `--approve` or `--request-changes`. `integrate` merges an approved task in a fresh integration worktree, re-runs acceptance and verification there, and fast-forwards the target branch only when the main worktree is clean (otherwise the integration branch is left for the user and the result is blocked). Runner states that prevent work — not installed, not authenticated, incompatible configuration, quota exhausted — are `blocked` with the exact cause.
+Bounded work for installed coding agents ([`task.schema.json`](../schemas/v2/task.schema.json)). Tasks need a git repository with at least one commit (a `groot.json` is only required for `--accept-verify`).
+
+- `task create "<objective>" [--title] [--runner claude-code|codex] [--model <id|alias>] [--depends-on <taskId>]... [--owns <glob>]... [--accept "<command>"]... [--accept-verify <profile>]... [--wall-time <s>] [--max-turns <n>] [--max-budget-usd <n>] [--max-attempts 1-5] [--accept-timeout <s>]`.
+  - Acceptance commands are split into argv and run without a shell.
+  - Ownership defaults to `**`.
+  - Limits are per attempt and default to 900 s wall time, 25 turns, a $2 budget (Claude Code enforces it; Codex reports tokens only) and 2 attempts.
+- `task list` · `task show <id>`.
+- `task run <id>` or `task run --ready [--parallel 1-4]` (`[--effort <level>]`).
+  - Before starting it checks dependencies, ownership overlap with running tasks (overlapping tasks are serialized), and runner capability and authentication.
+  - The run happens in an isolated git worktree (`.groot/worktrees/<id>`, branch `groot/task/<id>`). The prompt carries the task-scoped project context (`groot context --task`: names and commands, never secret values).
+  - Groot commits the agent's change and runs the acceptance checks, recording evidence.
+  - A failed check gets a bounded retry that continues the same session with the failing output.
+  - Ctrl-C interrupts the whole process group, and `task resume <id>` continues the session.
+- `review <taskId> [--approve | --request-changes "<notes>"]` summarizes the change set ([`review.schema.json`](../schemas/v2/review.schema.json)): files, ownership violations, secret findings (locations only) and acceptance results. It then records the decision; requested changes send the task back to the agent.
+- `task integrate <id>` merges an approved task (`--no-ff`) in a fresh integration worktree (branch `groot/integrate/<id>`) and re-runs acceptance plus structural/build verification there. It fast-forwards the main checkout only when that checkout is clean. Merge conflicts, a dirty checkout or failed checks leave the integration branch for the user, and the result is blocked.
+
+Runner states that prevent work (not installed, not authenticated, incompatible configuration, quota exhausted) are `blocked` with the exact cause and next step.
+
+Exit codes: 0 · 2 usage · 5 a check failed · 7 blocked · 130 interrupted.
+
+Runners drive the documented headless interfaces: `claude -p --output-format stream-json` with explicit permission and tool containment, and `codex exec --json` with the workspace-write sandbox. Usage is reported as observed tokens plus Claude Code's own cost estimate, labeled as an estimate.
 
 ### `groot mcp`
 
