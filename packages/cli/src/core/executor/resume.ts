@@ -17,16 +17,14 @@
  * edits made during the interruption surface as a narrow GROOT_E_STALE_PLAN.
  */
 
-import { readdirSync } from "node:fs";
 import type { OperationResult, OperationStatus, PathHashes } from "../contracts/operation.ts";
 import type { PlannedAction } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 import { acquireProjectLock } from "../fs/lock.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import type { CoreContext } from "../runtime.ts";
-import { STATE_DIR_NAME } from "../state.ts";
 import { crashPoint } from "./crash.ts";
-import { hashKeys, parseKey, pathKind } from "./fsops.ts";
+import { contentEntries, hashKeys, parseKey, pathKind } from "./fsops.ts";
 import type { IntentRecord, Replay } from "./journal.ts";
 import { realRoot } from "./project.ts";
 import {
@@ -143,7 +141,7 @@ async function settleFileStep(ex: Execution, unfinished: Unfinished): Promise<Se
 function hasContent(root: string, path: string): boolean {
   const abs = resolveInProject(root, path);
   if (pathKind(abs) !== "dir") return pathKind(abs) !== "absent";
-  return readdirSync(abs).some((entry) => entry !== STATE_DIR_NAME);
+  return contentEntries(abs).length > 0;
 }
 
 async function settle(

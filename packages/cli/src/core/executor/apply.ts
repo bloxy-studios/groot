@@ -23,7 +23,7 @@ import { GrootV2Error } from "../errors.ts";
 import { acquireProjectLock } from "../fs/lock.ts";
 import { newId } from "../ids.ts";
 import type { CoreContext } from "../runtime.ts";
-import { checkPreconditions, staleError } from "./freshness.ts";
+import { checkPreconditions, impliedPreconditions, staleError } from "./freshness.ts";
 import { internalHandler } from "./handlers.ts";
 import { validatePlanDocument } from "./plans.ts";
 import { assertPolicy } from "./policy.ts";
@@ -94,7 +94,10 @@ function unfinishedConflict(prior: OperationState): GrootV2Error {
 }
 
 async function assertFresh(root: string, plan: OperationPlan): Promise<void> {
-  const findings = await checkPreconditions(root, plan.preconditions);
+  const findings = await checkPreconditions(root, [
+    ...plan.preconditions,
+    ...impliedPreconditions(plan),
+  ]);
   if (findings.length > 0) throw staleError(findings, { planId: plan.planId });
 }
 

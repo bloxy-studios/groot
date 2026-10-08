@@ -22,8 +22,14 @@ import { hashTree } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { runProcess, type SpawnResult, tail } from "../process.ts";
 import { redact } from "../redact.ts";
-import { STATE_DIR_NAME } from "../state.ts";
-import { ensureParentDirs, hashKeys, pathKind, treeKey } from "./fsops.ts";
+import {
+  contentEntries,
+  ensureParentDirs,
+  hashKeys,
+  pathKind,
+  removeCreatedDirs,
+  treeKey,
+} from "./fsops.ts";
 import {
   abortReason,
   childEnv,
@@ -110,11 +116,6 @@ export async function commandStep(sc: StepContext, action: CommandAction): Promi
     created: [],
     logRef,
   };
-}
-
-/** Entries of a directory that count as content (Groot's own state never does). */
-function contentEntries(abs: string): string[] {
-  return readdirSync(abs).filter((entry) => entry !== STATE_DIR_NAME);
 }
 
 /** Move a grown tree into place: rename, or copy to a sibling temp + rename across volumes. */
@@ -261,8 +262,10 @@ export async function generatorStep(sc: StepContext, action: GeneratorAction): P
         ? await stagedGenerator(sc, action, dest)
         : await inPlaceGenerator(sc, action, dest, existedBefore);
   } catch (error) {
-    // On failure remove whatever this step put in place, so a retry starts clean.
+    // On failure remove whatever this step put in place (output and the parent
+    // directories it created), so the project is as before and a retry starts clean.
     cleanProduced(sc.root, action.produces, existedBefore);
+    removeCreatedDirs(sc.root, created);
     throw error;
   }
   return {

@@ -22,7 +22,7 @@
  */
 import type { OperationState } from "../contracts/operation.ts";
 import type { OperationPlan } from "../contracts/plan.ts";
-import { checkPreconditions } from "./freshness.ts";
+import { checkPreconditions, impliedPreconditions } from "./freshness.ts";
 import { realRoot } from "./project.ts";
 import * as store from "./store.ts";
 import type { StaleFinding } from "./types.ts";
@@ -60,10 +60,14 @@ export async function readOperation(root: string, operationId: string): Promise<
   return store.readOperation(realRoot(root), operationId);
 }
 
-/** Evaluate every precondition of `plan` against `root`; empty means fresh. */
+/**
+ * Evaluate every precondition of `plan` against `root` (declared ones plus
+ * those its actions imply: fresh generator destinations, absent move
+ * targets); empty means fresh.
+ */
 export async function checkPlanFreshness(
   root: string,
   plan: OperationPlan,
 ): Promise<StaleFinding[]> {
-  return checkPreconditions(realRoot(root), plan.preconditions);
+  return checkPreconditions(realRoot(root), [...plan.preconditions, ...impliedPreconditions(plan)]);
 }

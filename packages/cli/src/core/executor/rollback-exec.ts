@@ -19,6 +19,7 @@ import { STATE_DIR_NAME } from "../state.ts";
 import {
   backupBytes,
   currentHash,
+  EMPTY_TREE_HASH,
   parseKey,
   removeCreatedDirs,
   removePath,
@@ -69,10 +70,12 @@ function clearTree(root: string, path: string): void {
 
 function undoTree(ex: Execution, item: UndoItem, path: string): void {
   clearTree(ex.sc.root, path);
-  if (item.restoreTo === null || item.backup === undefined) return;
-  const backup = join(ex.sc.paths.dir, item.backup);
+  if (item.restoreTo === null) return;
   const target = resolveInProject(ex.sc.root, path);
   mkdirSync(target, { recursive: true });
+  // A content-free tree (e.g. the empty directory a generator filled) needs no backup.
+  if (item.restoreTo === EMPTY_TREE_HASH || item.backup === undefined) return;
+  const backup = join(ex.sc.paths.dir, item.backup);
   for (const entry of readdirSync(backup)) {
     cpSync(join(backup, entry), join(target, entry), { recursive: true, verbatimSymlinks: true });
   }

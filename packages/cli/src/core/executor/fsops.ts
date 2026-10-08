@@ -21,17 +21,27 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import type { Sha256 } from "../contracts/common.ts";
 import type { PathHashes } from "../contracts/operation.ts";
+import { GrootV2Error } from "../errors.ts";
 import { writeFileAtomic } from "../fs/atomic.ts";
 import { hashFile, hashTree, sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { prettyJson } from "../json.ts";
+import { STATE_DIR_NAME } from "../state.ts";
 import type { OperationPaths } from "./journal.ts";
 import type { Placeholder, SecretBook } from "./secrets.ts";
 
 export const TREE_PREFIX = "tree:";
+
+/**
+ * hashTree of a directory without content (hashTree joins no entries). A tree
+ * key going back to this hash is restored by emptying the directory — no
+ * backup needed, which matters for generators producing into an existing
+ * empty directory or the project root.
+ */
+export const EMPTY_TREE_HASH: Sha256 = sha256Of("");
 
 export function treeKey(path: string): string {
   return `${TREE_PREFIX}${path}`;
@@ -150,9 +160,10 @@ export function backupKeys(
     const target = join(paths.dir, rel);
     const kind = pathKind(abs);
     if (parsed.kind === "tree") {
-      if (kind !== "dir") continue;
+      // An absent or content-free tree is restored without a backup (EMPTY_TREE_HASH).
+      if (kind !== "dir" || contentEntries(abs).length === 0) continue;
       rmSync(target, { recursive: true, force: true });
-      cpSync(abs, target, { recursive: true, verbatimSymlinks: true });
+      cpSync(abs, target, { recursive: true, verbatimSymlinks: true, filter: notStateDir(root) });
     } else {
       if (kind !== "file") continue;
       const { bytes, placeholders } = secrets.conceal(readFileSync(abs));
@@ -202,15 +213,24 @@ export function restoreFile(
   chmodSync(abs, mode);
 }
 
-/** Restore a directory tree from its backup copy (replacing whatever is there). */
-export function restoreTree(root: string, relPath: string, backupAbs: string): void {
-  const abs = resolveInProject(root, relPath);
-  rmSync(abs, { recursive: true, force: true });
-  mkdirSync(dirname(abs), { recursive: true });
-  cpSync(backupAbs, abs, { recursive: true, verbatimSymlinks: true });
+/** Entries of a directory that count as content — Groot's own `.groot/` never does. */
+export function contentEntries(abs: string): string[] {
+  return readdirSync(abs).filter((entry) => entry !== STATE_DIR_NAME);
 }
 
-/** Remove a file or directory tree inside the project. */
+/** cpSync filter that never copies the project's `.groot/` (a backup must not contain itself). */
+function notStateDir(root: string): (source: string) => boolean {
+  const state = join(resolve(root), STATE_DIR_NAME);
+  return (source) => source !== state && !source.startsWith(`${state}${sep}`);
+}
+
+/** Remove a file or directory tree inside the project — never the project root itself. */
 export function removePath(root: string, relPath: string): void {
-  rmSync(resolveInProject(root, relPath), { recursive: true, force: true });
+  const abs = resolveInProject(root, relPath);
+  if (abs === resolve(root)) {
+    throw new GrootV2Error("GROOT_E_INTERNAL", "Refusing to remove the project root.", {
+      details: { path: relPath },
+    });
+  }
+  rmSync(abs, { recursive: true, force: true });
 }

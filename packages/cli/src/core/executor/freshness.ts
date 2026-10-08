@@ -12,7 +12,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import type { Sha256 } from "../contracts/common.ts";
-import type { PathExpectation, Precondition } from "../contracts/plan.ts";
+import type { OperationPlan, PathExpectation, Precondition } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 import { hashFile } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
@@ -203,6 +203,59 @@ async function checkPrecondition(
 }
 
 const NOTHING_PRODUCED: ProducedHash = () => undefined;
+
+function preconditionKey(pre: Precondition): string {
+  if (pre.type === "path") return `path:${pre.path}`;
+  if (pre.type === "fresh-dir") return `fresh:${pre.path}`;
+  return pre.type === "toolchain" ? `toolchain:${pre.id}` : "manifest";
+}
+
+function touchedPaths(action: OperationPlan["actions"][number]): string[] {
+  switch (action.type) {
+    case "file.move":
+      return [action.from, action.to];
+    case "generator.run":
+      return [action.produces];
+    case "deps.add":
+      return [action.unit === "." ? "package.json" : `${action.unit}/package.json`];
+    case "command.run":
+    case "internal":
+      return action.touches;
+    case "external":
+      return [];
+    default:
+      return [action.path];
+  }
+}
+
+/**
+ * Preconditions the actions imply but planners don't always record: a
+ * generator's destination must be fresh, a move's target absent. Checking
+ * them with the declared ones keeps "a stale plan writes nothing" true for
+ * these paths too, instead of failing halfway through the operation.
+ */
+export function impliedPreconditions(plan: OperationPlan): Precondition[] {
+  const known = new Set(plan.preconditions.map(preconditionKey));
+  const touched: string[] = [];
+  const implied: Precondition[] = [];
+  const add = (pre: Precondition): void => {
+    if (known.has(preconditionKey(pre))) return;
+    known.add(preconditionKey(pre));
+    implied.push(pre);
+  };
+  const touchedUnder = (dir: string): boolean =>
+    dir === "." ? touched.length > 0 : touched.some((p) => p === dir || p.startsWith(`${dir}/`));
+  for (const action of plan.actions) {
+    if (action.type === "generator.run" && !touchedUnder(action.produces)) {
+      add({ type: "fresh-dir", path: action.produces });
+    }
+    if (action.type === "file.move" && !touched.includes(action.to)) {
+      add({ type: "path", path: action.to, expect: { state: "absent" }, dirty: false });
+    }
+    touched.push(...touchedPaths(action));
+  }
+  return implied;
+}
 
 /** Evaluate every plan precondition; an empty list means the plan is fresh. */
 export async function checkPreconditions(

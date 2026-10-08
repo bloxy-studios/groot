@@ -28,7 +28,7 @@ import { GrootV2Error } from "../errors.ts";
 import { acquireProjectLock } from "../fs/lock.ts";
 import { runProcess, tail } from "../process.ts";
 import type { CoreContext } from "../runtime.ts";
-import { backupBytes, currentHash, parseKey, pathKind } from "./fsops.ts";
+import { backupBytes, currentHash, EMPTY_TREE_HASH, parseKey, pathKind } from "./fsops.ts";
 import { progressOf, type Replay } from "./journal.ts";
 import { realRoot } from "./project.ts";
 import { executeRollbackSteps, type StepUndo, type UndoItem } from "./rollback-exec.ts";
@@ -75,8 +75,9 @@ function compensates(action: PlannedAction): boolean {
 
 function backupUsable(ex: Execution, stepId: string, item: UndoItem): boolean {
   if (item.restoreTo === null) return true;
-  if (item.backup === undefined) return false;
   const parsed = parseKey(item.key);
+  if (parsed.kind === "tree" && item.restoreTo === EMPTY_TREE_HASH) return true;
+  if (item.backup === undefined) return false;
   if (parsed.kind === "tree") return pathKind(join(ex.sc.paths.dir, item.backup)) === "dir";
   return (
     backupBytes(ex.sc.paths, stepId, item.backup, parsed.path, item.restoreTo, ex.sc.secrets) !==

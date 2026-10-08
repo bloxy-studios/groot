@@ -21,7 +21,7 @@ import { writeFileAtomic } from "../fs/atomic.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { addEnvEntries, applyEdit, TransformConflict } from "../transforms/index.ts";
-import { ensureParentDirs, fileMode, pathKind, treeKey } from "./fsops.ts";
+import { ensureParentDirs, fileMode, pathKind, removePath, treeKey } from "./fsops.ts";
 import { hasEnvAssignment } from "./secrets.ts";
 import type { StepContext, StepEffect } from "./step-context.ts";
 
@@ -166,14 +166,14 @@ export function deleteStep(sc: StepContext, action: FileDeleteAction): StepEffec
   }
   if (kind === "dir") {
     // Directory trees are only deleted when this operation produced them.
-    if (!action.recursive || action.expect.state !== "produced") {
+    if (!action.recursive || action.expect.state !== "produced" || action.path === ".") {
       throw conflict(
         action.path,
-        `${action.path} is a directory; Groot only deletes directory trees produced earlier in the same operation.`,
+        `${action.path} is a directory; Groot only deletes directory trees produced earlier in the same operation (never the project root).`,
         { conflict: "directory" },
       );
     }
-    rmSync(abs, { recursive: true, force: true });
+    removePath(sc.root, action.path);
     return {
       outcome: "applied",
       after: { [treeKey(action.path)]: null },
