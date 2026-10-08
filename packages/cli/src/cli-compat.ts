@@ -5,7 +5,17 @@
  * the first bare word as the target directory. Route those invocations to `init`.
  */
 
-const KNOWN_COMMANDS = new Set(["init", "add", "doctor", "schema"]);
+const KNOWN_COMMANDS = new Set([
+  "init",
+  "add",
+  "doctor",
+  "plan",
+  "verify",
+  "evidence",
+  "context",
+  "mcp",
+  "schema",
+]);
 
 /**
  * Rewrite raw CLI args so a leading bare word that isn't a known subcommand is

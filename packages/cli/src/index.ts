@@ -5,9 +5,15 @@ import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
 import { normalizeArgv } from "./cli-compat.ts";
 import { add } from "./commands/add.ts";
+import { context } from "./commands/context.ts";
 import { doctor } from "./commands/doctor.ts";
+import { evidence } from "./commands/evidence.ts";
 import { init } from "./commands/init.ts";
+import { mcp } from "./commands/mcp.ts";
+import { plan } from "./commands/plan.ts";
 import { schema } from "./commands/schema.ts";
+import { verify } from "./commands/verify.ts";
+import { bootstrapCore } from "./core/bootstrap.ts";
 
 const main = defineCommand({
   meta: {
@@ -15,7 +21,7 @@ const main = defineCommand({
     version: pkg.version,
     description: pkg.description,
   },
-  subCommands: { init, add, doctor, schema },
+  subCommands: { init, add, doctor, plan, verify, evidence, context, mcp, schema },
   run({ args }) {
     // Bare invocation: show the banner and point at help.
     if (args._.length === 0) {
@@ -26,6 +32,9 @@ const main = defineCommand({
     }
   },
 });
+
+// Recipes and verification checkers are registered once for every surface.
+bootstrapCore();
 
 // `bun create groot my-app` passes a bare destination — route it to `init`.
 runMain(main, { rawArgs: normalizeArgv(process.argv.slice(2)) });

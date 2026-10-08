@@ -8,13 +8,13 @@
  * stdout is the protocol channel. `guardStdout()` must run before anything
  * else loads so stray console output can never corrupt the stream.
  */
-import { format } from "node:util";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { EventSink } from "../runtime.ts";
 import { GROOT_VERSION, toEvent } from "../runtime.ts";
 import type { GrootApi } from "./api.ts";
 import type { ToolDeps } from "./deps.ts";
+import { guardStdout } from "./guard.ts";
 import { JobTracker } from "./jobs.ts";
 import { registerOperationTools } from "./tools-operations.ts";
 import { registerProjectTools } from "./tools-project.ts";
@@ -24,21 +24,7 @@ import { registerTaskTools } from "./tools-tasks.ts";
 export const INSTRUCTIONS =
   "groot keeps this project's blueprint, plans, operations, and verification evidence. Loop: project_inspect or context_get → plan_add (a preview; nothing changes) → operation_apply → operation_status → verify_run. Errors start with a GROOT_E_* code and say what to do next. Never edit groot.json or groot.lock.json by hand; secrets are never returned — only variable names. Ask the user before approving extra action classes, applying plans that edit their files, approving task reviews, or rolling back.";
 
-/** Route every console method to stderr (stdout carries only JSON-RPC). */
-export function guardStdout(): void {
-  const toStderr = (...args: unknown[]): void => {
-    try {
-      process.stderr.write(`${format(...args)}\n`);
-    } catch {
-      // stderr closed — nothing safe to do
-    }
-  };
-  console.log = toStderr;
-  console.info = toStderr;
-  console.debug = toStderr;
-  console.warn = toStderr;
-  console.trace = toStderr;
-}
+export { guardStdout } from "./guard.ts";
 
 /** JSON-lines diagnostics on stderr, filtered by GROOT_LOG_LEVEL (default warn). */
 export function stderrEvents(level = process.env.GROOT_LOG_LEVEL ?? "warn"): EventSink {
