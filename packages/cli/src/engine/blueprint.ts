@@ -18,6 +18,7 @@ import {
 import type { EnvVarContract } from "../core/contracts/common.ts";
 import { hasPublicPrefix } from "../core/env.ts";
 import { backendEnvLines } from "./env-names.ts";
+import { EXIT, GrootError } from "./errors.ts";
 import type { Plan, PlannedScaffold } from "./types.ts";
 
 /** Server entries groot's adapters create (recipes mount into these). */
@@ -111,6 +112,24 @@ function mergeEnv(
   return [...existing, ...added.filter((contract) => !seen.has(key(contract)))];
 }
 
+/**
+ * Validate the blueprint about to be recorded. A contract violation comes
+ * from an input groot can't record (an empty project name, say), so it is a
+ * usage error naming the first issue — never an uncaught ZodError.
+ */
+function validBlueprint(value: unknown): BlueprintV2 {
+  const parsed = BlueprintV2.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  const at =
+    issue === undefined || issue.path.length === 0 ? "(root)" : issue.path.map(String).join(".");
+  throw new GrootError(
+    `groot.json would not be a valid blueprint — ${at}: ${issue?.message ?? "invalid value"}`,
+    EXIT.USAGE,
+    "Check the values passed to groot (for example --name); groot never writes an invalid groot.json.",
+  );
+}
+
 /** The blueprint groot.json should contain after this plan's stitch stage. */
 export function planToBlueprint(plan: Plan): BlueprintV2 {
   const existing = plan.blueprint ?? null;
@@ -120,7 +139,7 @@ export function planToBlueprint(plan: Plan): BlueprintV2 {
     const added = plan.scaffolds
       .filter((scaffold) => !known.has(scaffold.path))
       .map((scaffold) => appFor(plan, scaffold, used));
-    return BlueprintV2.parse({
+    return validBlueprint({
       ...existing,
       scaffolds: [...plan.scaffolds],
       apps: [...existing.apps, ...added],
@@ -128,7 +147,7 @@ export function planToBlueprint(plan: Plan): BlueprintV2 {
     });
   }
   const used = new Set<string>();
-  return BlueprintV2.parse({
+  return validBlueprint({
     $schema: GROOT_JSON_SCHEMA_URL,
     version: 2,
     createdWith: plan.createdWith,

@@ -10,7 +10,7 @@
  * against the real root (the monorepo stitch would write workspace files).
  */
 import { existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { ADAPTERS } from "../adapters/index.ts";
 import { EXIT, GrootError } from "./errors.ts";
@@ -72,8 +72,26 @@ export function singleRootPlan(plan: Plan, app: PlannedScaffold): Plan {
 }
 
 /**
+ * --keep-failed: preserve what the generator wrote. A target groot would have
+ * created receives it (like the monorepo's kept target); an existing target
+ * is never merged with partial output, so it stays in the stage. Returns
+ * where the output is now (null = the generator wrote nothing).
+ */
+async function keepPartialOutput(output: string, target: string): Promise<string | null> {
+  if (!existsSync(output)) return null;
+  if (existsSync(target)) return output;
+  try {
+    await rename(output, target);
+    return target;
+  } catch {
+    return output;
+  }
+}
+
+/**
  * Generate the single app into `plan.targetDir`. On failure, a target groot
- * created is removed unless --keep-failed (the trunk's failure semantics).
+ * created is removed — unless --keep-failed, which keeps the generator's
+ * partial output and names where (the trunk's failure semantics).
  */
 export async function generateSingle(plan: Plan, options: GenerateOptions): Promise<void> {
   const report = options.onStep ?? (() => {});
@@ -85,6 +103,7 @@ export async function generateSingle(plan: Plan, options: GenerateOptions): Prom
   // npm-name-safe and dot-free: generators derive package names from it.
   const stage = join(parent, `groot-single-${crypto.randomUUID().slice(0, 8)}`);
   const name = basename(plan.targetDir);
+  let keepStage = false;
   try {
     await mkdir(stage, { recursive: true });
     // Adapters resolve paths against plan.targetDir: point it at the stage
@@ -93,7 +112,17 @@ export async function generateSingle(plan: Plan, options: GenerateOptions): Prom
     report(`Moving ${name} into place`);
     await moveDirContents(join(stage, name), plan.targetDir);
   } catch (error) {
-    if (createdByGroot && !plan.options.keepFailed) {
+    if (plan.options.keepFailed) {
+      const kept = await keepPartialOutput(join(stage, name), plan.targetDir);
+      keepStage = kept !== null && kept !== plan.targetDir;
+      if (kept !== null && error instanceof GrootError) {
+        throw new GrootError(
+          `${error.message}\nPartial output was kept in ${kept} (--keep-failed).`,
+          error.exitCode,
+          error.hint,
+        );
+      }
+    } else if (createdByGroot) {
       await rm(plan.targetDir, { recursive: true, force: true }).catch(() => {});
       if (error instanceof GrootError) {
         throw new GrootError(
@@ -105,7 +134,7 @@ export async function generateSingle(plan: Plan, options: GenerateOptions): Prom
     }
     throw error;
   } finally {
-    await rm(stage, { recursive: true, force: true }).catch(() => {});
+    if (!keepStage) await rm(stage, { recursive: true, force: true }).catch(() => {});
   }
 }
 

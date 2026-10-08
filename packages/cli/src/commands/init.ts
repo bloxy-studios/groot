@@ -158,6 +158,13 @@ async function runInit(args: {
       "Drop --no-git (gh repo create --push hard-errors on a repo with no commits).",
     );
   }
+  if (args.name !== undefined && args.name.trim() === "") {
+    throw new GrootError(
+      "--name cannot be empty.",
+      EXIT.USAGE,
+      "Pass a workspace name (--name my-app), or omit --name to use the directory name.",
+    );
+  }
   const dirConflict = parseDirConflict(args.dirConflict);
   const topology = parseTopology(args.topology);
 
