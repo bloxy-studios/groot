@@ -1,8 +1,9 @@
 /**
  * Resume trusts neither its stored plan copy nor a lost approval: the copy
  * must be the plan the journal started (same id and fingerprint), and the
- * steps still to run are held to the project policy again — explicit
- * approvals are per run, so a resume needs its own.
+ * steps still to run — by the journal resume runs from, read under the lock
+ * — are held to the project policy again; explicit approvals are per run,
+ * so a resume needs its own.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -137,6 +138,57 @@ describe("resume verifies its plan copy", () => {
       expect(error.id).toBe("GROOT_E_POLICY_DENIED");
       expect(error.details?.denied).toEqual(["command"]);
     }
+    expect(existsSync(join(root, "pwned.txt"))).toBe(false);
+  });
+
+  test("the policy holds for the journal resume runs, not an earlier read of it", async () => {
+    // Arrange — the forged journal shows the swapped step done while resume
+    // looks, and pending again by the time it runs (flipped while the policy
+    // is read, between the first read and the lock).
+    const root = scratchProject();
+    const plan = await writesTwoFiles(root);
+    const operationId = await interruptedAfterFirstStep(root, plan, FILES_ONLY);
+    const pwned = swapInCommand(root, operationId, plan);
+    const journal = join(operationDir(root, operationId), "journal.jsonl");
+    const lines = readFileSync(journal, "utf8")
+      .split("\n")
+      .filter((line) => line !== "");
+    lines[0] = JSON.stringify({
+      ...JSON.parse(lines[0] as string),
+      planFingerprint: pwned.fingerprint,
+    });
+    const pending = `${lines.join("\n")}\n`;
+    const seq = (JSON.parse(lines.at(-1) as string) as { seq: number }).seq;
+    const at = new Date().toISOString();
+    const forgedDone = [
+      { type: "step.intent", stepId: "s02", before: {}, backups: {}, seq: seq + 1, at },
+      {
+        type: "step.done",
+        stepId: "s02",
+        outcome: "applied",
+        after: {},
+        created: [],
+        logRef: null,
+        seq: seq + 2,
+        at,
+      },
+    ];
+    writeFileSync(journal, `${pending}${forgedDone.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    const options = {
+      get policy(): Policy {
+        writeFileSync(journal, pending);
+        return FILES_ONLY;
+      },
+    };
+
+    // Act
+    const error = await expectGrootError(
+      resumeOperation(testContext(root).ctx, root, operationId, options),
+    );
+
+    // Assert
+    expect(error.id).toBe("GROOT_E_POLICY_DENIED");
+    expect(error.details?.denied).toEqual(["command"]);
     expect(existsSync(join(root, "pwned.txt"))).toBe(false);
   });
 });

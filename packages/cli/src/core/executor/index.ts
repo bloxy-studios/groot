@@ -20,6 +20,11 @@
  * - One writer at a time (core/fs/lock.ts); intent is journaled before each
  *   step's effect and completion after it; SIGINT/abort stops at the next
  *   checkpoint (GROOT_E_INTERRUPTED, exit 130) and the operation is resumable.
+ * - Plan documents Groot stores (plan copies, saved plans) conceal the secret
+ *   values it knows; a plan copy whose quoted value changed since is still
+ *   listed and rolled back, never resumed — a saved one is stale.
+ * - Nothing Groot removes (rollback, generator recovery, recursive deletes)
+ *   takes a `.git` or `.groot` with it, nested ones included.
  *
  * Layout: apply.ts · resume.ts · rollback.ts (+ rollback-exec.ts) · runner.ts
  * (checkpoint protocol) · steps*.ts (effects; generators in steps-generator.ts)

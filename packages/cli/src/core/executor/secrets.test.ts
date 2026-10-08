@@ -1,17 +1,32 @@
 /**
  * Secret values stay out of `.groot/` across operations: a value an earlier
  * operation generated, or one a blueprint contract declares secret, is
- * concealed in a later operation's backups and plan copy and redacted from
- * its logs — while rollback and resume still restore and read them exactly.
+ * concealed in a later operation's backups and plan copy, and in saved
+ * plans, and redacted from its logs — while rollback, resume, and loading
+ * still restore and read them exactly. Once a quoted value changes, the
+ * operation stays listed and readable and rolls back as far as its backups
+ * allow (it is never resumed), and a saved plan quoting it is stale.
  * Operation state is owner-only (directories 0700; plan copies, backups,
  * and logs 0600).
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EnvVarContract } from "../contracts/common.ts";
+import type { OperationPlan } from "../contracts/plan.ts";
+import { GrootV2Error } from "../errors.ts";
 import { blueprintFixture } from "../test-fixtures.ts";
-import { applyPlan, readOperation, rollbackOperation } from "./index.ts";
+import {
+  applyPlan,
+  listOperations,
+  loadPlanFile,
+  loadSavedPlan,
+  previewRollback,
+  readOperation,
+  resumeOperation,
+  rollbackOperation,
+  savePlan,
+} from "./index.ts";
 import {
   addCommand,
   addSecret,
@@ -114,6 +129,163 @@ describe("secrets of earlier operations and blueprint contracts", () => {
     // Assert
     expect(leak).toBeNull();
     expect(snapshot(root)).toEqual(before);
+  });
+});
+
+/** op1 generates SESSION_KEY into .env.local; returns the value and the file's text. */
+async function generatedSecret(root: string): Promise<{ secret: string; envText: string }> {
+  await apply(
+    root,
+    await buildPlan(root, async (b) => {
+      addSecret(b, ".env.local", "SESSION_KEY");
+    }),
+  );
+  const envText = readFileSync(join(root, ".env.local"), "utf8");
+  const secret = /SESSION_KEY=(\S+)/.exec(envText)?.[1];
+  if (secret === undefined) throw new Error("no secret generated");
+  return { secret, envText };
+}
+
+const ROTATED = "EXISTING=1\nSESSION_KEY=rotated-value-0123456789abcdef\n";
+
+async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(GrootV2Error);
+    return error as GrootV2Error;
+  }
+  throw new Error("expected a GrootV2Error");
+}
+
+describe("plan copies quoting a secret whose value changes later", () => {
+  test("the operation stays listed and readable; rollback waits only for the value a backup quotes", async () => {
+    // Arrange — a human copies op1's secret into config.txt; op2's exact preview quotes it.
+    const root = scratchProject({ ".env.local": "EXISTING=1\n", "config.txt": "port=3000\n" });
+    const { secret, envText } = await generatedSecret(root);
+    writeFileSync(join(root, "config.txt"), `port=3000\nkey=${secret}\n`);
+    const before = snapshot(root);
+    const op2 = await apply(
+      root,
+      await buildPlan(root, async (b) => {
+        await b.editFile({
+          path: "config.txt",
+          edit: { kind: "lines", lines: ["debug=false"], header: null },
+          description: "add debug to config.txt",
+          owns: [],
+          createIfMissing: false,
+        });
+        await b.writeFile({
+          path: "other.txt",
+          content: "other\n",
+          description: "create other.txt",
+        });
+      }),
+    );
+    writeFileSync(join(root, ".env.local"), ROTATED); // the user rotates the key
+
+    // Act
+    const listed = (await listOperations(root)).map((state) => state.operationId);
+    const shown = await readOperation(root, op2.operationId);
+    const preview = await previewRollback(testContext(root).ctx, root, op2.operationId);
+    writeFileSync(join(root, ".env.local"), envText); // ...and puts it back
+    const rolledBack = await rollbackOperation(testContext(root).ctx, root, op2.operationId);
+
+    // Assert
+    expect(listed).toContain(op2.operationId);
+    expect(shown.status).toBe("completed");
+    expect(preview.conflicts).toEqual(["config.txt"]);
+    const conflict = preview.steps.find((step) => step.action === "conflict");
+    expect(conflict?.reason).toContain("quotes SESSION_KEY (.env.local)");
+    expect(rolledBack.status).toBe("rolled-back");
+    expect(snapshot(root)).toEqual(before);
+    expect(anyFileContains(join(root, ".groot"), secret)).toBeNull();
+  });
+
+  test("an interrupted operation whose plan quotes a changed value is not resumable, yet rolls back", async () => {
+    // Arrange — op2 writes copy.txt quoting the secret (exact preview), then other.txt.
+    const root = scratchProject({ ".env.local": "EXISTING=1\n" });
+    const { secret } = await generatedSecret(root);
+    const plan = await buildPlan(root, async (b) => {
+      await b.writeFile({ path: "copy.txt", content: `key=${secret}\n`, description: "copy" });
+      await b.writeFile({ path: "other.txt", content: "other\n", description: "create other.txt" });
+    });
+    const run = testContext(root, (event) => {
+      if (event.type === "step.done" && event.stepId === "s01") run.controller.abort("SIGINT");
+    });
+    const interrupted = await expectGrootError(
+      applyPlan(run.ctx, { plan, root, policy: permissive, command: "apply" }),
+    );
+    const operationId = String(interrupted.details?.operationId);
+    writeFileSync(join(root, ".env.local"), ROTATED);
+
+    // Act
+    const shown = await readOperation(root, operationId);
+    const resumed = await expectGrootError(
+      resumeOperation(testContext(root).ctx, root, operationId),
+    );
+    const rolledBack = await rollbackOperation(testContext(root).ctx, root, operationId);
+
+    // Assert
+    expect(interrupted.id).toBe("GROOT_E_INTERRUPTED");
+    expect(shown.status).toBe("interrupted");
+    expect(shown.resumable).toBe(false);
+    expect(resumed.id).toBe("GROOT_E_CONFLICT");
+    expect(resumed.message).toContain("SESSION_KEY");
+    expect(rolledBack.status).toBe("rolled-back");
+    expect(existsSync(join(root, "copy.txt"))).toBe(false);
+    expect(existsSync(join(root, "other.txt"))).toBe(false);
+  });
+});
+
+describe("saved plans", () => {
+  async function planQuotingSecret(root: string): Promise<{ plan: OperationPlan; secret: string }> {
+    const { secret } = await generatedSecret(root);
+    writeFileSync(join(root, "config.txt"), `port=3000\nkey=${secret}\n`);
+    const plan = await buildPlan(root, async (b) => {
+      await b.editFile({
+        path: "config.txt",
+        edit: { kind: "lines", lines: ["debug=false"], header: null },
+        description: "add debug to config.txt",
+        owns: [],
+        createIfMissing: false,
+      });
+    });
+    return { plan, secret };
+  }
+
+  test("a saved plan quoting a known secret keeps it out of .groot/plans and loads back exactly", async () => {
+    // Arrange
+    const root = scratchProject({ ".env.local": "EXISTING=1\n", "config.txt": "port=3000\n" });
+    const { plan, secret } = await planQuotingSecret(root);
+
+    // Act
+    const path = await savePlan(root, plan);
+    const leak = anyFileContains(join(root, ".groot"), secret);
+    const byId = await loadSavedPlan(root, plan.planId);
+    const byPath = await loadPlanFile(path); // how `groot apply <path>` and the MCP plan tools read it
+
+    // Assert
+    expect(leak).toBeNull();
+    expect(byId).toEqual(plan);
+    expect(byPath).toEqual(plan);
+    for (const file of allFiles(join(root, ".groot/plans"))) expect(mode(file)).toBe(0o600);
+  });
+
+  test("once the value it quotes changes, a saved plan is stale, naming where the value lived", async () => {
+    // Arrange
+    const root = scratchProject({ ".env.local": "EXISTING=1\n", "config.txt": "port=3000\n" });
+    const { plan } = await planQuotingSecret(root);
+    await savePlan(root, plan);
+    writeFileSync(join(root, ".env.local"), ROTATED);
+
+    // Act
+    const error = await expectGrootError(loadSavedPlan(root, plan.planId));
+
+    // Assert
+    expect(error.id).toBe("GROOT_E_STALE_PLAN");
+    const findings = (error.details?.findings ?? []) as { path: string }[];
+    expect(findings.map((finding) => finding.path)).toEqual([".env.local"]);
   });
 });
 

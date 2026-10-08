@@ -7,15 +7,18 @@
  * continues where this one stopped.
  *
  * Directory trees are removed with two guards: the project root itself is
- * never deleted (only its contents), and the root's `.groot/` (Groot's state)
- * and `.git/` (the user's history) always survive.
+ * never deleted (only its contents), and no `.groot/` (Groot's state) or
+ * `.git/` (the user's history) is ever deleted — the root's own survive, and
+ * a tree holding one anywhere inside is a conflict (tree hashes ignore those
+ * names, so the preview and the re-check before each step look for them).
+ * Steps whose undo is "nothing-to-do" still lose the directories they made
+ * when those are empty.
  */
-import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { RollbackPreview, Sha256 } from "../contracts/index.ts";
 import { GrootV2Error } from "../errors.ts";
-import { resolveInProject } from "../fs/paths.ts";
-import { STATE_DIR_NAME } from "../state.ts";
+import { joinRel, resolveInProject } from "../fs/paths.ts";
 import {
   backupBytes,
   backupMode,
@@ -24,9 +27,11 @@ import {
   parseKey,
   removeCreatedDirs,
   removePath,
+  reservedWithin,
   restoreFile,
 } from "./fsops.ts";
 import { operationFile } from "./journal.ts";
+import { reservedName } from "./reserved.ts";
 import { checkpoint, type Execution, emit } from "./runner.ts";
 import { abortReason } from "./step-context.ts";
 
@@ -56,17 +61,24 @@ export interface StepUndo {
   readonly alreadyUndone?: boolean;
 }
 
-/** Entries of the project root that rollback never removes. */
-const ROOT_KEEP = [STATE_DIR_NAME, ".git"];
+/**
+ * The `.git`/`.groot` entries undoing a tracked key would delete: a tree is
+ * cleared before it is restored, so anything reserved inside it counts (the
+ * project root keeps its own). Files have nothing inside.
+ */
+export function reservedInTree(root: string, key: string): string[] {
+  const parsed = parseKey(key);
+  return parsed.kind === "tree" ? reservedWithin(root, parsed.path) : [];
+}
 
-/** Remove a tree Groot produced; the project root keeps itself, .groot/, and .git/. */
+/** Remove a tree Groot produced; the project root keeps itself and its .groot/ and .git/. */
 function clearTree(root: string, path: string): void {
   if (path !== ".") {
     removePath(root, path);
     return;
   }
   for (const entry of readdirSync(root)) {
-    if (!ROOT_KEEP.includes(entry)) rmSync(join(root, entry), { recursive: true, force: true });
+    if (reservedName(entry) === null) removePath(root, joinRel(entry));
   }
 }
 
@@ -111,6 +123,8 @@ async function verifyStillSafe(ex: Execution, undo: StepUndo): Promise<void> {
   for (const item of undo.items) {
     if (!item.expected.includes(await currentHash(ex.sc.root, item.key))) {
       moved.push(parseKey(item.key).path);
+    } else {
+      moved.push(...reservedInTree(ex.sc.root, item.key));
     }
   }
   if (moved.length === 0) return;
@@ -161,6 +175,10 @@ export async function executeRollbackSteps(
     if (undo.action === "restore" || undo.action === "delete") {
       await undoStep(ex, undo);
       compensate ||= undo.compensates;
+    } else if (undo.action === "nothing-to-do") {
+      // No tracked path changed, but the step may still have made directories
+      // (a command that ran `mkdir -p` and then failed): only empty ones go.
+      removeCreatedDirs(ex.sc.root, undo.createdDirs);
     }
     const outcome =
       undo.action === "irreversible"

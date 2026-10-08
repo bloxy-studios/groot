@@ -11,28 +11,34 @@
  *
  * Recovery must know what a generator left behind, so every generator step
  * keeps a record next to its backups (`backups/<stepId>.generator.json`).
- * Staged promotion writes the staged tree's top-level entries and hash before
- * its first rename and marks the record complete after its last; an in-place
- * run records its finished tree. A destination that does not exist yet is
- * created by ONE rename (copied to a sibling first when the stage is on
- * another volume); an existing empty directory or the project root receives
- * entries one by one — so presence alone never proves completion. Resume:
+ * Staged promotion writes, before its first rename, every top-level entry it
+ * is about to move with a fingerprint of everything that entry holds, and
+ * marks the record complete after its last rename; an in-place run records
+ * its finished tree. A destination that does not exist yet is created by ONE
+ * rename (copied to a sibling first when the stage is on another volume); an
+ * existing empty directory or the project root receives entries one by one —
+ * so presence alone never proves completion. Resume:
  * - complete record and unchanged tree → the step is done (reconciled);
- * - nothing but entries the record says promotion added → remove exactly
- *   those and re-run;
- * - anything else — a human's files, or an in-place generator's partial
- *   output, which can't be told apart — stops at a retry/skip decision.
- * Recovery never removes `.git` or `.groot`.
+ * - nothing but entries that still hold exactly what promotion moved there →
+ *   remove those and re-run;
+ * - anything else — a human's file at a name promotion had not reached yet,
+ *   a change inside an entry it moved, an in-place generator's partial
+ *   output (which can't be told from a human's) — stops at a retry/skip
+ *   decision that names what a retry removes.
+ * Recovery never removes `.git` or `.groot`, nested ones included.
  */
 import { randomBytes } from "node:crypto";
 import {
   cpSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readlinkSync,
   renameSync,
   rmdirSync,
   rmSync,
+  type Stats,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -40,7 +46,7 @@ import { z } from "zod";
 import { Sha256 } from "../contracts/common.ts";
 import type { GeneratorAction } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
-import { hashTree } from "../fs/hash.ts";
+import { hashFile, hashTree } from "../fs/hash.ts";
 import { joinRel, resolveInProject } from "../fs/paths.ts";
 import { runProcess, type SpawnResult } from "../process.ts";
 import { STATE_DIR_NAME } from "../state.ts";
@@ -52,10 +58,13 @@ import {
   pathKind,
   readStepRecord,
   removeCreatedDirs,
+  removePath,
+  reservedWithin,
   treeKey,
   writeStepRecord,
 } from "./fsops.ts";
 import type { IntentRecord, OperationPaths } from "./journal.ts";
+import { reservedName } from "./reserved.ts";
 import {
   abortReason,
   childEnv,
@@ -65,17 +74,22 @@ import {
 } from "./step-context.ts";
 import { failureMessage, writeLog } from "./steps-process.ts";
 
-/** Entries recovery never removes from a destination. */
-const KEEP: ReadonlySet<string> = new Set([".git", STATE_DIR_NAME]);
-
 /** Siblings a cross-volume copy goes through before its rename. */
 const PROMOTE_MARK = ".groot-promote-";
 const PROMOTE_LEFTOVER = /\.groot-promote-[0-9a-f]{8}$/;
+/** The same leftover inside a destination: `<entry>.groot-promote-<hex>`. */
+const ENTRY_LEFTOVER = /^(.+)\.groot-promote-[0-9a-f]{8}$/;
+
+const PromotedEntry = z.object({ name: z.string(), fingerprint: z.string() }).strict();
 
 const GeneratorRecord = z
   .object({
-    /** Top-level entries the step put into its destination. */
-    entries: z.array(z.string()),
+    /**
+     * Staged: each top-level entry promotion moves into the destination, with
+     * the entryFingerprint of what it holds. Empty in place, where partial
+     * output cannot be attributed.
+     */
+    entries: z.array(PromotedEntry),
     /** hashTree of the result. */
     tree: Sha256.nullable(),
     /** Staged: promotion finished. In place: the generator finished. */
@@ -83,6 +97,24 @@ const GeneratorRecord = z
   })
   .strict();
 type GeneratorRecord = z.infer<typeof GeneratorRecord>;
+
+/**
+ * Everything a top-level entry holds — `.git` and `node_modules` included,
+ * unlike hashTree's default — so resume treats an entry as the generator's
+ * only while it is exactly what promotion moved there.
+ */
+async function entryFingerprint(abs: string): Promise<string> {
+  let info: Stats;
+  try {
+    info = lstatSync(abs);
+  } catch {
+    return "absent";
+  }
+  if (info.isSymbolicLink()) return `link:${readlinkSync(abs)}`;
+  if (info.isFile()) return `file:${await hashFile(abs)}`;
+  if (info.isDirectory()) return `dir:${await hashTree(abs, [])}`;
+  return "other";
+}
 
 function writeRecord(paths: OperationPaths, stepId: string, record: GeneratorRecord): void {
   writeStepRecord(paths, stepId, "generator", record);
@@ -194,9 +226,13 @@ async function promote(
     });
   }
   // .git (when kept) goes last, so a cut-off promotion is unlikely to hold one.
-  const entries = readdirSync(grown).sort(
+  const names = readdirSync(grown).sort(
     (a, b) => Number(a === ".git") - Number(b === ".git") || (a < b ? -1 : a > b ? 1 : 0),
   );
+  const entries: GeneratorRecord["entries"] = [];
+  for (const name of names) {
+    entries.push({ name, fingerprint: await entryFingerprint(join(grown, name)) });
+  }
   const record = { entries, tree: await hashTree(grown), complete: false };
   writeRecord(sc.paths, action.id, record);
   let promoted = false;
@@ -209,7 +245,7 @@ async function promote(
       if (pathKind(dest) !== "dir") throw error;
     }
   }
-  if (!promoted) promoteEntries(sc, action, grown, dest, entries);
+  if (!promoted) promoteEntries(sc, action, grown, dest, names);
   writeRecord(sc.paths, action.id, { ...record, complete: true });
 }
 
@@ -289,11 +325,7 @@ async function inPlaceGenerator(
     );
   }
   if (action.scrubGit && !hadGit) rmSync(join(dest, ".git"), { recursive: true, force: true });
-  writeRecord(sc.paths, action.id, {
-    entries: contentEntries(dest),
-    tree: await hashTree(dest),
-    complete: true,
-  });
+  writeRecord(sc.paths, action.id, { entries: [], tree: await hashTree(dest), complete: true });
   return logRef;
 }
 
@@ -341,7 +373,7 @@ export async function generatorStep(sc: StepContext, action: GeneratorAction): P
 
 export type GeneratorSettlement =
   | { readonly kind: "done" }
-  | { readonly kind: "rerun"; readonly cleanup: () => void }
+  | { readonly kind: "rerun"; readonly cleanup: () => Promise<void> }
   /** A human must decide (retry/skip): `why` completes "…was interrupted mid-run and …". */
   | { readonly kind: "decide"; readonly why: string; readonly removes: readonly string[] };
 
@@ -357,7 +389,7 @@ function siblingLeftovers(root: string, produces: string): string[] {
     .map((name) => join(parent, name));
 }
 
-/** Remove `entries` (never .git/.groot) and leftovers; a destination new since the intent goes when empty. */
+/** Remove `entries` and leftovers; a destination new since the intent goes when empty. */
 function clearDestination(
   root: string,
   produces: string,
@@ -365,9 +397,7 @@ function clearDestination(
   existedBefore: boolean,
 ): void {
   const dest = resolveInProject(root, produces);
-  for (const entry of entries) {
-    if (!KEEP.has(entry)) rmSync(join(dest, entry), { recursive: true, force: true });
-  }
+  for (const entry of entries) removePath(root, joinRel(produces, entry)); // never .git/.groot
   for (const leftover of siblingLeftovers(root, produces)) {
     rmSync(leftover, { recursive: true, force: true });
   }
@@ -376,11 +406,65 @@ function clearDestination(
   }
 }
 
+/** What an incomplete record says promotion moved: entry name → fingerprint. */
+function promotedEntries(record: GeneratorRecord | null): ReadonlyMap<string, string> {
+  if (record === null || record.complete) return new Map();
+  return new Map(record.entries.map((entry) => [entry.name, entry.fingerprint]));
+}
+
+/** A cross-volume copy of a promoted entry that a crash left in the destination. */
+function isLeftover(entry: string, promoted: ReadonlyMap<string, string>): boolean {
+  const base = ENTRY_LEFTOVER.exec(entry)?.[1];
+  return base !== undefined && promoted.has(base);
+}
+
+/** Present entries that are not exactly what promotion moved there (or its leftovers). */
+async function unattributed(
+  dest: string,
+  present: readonly string[],
+  promoted: ReadonlyMap<string, string>,
+): Promise<string[]> {
+  const foreign: string[] = [];
+  for (const entry of present) {
+    if (reservedName(entry) !== null) {
+      foreign.push(entry); // never Groot's to remove, whoever put it there
+      continue;
+    }
+    if (isLeftover(entry, promoted)) continue;
+    const expected = promoted.get(entry);
+    if (expected === undefined || (await entryFingerprint(join(dest, entry))) !== expected) {
+      foreign.push(entry);
+    }
+  }
+  return foreign;
+}
+
+/** Re-running needs the destination cleared, and Groot never deletes a .git or .groot in it. */
+function assertClearable(
+  sc: StepContext,
+  action: GeneratorAction,
+  present: readonly string[],
+): void {
+  const paths = present.flatMap((entry) => {
+    const path = joinRel(action.produces, entry);
+    return reservedName(entry) !== null ? [path] : reservedWithin(sc.root, path);
+  });
+  if (paths.length === 0) return;
+  throw new GrootV2Error(
+    "GROOT_E_CONFLICT",
+    `Step ${action.id} cannot run again: ${action.produces} holds ${paths.join(", ")}, and Groot never deletes a .git or .groot directory.`,
+    {
+      hint: `Move ${paths.join(", ")} out of the way, then \`groot resume ${sc.operationId} --retry-step ${action.id}\` — or keep the result as it is with \`--skip-step ${action.id}\`.`,
+      details: { operationId: sc.operationId, stepId: action.id, paths },
+    },
+  );
+}
+
 /**
  * How resume settles an interrupted generator step (see the module comment).
  * `retry`: a human chose to run it again — everything in the destination
- * except `.git`/`.groot` goes, and a `.git` that appeared since the intent is
- * a conflict (Groot never deletes one; the re-run needs a fresh directory).
+ * goes, except that a `.git`/`.groot` anywhere in it is a conflict (Groot
+ * never deletes one; the re-run needs a fresh directory).
  */
 export async function settleGenerator(
   sc: StepContext,
@@ -396,33 +480,22 @@ export async function settleGenerator(
     if ((await hashTree(dest)) === record.tree) return { kind: "done" };
   }
   const existedBefore = (intent.before[treeKey(action.produces)] ?? null) !== null;
-  const cleanup = (): void => clearDestination(sc.root, action.produces, present, existedBefore);
   const removes = present
-    .filter((entry) => !KEEP.has(entry))
+    .filter((entry) => reservedName(entry) === null)
     .map((entry) => joinRel(action.produces, entry));
   if (retry) {
-    const kept = present.filter((entry) => KEEP.has(entry));
-    if (kept.length > 0) {
-      const paths = kept.map((entry) => joinRel(action.produces, entry));
-      throw new GrootV2Error(
-        "GROOT_E_CONFLICT",
-        `Step ${action.id} cannot run again: ${paths.join(", ")} appeared in ${action.produces} after it started, and Groot never deletes it.`,
-        {
-          hint: `Move ${paths.join(", ")} out of the way, then \`groot resume ${sc.operationId} --retry-step ${action.id}\` — or keep the result as it is with \`--skip-step ${action.id}\`.`,
-          details: { operationId: sc.operationId, stepId: action.id, paths },
-        },
-      );
-    }
-    return { kind: "rerun", cleanup };
+    assertClearable(sc, action, present);
+    return {
+      kind: "rerun",
+      cleanup: async () => clearDestination(sc.root, action.produces, present, existedBefore),
+    };
   }
   if (kind !== "dir" && kind !== "absent") {
     return { kind: "decide", why: `${action.produces} is no longer a directory`, removes: [] };
   }
-  // Only a staged promotion that was cut off says exactly what it added.
-  const ours = new Set(record !== null && !record.complete ? record.entries : []);
-  const foreign = present.filter(
-    (entry) => KEEP.has(entry) || !(ours.has(entry) || PROMOTE_LEFTOVER.test(entry)),
-  );
+  // Only a staged promotion that was cut off says exactly what it moved.
+  const promoted = promotedEntries(record);
+  const foreign = await unattributed(dest, present, promoted);
   if (record?.complete === true) {
     return {
       kind: "decide",
@@ -437,5 +510,23 @@ export async function settleGenerator(
       removes,
     };
   }
+  assertClearable(sc, action, present);
+  const cleanup = async (): Promise<void> => {
+    // Humans don't take the lock: re-check right before removing anything.
+    const now = pathKind(dest) === "dir" ? contentEntries(dest).sort() : [];
+    const changed = await unattributed(dest, now, promoted);
+    if (changed.length > 0) {
+      const paths = changed.map((entry) => joinRel(action.produces, entry));
+      throw new GrootV2Error(
+        "GROOT_E_CONFLICT",
+        `${paths.join(", ")} changed while resume was clearing step ${action.id}'s partial output; nothing was removed.`,
+        {
+          hint: `Inspect them, then \`groot resume ${sc.operationId}\` decides again.`,
+          details: { operationId: sc.operationId, stepId: action.id, paths },
+        },
+      );
+    }
+    clearDestination(sc.root, action.produces, now, existedBefore);
+  };
   return { kind: "rerun", cleanup };
 }

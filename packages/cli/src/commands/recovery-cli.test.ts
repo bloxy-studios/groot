@@ -3,19 +3,22 @@
  * GROOT_INTERNAL_CRASH_AT hook (SIGKILL right after a step's intent, right
  * after its effect, or in the middle of a staged generator's promotion), then
  * `groot resume` — the final tree must equal an uninterrupted run's, with no
- * effect duplicated. Plus the non-idempotent command gate, an in-place
- * generator killed mid-run (resume decides with a human, deleting nothing),
- * and SIGINT during a long command (exit 130, the child's whole process group
- * gone, then resume completes).
+ * effect duplicated. Plus the non-idempotent command gate, generators cut
+ * off mid-effect (a human's files at names a promotion had not reached, or
+ * inside an entry it had moved, and an in-place generator's partial output:
+ * resume decides with a human, deleting nothing), and SIGINT during a long
+ * command (exit 130, the child's whole process group gone, then resume
+ * completes). A SIGKILLed run's stage lives in a scratch TMPDIR.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { OperationPlan } from "../core/contracts/plan.ts";
 import {
   addCommand,
   addGenerator,
   buildPlan,
+  type CliRun,
   envelopeOf,
   journalRecords,
   operationIds,
@@ -181,17 +184,42 @@ describe("crash recovery via GROOT_INTERNAL_CRASH_AT (process-level)", () => {
 });
 
 describe("generators interrupted mid-effect (process-level)", () => {
-  /** A staged generator promoting four entries into the project root, then a write. */
-  async function stagedRootPlan(root: string): Promise<OperationPlan> {
+  /** A shell script writing `files` (path → one-line content) under `dir`. */
+  function writeScript(dir: string, files: Record<string, string>): string {
+    return Object.entries(files)
+      .map(
+        ([path, content]) =>
+          `mkdir -p "$(dirname ${dir}/${path})" && echo ${content} > ${dir}/${path}`,
+      )
+      .join(" && ");
+  }
+
+  /**
+   * A staged generator promoting `files` into the project root (entry by
+   * entry, in name order), then a write.
+   */
+  async function stagedRootPlan(
+    root: string,
+    files: Record<string, string> = { "a.txt": "a", "b.txt": "b", "src/c.ts": "c", "d.txt": "d" },
+  ): Promise<OperationPlan> {
     const name = basename(root); // a staged generator creates basename(produces) in its stage
     return buildPlan(root, async (b) => {
-      addGenerator(b, {
-        script: `mkdir -p ${name}/src && echo a > ${name}/a.txt && echo b > ${name}/b.txt && echo c > ${name}/src/c.ts && echo d > ${name}/d.txt`,
-        produces: ".",
-        mode: "staged",
-      });
+      addGenerator(b, { script: writeScript(name, files), produces: ".", mode: "staged" });
       await b.writeFile({ path: "z.txt", content: "z\n", description: "create z.txt" });
     });
+  }
+
+  /** `groot apply` SIGKILLed right after the promotion's first entry. */
+  async function crashMidPromotion(
+    root: string,
+    plan: OperationPlan,
+  ): Promise<{ crashed: CliRun; operationId: string }> {
+    const crashed = await runCli(root, ["apply", writePlanFile(plan)], {
+      GROOT_INTERNAL_CRASH_AT: "s01:mid-promotion",
+      // A SIGKILL skips removing the stage: keep it in a directory this file removes.
+      TMPDIR: scratchDir("groot-tmp-"),
+    });
+    return { crashed, operationId: String(operationIds(root)[0]) };
   }
 
   test(
@@ -204,10 +232,7 @@ describe("generators interrupted mid-effect (process-level)", () => {
         writePlanFile(await stagedRootPlan(reference)),
       ]);
       const root = scratchProject();
-      const crashed = await runCli(root, ["apply", writePlanFile(await stagedRootPlan(root))], {
-        GROOT_INTERNAL_CRASH_AT: "s01:mid-promotion",
-      });
-      const operationId = String(operationIds(root)[0]);
+      const { crashed, operationId } = await crashMidPromotion(root, await stagedRootPlan(root));
       const partial = Object.keys(snapshot(root));
 
       // Act
@@ -220,6 +245,55 @@ describe("generators interrupted mid-effect (process-level)", () => {
       expect(resumed.exitCode).toBe(0);
       expect(lastDoneOutcome(root, operationId, "s01")).toBe("applied");
       expect(snapshot(root)).toEqual(snapshot(reference));
+    },
+    PROCESS_TIMEOUT,
+  );
+
+  test(
+    "files a human puts at names the cut-off promotion had not reached block resume; nothing is deleted",
+    async () => {
+      // Arrange
+      const root = scratchProject();
+      const { crashed, operationId } = await crashMidPromotion(root, await stagedRootPlan(root));
+      writeFileSync(join(root, "b.txt"), "my notes\n");
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src/mine.ts"), "export const mine = 1;\n");
+      const meanwhile = snapshot(root);
+
+      // Act
+      const resumed = await runCli(root, ["resume", operationId, "--json"]);
+
+      // Assert
+      expect(crashed.signalCode).toBe("SIGKILL");
+      expect(resumed.exitCode).toBe(7);
+      const envelope = envelopeOf(resumed);
+      expect(envelope.error?.id).toBe("GROOT_E_BLOCKED");
+      expect(envelope.error?.details?.removes).toEqual(["a.txt", "b.txt", "src"]);
+      expect(snapshot(root)).toEqual(meanwhile);
+      expect(Object.keys(meanwhile)).toEqual(["a.txt", "b.txt", "src/", "src/mine.ts"]);
+    },
+    PROCESS_TIMEOUT,
+  );
+
+  test(
+    "a file a human adds inside an entry the promotion already moved blocks resume; nothing is deleted",
+    async () => {
+      // Arrange — "app" is promoted first.
+      const root = scratchProject();
+      const plan = await stagedRootPlan(root, { "app/main.ts": "main", "b.txt": "b" });
+      const { crashed, operationId } = await crashMidPromotion(root, plan);
+      writeFileSync(join(root, "app/notes.md"), "mine\n");
+      const meanwhile = snapshot(root);
+
+      // Act
+      const resumed = await runCli(root, ["resume", operationId, "--json"]);
+
+      // Assert
+      expect(crashed.signalCode).toBe("SIGKILL");
+      expect(resumed.exitCode).toBe(7);
+      expect(envelopeOf(resumed).error?.id).toBe("GROOT_E_BLOCKED");
+      expect(snapshot(root)).toEqual(meanwhile);
+      expect(Object.keys(meanwhile)).toEqual(["app/", "app/main.ts", "app/notes.md"]);
     },
     PROCESS_TIMEOUT,
   );

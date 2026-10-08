@@ -20,11 +20,14 @@
  *
  * Nothing is trusted that a writer to `.groot/` could swap: the plan copy
  * must be the plan the journal started (store.ts), and the steps still to run
- * are held to the project policy again — with this run's approvals only.
+ * are held to the project policy again — with this run's approvals only —
+ * against the same read of the journal they then run from. A plan copy whose
+ * quoted secret values changed meanwhile ("sealed") is never resumed.
  */
 
+import type { Policy } from "../contracts/blueprint.ts";
 import type { OperationResult, OperationStatus, PathHashes } from "../contracts/operation.ts";
-import type { PlannedAction } from "../contracts/plan.ts";
+import type { OperationPlan, PlannedAction } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 import { acquireProjectLock } from "../fs/lock.ts";
 import { resolveInProject } from "../fs/paths.ts";
@@ -45,10 +48,11 @@ import {
   recordFailure,
   runRemaining,
 } from "./runner.ts";
+import type { SecretRef } from "./secrets.ts";
 import { abortReason } from "./step-context.ts";
 import { isFileStep, plannedAfter, runEffect } from "./steps.ts";
 import { settleGenerator } from "./steps-generator.ts";
-import { isResumableStatus, type LoadedOperation, loadOperation, observedStatus } from "./store.ts";
+import { assertStartedPlan, isResumableStatus, loadOperation, observedStatus } from "./store.ts";
 import type { ResumeOptions } from "./types.ts";
 
 type Settlement =
@@ -57,7 +61,7 @@ type Settlement =
       readonly after: PathHashes;
       readonly outcome: "reconciled" | "already-applied";
     }
-  | { readonly kind: "rerun"; readonly cleanup?: () => void };
+  | { readonly kind: "rerun"; readonly cleanup?: () => Promise<void> };
 
 interface Unfinished {
   readonly action: PlannedAction;
@@ -74,6 +78,22 @@ function notResumable(operationId: string, status: OperationStatus): GrootV2Erro
         ? `Finish the rollback with \`groot rollback ${operationId}\`.`
         : `Inspect it with \`groot status ${operationId}\`.`,
       details: { operationId, status },
+    },
+  );
+}
+
+/** The plan copy quotes secret values that changed since it started (store.ts): never run it. */
+function sealedPlan(operationId: string, refs: readonly SecretRef[]): GrootV2Error {
+  const quoted =
+    refs.length === 0
+      ? "secret values"
+      : `the value of ${refs.map((ref) => `${ref.name} (${ref.path})`).join(", ")}`;
+  return new GrootV2Error(
+    "GROOT_E_CONFLICT",
+    `Operation ${operationId} cannot be resumed: its plan quotes ${quoted}, which changed after it started.`,
+    {
+      hint: `Put the previous value back to resume it — or undo its completed steps with \`groot rollback ${operationId}\` (\`--dry-run\` shows whether a backup needs that value too).`,
+      details: { operationId, secrets: refs.map((ref) => ({ name: ref.name, path: ref.path })) },
     },
   );
 }
@@ -210,7 +230,7 @@ async function rerun(ex: Execution, unfinished: Unfinished, settlement: Settleme
     );
   }
   assertNotReserved(ex.sc.root, action);
-  if (settlement.kind === "rerun") settlement.cleanup?.();
+  if (settlement.kind === "rerun") await settlement.cleanup?.();
   ex.journal.append({
     type: "step.intent",
     stepId: action.id,
@@ -261,23 +281,24 @@ async function settleUnfinished(
 }
 
 /**
- * Hold the steps resume may still run to the policy. The plan copy is
+ * Hold the steps resume will still run to the policy. The plan copy is
  * untrusted like any plan file, and approvals are per run: those given to
- * apply are not journaled, so a resume needs its own.
+ * apply are not journaled, so a resume needs its own. `replayed` must be the
+ * journal the run continues from — the one read under the lock — so no
+ * earlier read can vouch for steps that then run.
  */
-async function assertRemainingPolicy(
-  root: string,
-  loaded: LoadedOperation,
+function assertRemainingPolicy(
+  plan: OperationPlan,
+  replayed: Replay,
+  policy: Policy,
   options: ResumeOptions,
-): Promise<void> {
-  const remaining = loaded.plan.actions.filter(
-    (action) =>
-      progressOf(loaded.replayed, action.id).phase !== "done" && action.id !== options.skipStep,
+): void {
+  const remaining = plan.actions.filter(
+    (action) => progressOf(replayed, action.id).phase !== "done" && action.id !== options.skipStep,
   );
   const external = remaining.filter((action) => action.type === "external");
-  const policy = options.policy ?? (await loadProjectPolicy(root)).policy;
   assertPolicy(
-    { ...loaded.plan, actions: remaining, requiredClasses: [], external },
+    { ...plan, actions: remaining, requiredClasses: [], external },
     policy,
     options.approvals ?? [],
   );
@@ -293,16 +314,22 @@ export async function resumeOperation(
   const loaded = loadOperation(canonical, operationId);
   const status = observedStatus(canonical, loaded);
   if (!isResumableStatus(status)) throw notResumable(operationId, status);
+  if (loaded.sealed !== null) throw sealedPlan(operationId, loaded.sealed);
   assertStepOptions(options, unfinishedStep(loaded.plan.actions, loaded.replayed), operationId);
-  await assertRemainingPolicy(canonical, loaded, options);
+  const policy = options.policy ?? (await loadProjectPolicy(canonical)).policy;
 
   const lock = acquireProjectLock(canonical, { command: "resume", operationId });
   try {
+    // One read of the journal under the lock decides everything below — the
+    // plan it started, the step in flight, the policy — and runRemaining
+    // continues from that same read (Journal keeps its records in memory).
     const ex = createExecution(ctx, canonical, loaded.plan, loaded.paths);
     const replayed = ex.journal.replay();
+    assertStartedPlan(loaded.plan, replayed, loaded.paths);
     if (!isResumableStatus(replayed.status)) throw notResumable(operationId, replayed.status);
     const unfinished = unfinishedStep(loaded.plan.actions, replayed);
     assertStepOptions(options, unfinished, operationId);
+    assertRemainingPolicy(loaded.plan, replayed, policy, options);
     // Decide how the in-flight step settles before writing anything: a
     // conflict or a blocked command leaves the operation exactly as it was.
     const settlement = unfinished === null ? null : await settle(ex, unfinished, options);

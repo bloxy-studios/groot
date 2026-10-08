@@ -30,6 +30,7 @@ import type { CoreContext } from "../runtime.ts";
 import {
   absentAtIntent,
   backupBytes,
+  concealedIn,
   currentHash,
   EMPTY_TREE_HASH,
   parseKey,
@@ -37,11 +38,16 @@ import {
 } from "./fsops.ts";
 import { operationFile, progressOf, type Replay } from "./journal.ts";
 import { realRoot } from "./project.ts";
-import { executeRollbackSteps, type StepUndo, type UndoItem } from "./rollback-exec.ts";
+import {
+  executeRollbackSteps,
+  reservedInTree,
+  type StepUndo,
+  type UndoItem,
+} from "./rollback-exec.ts";
 import { checkpoint, createExecution, type Execution, emit } from "./runner.ts";
 import { childEnv } from "./step-context.ts";
 import { isFileStep, plannedAfter } from "./steps.ts";
-import { loadOperation, observedStatus, stepStates } from "./store.ts";
+import { assertStartedPlan, loadOperation, observedStatus, stepStates } from "./store.ts";
 import { simulatedTreeHash } from "./tree-sim.ts";
 
 /** The compensating command after dependency changes/installs are undone. */
@@ -122,6 +128,16 @@ function undoItems(ex: Execution, action: PlannedAction, replayed: Replay): Undo
 interface Evaluation {
   readonly conflicts: string[];
   readonly changes: UndoItem[];
+  /** Conflicts that are not later edits → why (an unrestorable backup, a .git in the way). */
+  readonly explained: ReadonlyMap<string, string>;
+}
+
+/** Why the backup of `path` cannot be restored exactly. */
+function unrestorable(ex: Execution, stepId: string, path: string): string {
+  const quoted = concealedIn(ex.sc.paths, stepId, path);
+  return quoted.length === 0
+    ? `the backup of ${path} is missing or damaged`
+    : `the backup of ${path} quotes ${quoted.map((ref) => `${ref.name} (${ref.path})`).join(", ")}, whose value changed or is gone — put it back to roll back`;
 }
 
 /**
@@ -137,21 +153,33 @@ async function evaluateItems(
 ): Promise<Evaluation> {
   const conflicts: string[] = [];
   const changes: UndoItem[] = [];
+  const explained = new Map<string, string>();
   for (const item of items) {
     const current = await sim.hash(item.key);
+    const path = parseKey(item.key).path;
     if (!item.expected.includes(current)) {
-      conflicts.push(parseKey(item.key).path);
+      conflicts.push(path);
       continue;
     }
     if (current === item.restoreTo) continue;
+    // Undoing a tree clears it first: a .git/.groot inside (invisible to tree
+    // hashes) would go with it, and Groot never deletes one.
+    const reserved = reservedInTree(ex.sc.root, item.key);
+    if (reserved.length > 0) {
+      const why = `${reserved.join(", ")} would be deleted with ${path}, and Groot never deletes a .git or .groot directory — move it out first`;
+      for (const inside of reserved) explained.set(inside, why);
+      conflicts.push(...reserved);
+      continue;
+    }
     if (!backupUsable(ex, stepId, item)) {
-      conflicts.push(parseKey(item.key).path);
+      explained.set(path, unrestorable(ex, stepId, path));
+      conflicts.push(path);
       continue;
     }
     changes.push({ ...item, expected: [current] });
     sim.set(item.key, item.restoreTo);
   }
-  return { conflicts, changes };
+  return { conflicts, changes, explained };
 }
 
 function plural(count: number, noun: string): string {
@@ -165,18 +193,17 @@ function decide(
   completed: boolean,
   createdDirs: readonly string[],
 ): StepUndo {
-  const { conflicts, changes } = evaluation;
+  const { conflicts, changes, explained } = evaluation;
   const none = { paths: [], items: [], createdDirs: [] };
   if (conflicts.length > 0) {
-    return {
-      ...base,
-      ...none,
-      action: "conflict",
-      paths: conflicts,
-      reason: completed
-        ? "changed since groot applied this step (or its backup is unusable); it will not be overwritten"
-        : "this step was interrupted and its files match neither their state before it nor its result; resume (or restore them) first",
-    };
+    const edited = completed
+      ? "changed since groot applied this step; it will not be overwritten"
+      : "this step was interrupted and its files match neither their state before it nor its result; resume (or restore them) first";
+    const reasons = [
+      ...(conflicts.some((path) => !explained.has(path)) ? [edited] : []),
+      ...new Set(explained.values()),
+    ];
+    return { ...base, ...none, action: "conflict", paths: conflicts, reason: reasons.join("; ") };
   }
   if (changes.length === 0) {
     return {
@@ -300,11 +327,14 @@ export async function previewRollback(
 }
 
 function rollbackConflict(operationId: string, preview: RollbackPreview): GrootV2Error {
+  const why = preview.steps
+    .filter((step) => step.action === "conflict")
+    .map((step) => `${step.paths.join(", ")}: ${step.reason}`);
   return new GrootV2Error(
     "GROOT_E_ROLLBACK_CONFLICT",
-    `Cannot roll back ${operationId}: ${preview.conflicts.join(", ")} changed after groot applied them. Nothing was changed.`,
+    `Cannot roll back ${operationId} — ${why.join("; ")}. Nothing was changed.`,
     {
-      hint: `Restore or remove those edits, then retry; \`groot rollback ${operationId} --dry-run\` shows the plan.`,
+      hint: `Resolve those paths, then retry; \`groot rollback ${operationId} --dry-run\` shows the plan.`,
       details: { operationId, conflicts: preview.conflicts, preview },
     },
   );
@@ -358,7 +388,8 @@ export async function rollbackOperation(
   const lock = acquireProjectLock(canonical, { command: "rollback", operationId });
   try {
     const ex = createExecution(ctx, canonical, loaded.plan, loaded.paths);
-    const replayed = ex.journal.replay();
+    const replayed = ex.journal.replay(); // the read the whole rollback works from
+    assertStartedPlan(loaded.plan, replayed, loaded.paths);
     if (replayed.status === "rolled-back") return rollbackResult(ex, []);
     const undos = await planUndo(ex, replayed);
     const preview = toPreview(ex, undos);

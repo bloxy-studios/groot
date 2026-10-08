@@ -11,7 +11,8 @@
  * (step.failed + operation.failed, or operation.interrupted) before they
  * propagate, so the on-disk state always explains how the run ended. Before
  * its intent, each step's paths are checked at their real location — none
- * may resolve into `.groot/` or `.git/` (reserved.ts).
+ * may resolve into `.groot/` or `.git/` (reserved.ts) — and a recursive
+ * delete may not hold one either.
  */
 import { schemaUrl } from "../contracts/common.ts";
 import {
@@ -43,7 +44,7 @@ import {
 import { assertNotReserved } from "./reserved.ts";
 import { knownSecretRefs, SecretBook } from "./secrets.ts";
 import { abortReason, type StepContext, type StepEffect } from "./step-context.ts";
-import { runEffect, stepFindings, trackedKeys } from "./steps.ts";
+import { assertStepSafe, runEffect, stepFindings, trackedKeys } from "./steps.ts";
 import { stepStates, writeState } from "./store.ts";
 
 export interface Execution {
@@ -171,6 +172,7 @@ export async function recordIntent(ex: Execution, action: PlannedAction): Promis
 export async function executeStep(ex: Execution, action: PlannedAction): Promise<void> {
   if (ex.sc.ctx.signal.aborted) throw boundaryInterrupt(ex, action.id);
   assertNotReserved(ex.sc.root, action);
+  assertStepSafe(ex.sc, action);
   const findings = await stepFindings(ex.sc, action);
   if (findings.length > 0) {
     throw staleError(findings, {

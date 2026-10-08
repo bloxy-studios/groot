@@ -13,12 +13,15 @@
  * conceals known secret values like backups do (secrets.ts) and is revealed
  * on load, then must be the plan the journal started — same id and
  * fingerprint — so a swapped copy never runs under another plan's journal.
+ * When a value it quotes has changed since (a rotated key), the copy cannot
+ * be revealed exactly: it loads "sealed" — still listed, shown, and rolled
+ * back with (rollback works from the journal and backups), never resumed.
  */
 import { chmodSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { OperationId, RelPath, schemaUrl } from "../contracts/common.ts";
+import { OperationId, schemaUrl } from "../contracts/common.ts";
 import {
   type OperationState,
   OperationState as OperationStateSchema,
@@ -41,8 +44,15 @@ import {
   replay,
   type StepProgress,
 } from "./journal.ts";
-import { validatePlanDocument } from "./plans.ts";
-import { type Placeholder, SecretBook } from "./secrets.ts";
+import { validatePlanDocument, validateSealedPlanDocument } from "./plans.ts";
+import {
+  concealDocument,
+  concealedRefs,
+  readSidecar,
+  revealDocument,
+  type SecretBook,
+  type SecretRef,
+} from "./secrets.ts";
 
 /** Operation state quotes file contents: only the owner may enter or read it. */
 const PRIVATE_DIR_MODE = 0o700;
@@ -83,31 +93,42 @@ export function createOperationDir(
     mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
     chmodSync(dir, PRIVATE_DIR_MODE);
   }
-  const { bytes, placeholders } = secrets.conceal(Buffer.from(prettyJson(plan), "utf8"));
-  if (placeholders.length > 0) {
-    writeFileAtomic(paths.planSecrets, prettyJson(placeholders), PRIVATE_FILE_MODE);
+  const { bytes, sidecar } = concealDocument(secrets, prettyJson(plan));
+  if (sidecar !== null) {
+    writeFileAtomic(paths.planSecrets, prettyJson(sidecar), PRIVATE_FILE_MODE);
   }
   writeFileAtomic(paths.plan, bytes, PRIVATE_FILE_MODE);
   return paths;
 }
 
-const PlaceholderList = z.array(
-  z.object({ name: z.string(), path: RelPath, token: z.string() }).strict(),
-);
+function parsedJson(bytes: Uint8Array): unknown {
+  try {
+    return JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch {
+    return null;
+  }
+}
 
-/** The plan copy's bytes with concealed secret values put back (null: a value is gone). */
-function revealedPlanCopy(
+/**
+ * The plan copy, its concealed values revealed — or, when one changed or is
+ * gone, the concealed copy itself ("sealed", with the variables it quotes).
+ */
+function readPlanCopy(
   root: string,
   paths: OperationPaths,
   bytes: Uint8Array,
-): Uint8Array | null {
-  let placeholders: Placeholder[] = [];
-  try {
-    placeholders = PlaceholderList.parse(JSON.parse(readFileSync(paths.planSecrets, "utf8")));
-  } catch {
-    // no sidecar: nothing was concealed
+): { plan: OperationPlan; sealed: readonly SecretRef[] | null } {
+  const sidecar = readSidecar(paths.planSecrets);
+  if (sidecar === null)
+    return { plan: validatePlanDocument(parsedJson(bytes), paths.plan), sealed: null };
+  const revealed = sidecar === "invalid" ? null : revealDocument(root, bytes, sidecar);
+  if (revealed !== null) {
+    return { plan: validatePlanDocument(parsedJson(revealed), paths.plan), sealed: null };
   }
-  return new SecretBook(root, []).reveal(bytes, placeholders);
+  return {
+    plan: validateSealedPlanDocument(parsedJson(bytes), paths.plan),
+    sealed: sidecar === "invalid" ? [] : concealedRefs(sidecar),
+  };
 }
 
 function stepState(action: PlannedAction, progress: StepProgress): StepState {
@@ -139,12 +160,17 @@ export function stepStates(plan: OperationPlan, replayed: Replay): StepState[] {
   return plan.actions.map((action) => stepState(action, progressOf(replayed, action.id)));
 }
 
-/** The OperationState snapshot for a replayed journal (validated against the contract). */
+/**
+ * The OperationState snapshot for a replayed journal (validated against the
+ * contract). `sealed`: the plan copy cannot be revealed (see the module
+ * comment), so the operation is not resumable whatever its status.
+ */
 export function buildState(
   plan: OperationPlan,
   replayed: Replay,
   paths: OperationPaths,
   statusOverride?: OperationStatus,
+  sealed = false,
 ): OperationState {
   const status = statusOverride ?? replayed.status;
   const now = nowIso();
@@ -166,7 +192,7 @@ export function buildState(
     evidence: [...replayed.evidence],
     // "running" here means a live writer (readers turn a dead one's into
     // "interrupted"): resuming it would only meet GROOT_E_LOCKED.
-    resumable: status !== "running" && isResumableStatus(status),
+    resumable: !sealed && status !== "running" && isResumableStatus(status),
     journal: paths.journalRel,
   });
 }
@@ -226,6 +252,13 @@ export interface LoadedOperation {
   readonly paths: OperationPaths;
   readonly plan: OperationPlan;
   readonly replayed: Replay;
+  /**
+   * Null when the plan copy was revealed exactly. Otherwise `plan` is the
+   * concealed copy and this lists the secret variables (name + env file) it
+   * quotes whose values changed or are gone — show it, roll back with it,
+   * never run it.
+   */
+  readonly sealed: readonly SecretRef[] | null;
 }
 
 function notFound(operationId: string, detail?: string): GrootV2Error {
@@ -233,6 +266,34 @@ function notFound(operationId: string, detail?: string): GrootV2Error {
     "GROOT_E_NOT_FOUND",
     `No operation ${operationId} in this project${detail === undefined ? "" : ` (${detail})`}.`,
     { hint: "List operations with `groot status`.", details: { operationId } },
+  );
+}
+
+/**
+ * A plan copy runs only under the journal that started it: same plan id and
+ * fingerprint (checked on load, and again by writers on the journal they
+ * re-read under the lock).
+ */
+export function assertStartedPlan(
+  plan: OperationPlan,
+  replayed: Replay,
+  paths: OperationPaths,
+): void {
+  if (replayed.started === null) throw notFound(paths.id, "it never started");
+  const { planId, planFingerprint } = replayed.started;
+  if (plan.planId === planId && plan.fingerprint === planFingerprint) return;
+  throw new GrootV2Error(
+    "GROOT_E_INVALID_DOCUMENT",
+    `The plan copy of operation ${paths.id} is not the plan it started (${planId}).`,
+    {
+      hint: "The operation's plan.json was replaced or edited; put back the plan it started with (the same plan file or saved plan) to resume or roll it back.",
+      details: {
+        operationId: paths.id,
+        path: paths.plan,
+        expected: { planId, fingerprint: planFingerprint },
+        actual: { planId: plan.planId, fingerprint: plan.fingerprint },
+      },
+    },
   );
 }
 
@@ -246,44 +307,10 @@ export function loadOperation(root: string, operationId: string): LoadedOperatio
   } catch {
     throw notFound(operationId);
   }
-  const revealed = revealedPlanCopy(root, paths, planBytes);
-  if (revealed === null) {
-    throw new GrootV2Error(
-      "GROOT_E_INVALID_DOCUMENT",
-      `The plan copy of operation ${operationId} quotes a secret value that is no longer where it was.`,
-      {
-        hint: "Restore the env file the value came from (see plan.secrets.json for its name and file).",
-        details: { operationId, path: paths.plan },
-      },
-    );
-  }
-  let planValue: unknown;
-  try {
-    planValue = JSON.parse(Buffer.from(revealed).toString("utf8"));
-  } catch {
-    planValue = null;
-  }
-  const plan = validatePlanDocument(planValue, paths.plan);
+  const { plan, sealed } = readPlanCopy(root, paths, planBytes);
   const replayed = replay(readJournal(paths.journal).records);
-  if (replayed.started === null) throw notFound(operationId, "it never started");
-  const { planId, planFingerprint } = replayed.started;
-  if (plan.planId !== planId || plan.fingerprint !== planFingerprint) {
-    // A swapped plan copy must never run under the journal of another plan.
-    throw new GrootV2Error(
-      "GROOT_E_INVALID_DOCUMENT",
-      `The plan copy of operation ${operationId} is not the plan it started (${planId}).`,
-      {
-        hint: "The operation's plan.json was replaced or edited; put back the plan it started with (the same plan file or saved plan) to resume or roll it back.",
-        details: {
-          operationId,
-          path: paths.plan,
-          expected: { planId, fingerprint: planFingerprint },
-          actual: { planId: plan.planId, fingerprint: plan.fingerprint },
-        },
-      },
-    );
-  }
-  return { paths, plan, replayed };
+  assertStartedPlan(plan, replayed, paths);
+  return { paths, plan, replayed, sealed };
 }
 
 /** Status as a reader should see it: a "running" operation without a live writer crashed. */
@@ -314,7 +341,13 @@ export async function readOperation(root: string, operationId: string): Promise<
     }
     throw error;
   }
-  return buildState(loaded.plan, loaded.replayed, loaded.paths, observedStatus(root, loaded));
+  return buildState(
+    loaded.plan,
+    loaded.replayed,
+    loaded.paths,
+    observedStatus(root, loaded),
+    loaded.sealed !== null,
+  );
 }
 
 /**

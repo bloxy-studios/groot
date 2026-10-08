@@ -2,9 +2,10 @@
  * Plan integrity against forged documents: a `produced` expectation must name
  * an earlier step that produces exactly that path (and holds that step's
  * recorded result, directories included), Groot's own `.groot/` state and
- * `.git/` are never action targets (also not through a symlink), and the
- * up-front freshness check covers every action's own expectation so a stale
- * plan writes nothing even when its preconditions under-declare.
+ * `.git/` are never action targets (also not through a symlink, nor nested
+ * in a tree a recursive delete would remove), and the up-front freshness
+ * check covers every action's own expectation so a stale plan writes
+ * nothing even when its preconditions under-declare.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
@@ -20,6 +21,7 @@ import {
   addCommand,
   addGenerator,
   buildPlan,
+  journalRecords,
   permissive,
   refingerprint,
   removeScratchDirs,
@@ -240,6 +242,43 @@ describe("produced expectations are verified during execution", () => {
     const findings = (error.details?.findings ?? []) as { path: string }[];
     expect(findings.map((finding) => finding.path)).toEqual(["gen"]);
     expect(readFileSync(join(root, "gen/file.txt"), "utf8")).toBe("a human edit\n");
+  });
+
+  test("a generated tree that now holds a .git is never deleted (tree hashes ignore .git)", async () => {
+    // Arrange — a human makes the generated app its own repository meanwhile.
+    const root = scratchProject({ "README.md": "# Demo\n" });
+    const plan = await buildPlan(root, async (b) => {
+      addGenerator(b, {
+        script: "mkdir -p gen && echo g > gen/file.txt",
+        produces: "gen",
+        mode: "staged",
+      });
+      b.add(deleteTree("gen", await b.expectationFor("gen")));
+    });
+    const run = testContext(root, (event) => {
+      if (event.type === "step.done" && event.stepId === "s01") {
+        mkdirSync(join(root, "gen/.git"));
+        writeFileSync(join(root, "gen/.git/HEAD"), "ref: refs/heads/main\n");
+      }
+    });
+
+    // Act
+    const error = await expectGrootError(
+      applyPlan(run.ctx, { plan, root, policy: permissive, command: "apply" }),
+    );
+
+    // Assert — refused before its intent: nothing journaled, nothing backed up.
+    expect(error.id).toBe("GROOT_E_CONFLICT");
+    expect(error.details?.stepId).toBe("s02");
+    expect(error.details?.paths).toEqual(["gen/.git"]);
+    const intents = journalRecords(root, String(error.details?.operationId)).filter(
+      (record) => record.type === "step.intent",
+    );
+    expect(intents.map((record) => (record.type === "step.intent" ? record.stepId : ""))).toEqual([
+      "s01",
+    ]);
+    expect(readFileSync(join(root, "gen/.git/HEAD"), "utf8")).toBe("ref: refs/heads/main\n");
+    expect(readFileSync(join(root, "gen/file.txt"), "utf8")).toBe("g\n");
   });
 
   test("an unchanged generated tree is deleted as planned", async () => {

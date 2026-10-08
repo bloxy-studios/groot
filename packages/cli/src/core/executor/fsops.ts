@@ -1,7 +1,8 @@
 /**
  * Filesystem primitives of the executor: hashing tracked keys, backing up
- * bytes before an effect, restoring them on rollback, and creating
- * directories while remembering which ones a step created.
+ * bytes before an effect, restoring them on rollback, creating directories
+ * while remembering which ones a step created, and removing paths — never a
+ * `.git` or `.groot`, nor a tree that holds one.
  *
  * Tracked keys: a plain project-relative path is a file (its sha256, null when
  * absent); `tree:<path>` is a directory tree (core/fs/hash.ts hashTree — used
@@ -12,6 +13,7 @@
 import {
   chmodSync,
   cpSync,
+  type Dirent,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -21,18 +23,18 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Sha256 } from "../contracts/common.ts";
 import type { PathHashes } from "../contracts/operation.ts";
 import { GrootV2Error } from "../errors.ts";
 import { writeFileAtomic } from "../fs/atomic.ts";
 import { hashFile, hashTree, sha256Of } from "../fs/hash.ts";
-import { resolveInProject } from "../fs/paths.ts";
+import { joinRel, resolveInProject } from "../fs/paths.ts";
 import { prettyJson } from "../json.ts";
 import { STATE_DIR_NAME } from "../state.ts";
 import { type OperationPaths, operationFile } from "./journal.ts";
 import { reservedName } from "./reserved.ts";
-import type { Placeholder, SecretBook } from "./secrets.ts";
+import type { Placeholder, SecretBook, SecretRef } from "./secrets.ts";
 
 export const TREE_PREFIX = "tree:";
 
@@ -169,8 +171,25 @@ export function readStepRecord(
   }
 }
 
-function readSidecar(paths: OperationPaths, stepId: string): Record<string, Placeholder[]> {
-  return (readStepRecord(paths, stepId, "secrets") ?? {}) as Record<string, Placeholder[]>;
+/** The placeholders concealed in a step's backup of `filePath` (its `secrets` record). */
+function backupPlaceholders(
+  paths: OperationPaths,
+  stepId: string,
+  filePath: string,
+): Placeholder[] {
+  const record = readStepRecord(paths, stepId, "secrets");
+  if (typeof record !== "object" || record === null || !Object.hasOwn(record, filePath)) return [];
+  const placeholders = (record as Record<string, unknown>)[filePath];
+  return Array.isArray(placeholders) ? (placeholders as Placeholder[]) : [];
+}
+
+/** The secret variables (name + env file) a step's backup of `filePath` conceals. */
+export function concealedIn(paths: OperationPaths, stepId: string, filePath: string): SecretRef[] {
+  const unique = new Map<string, SecretRef>();
+  for (const { name, path } of backupPlaceholders(paths, stepId, filePath)) {
+    unique.set(`${path}\0${name}`, { name: String(name), path: String(path) });
+  }
+  return [...unique.values()];
 }
 
 /**
@@ -272,7 +291,7 @@ export function backupBytes(
 ): Uint8Array | null {
   const abs = operationFile(paths, backupRel);
   if (pathKind(abs) !== "file") return null;
-  const placeholders = readSidecar(paths, stepId)[filePath] ?? [];
+  const placeholders = backupPlaceholders(paths, stepId, filePath);
   const bytes = secrets.reveal(readFileSync(abs), placeholders);
   if (bytes === null || sha256Of(bytes) !== expected) return null;
   return bytes;
@@ -297,13 +316,82 @@ function notStateDir(root: string): (source: string) => boolean {
   return (source) => source !== state && !source.startsWith(`${state}${sep}`);
 }
 
-/** Remove a file or directory tree inside the project — never the project root, .groot/, or .git/. */
+/**
+ * `.git` and `.groot` entries (any spelling reserved.ts knows — directories,
+ * gitlink files, links) that removing the tree at `relPath` would take with
+ * it, as project-relative paths. The project root keeps its own, so for "."
+ * only nested ones count. Tree hashes ignore these names at every level, so a
+ * tree that hashes as Groot left it can still hold a repository a human
+ * created inside it. node_modules is not searched.
+ */
+export function reservedWithin(root: string, relPath: string): string[] {
+  const abs = removalTarget(root, relPath);
+  if (pathKind(abs) !== "dir") return []; // a file, or a link (removing it leaves its target)
+  const found: string[] = [];
+  const walk = (abs: string, rel: string, top: boolean): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(abs, { withFileTypes: true });
+    } catch {
+      return; // gone, or not a directory: nothing inside it
+    }
+    for (const entry of entries) {
+      const child = joinRel(rel, entry.name);
+      if (reservedName(entry.name) !== null) {
+        if (!top) found.push(child);
+      } else if (entry.isDirectory() && entry.name !== "node_modules") {
+        walk(join(abs, entry.name), child, false);
+      }
+    }
+  };
+  walk(abs, relPath, abs === resolve(root));
+  return found.sort();
+}
+
+/**
+ * Where removing `relPath` acts: its parent resolved inside the project, then
+ * the entry itself, unresolved — removing a link removes the link, never what
+ * it points to (which may lie outside the project).
+ */
+function removalTarget(root: string, relPath: string): string {
+  if (relPath === ".") return resolve(root);
+  return join(resolveInProject(root, parentRel(relPath)), basename(relPath));
+}
+
+/** GROOT_E_CONFLICT: removing `relPath` would delete the `.git`/`.groot` entries inside it. */
+export function refusedRemoval(
+  relPath: string,
+  reserved: readonly string[],
+  stepId?: string,
+): GrootV2Error {
+  return new GrootV2Error(
+    "GROOT_E_CONFLICT",
+    `Refusing to remove ${relPath}: it holds ${reserved.join(", ")}, and Groot never deletes a .git or .groot directory.`,
+    {
+      hint: `Move ${reserved.join(", ")} out of ${relPath} first.`,
+      details: {
+        path: relPath,
+        paths: [...reserved],
+        conflict: "reserved",
+        ...(stepId === undefined ? {} : { stepId }),
+      },
+    },
+  );
+}
+
+/**
+ * Remove a file or directory tree inside the project — never the project
+ * root, and never a `.git` or `.groot` (nor a tree holding one: callers
+ * decide about those first, this is the backstop).
+ */
 export function removePath(root: string, relPath: string): void {
-  const abs = resolveInProject(root, relPath);
+  const abs = removalTarget(root, relPath);
   if (abs === resolve(root) || reservedName(relPath) !== null) {
     throw new GrootV2Error("GROOT_E_INTERNAL", `Refusing to remove ${relPath}.`, {
       details: { path: relPath },
     });
   }
+  const reserved = reservedWithin(root, relPath);
+  if (reserved.length > 0) throw refusedRemoval(relPath, reserved);
   rmSync(abs, { recursive: true, force: true });
 }

@@ -14,12 +14,17 @@
  * Known values = the current values of every variable that must stay secret
  * (knownSecretRefs: this plan's env.secret steps and secret environment
  * contracts, those of every earlier operation, and the blueprint's) — read
- * from their env files, never persisted. Plan copies are concealed the same
- * way, since an exact preview can quote a file a human copied a secret into.
+ * from their env files, never persisted. Plan documents Groot stores (an
+ * operation's plan copy, a saved plan) are concealed the same way, since an
+ * exact preview can quote a file a human copied a secret into; their sidecar
+ * also records the hash of the original document, so a reveal either
+ * reproduces it exactly or fails — it never yields a document nobody planned.
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { RelPath } from "../contracts/common.ts";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { z } from "zod";
+import { RelPath, Sha256 } from "../contracts/common.ts";
 import type { OperationPlan } from "../contracts/plan.ts";
+import { sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { statePaths } from "../state.ts";
 import { operationPaths } from "./journal.ts";
@@ -212,5 +217,72 @@ export class SecretBook {
       text = text.split(placeholder.token).join(value);
     }
     return Buffer.from(text, "utf8");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Concealed documents (plan copies, saved plans)
+// ---------------------------------------------------------------------------
+
+const PlaceholderSchema = z.object({ name: z.string(), path: RelPath, token: z.string() }).strict();
+
+/** What a concealed document's sidecar holds (`plan.secrets.json`, `<planId>.secrets.json`). */
+export const ConcealedSidecar = z
+  .object({
+    /** sha256 of the document before concealment: revealing must reproduce it exactly. */
+    sha256: Sha256,
+    placeholders: z.array(PlaceholderSchema).min(1),
+  })
+  .strict();
+export type ConcealedSidecar = z.infer<typeof ConcealedSidecar>;
+
+export interface ConcealedDocument {
+  readonly bytes: Uint8Array;
+  /** null: the document quotes no known secret (nothing to conceal, no sidecar). */
+  readonly sidecar: ConcealedSidecar | null;
+}
+
+/** `text` with every known secret value replaced by a placeholder (see the module comment). */
+export function concealDocument(secrets: SecretBook, text: string): ConcealedDocument {
+  const original = Buffer.from(text, "utf8");
+  const { bytes, placeholders } = secrets.conceal(original);
+  if (placeholders.length === 0) return { bytes: original, sidecar: null };
+  return { bytes, sidecar: { sha256: sha256Of(original), placeholders } };
+}
+
+/**
+ * The original bytes of a concealed document, its values read from their env
+ * files now — or null when one of them changed or is gone.
+ */
+export function revealDocument(
+  root: string,
+  bytes: Uint8Array,
+  sidecar: ConcealedSidecar,
+): Uint8Array | null {
+  const revealed = new SecretBook(root, []).reveal(bytes, sidecar.placeholders);
+  return revealed !== null && sha256Of(revealed) === sidecar.sha256 ? revealed : null;
+}
+
+/** The variables a sidecar conceals (name + env file), without duplicates. */
+export function concealedRefs(sidecar: ConcealedSidecar): SecretRef[] {
+  const unique = new Map<string, SecretRef>();
+  for (const { name, path } of sidecar.placeholders) unique.set(`${path}\0${name}`, { name, path });
+  return [...unique.values()];
+}
+
+/** A sidecar file: null when absent, "invalid" when not a plain file, unreadable, or malformed. */
+export function readSidecar(path: string): ConcealedSidecar | "invalid" | null {
+  let text: string;
+  try {
+    if (!lstatSync(path).isFile()) return "invalid"; // never through a symlink
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "invalid";
+  }
+  try {
+    const parsed = ConcealedSidecar.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : "invalid";
+  } catch {
+    return "invalid";
   }
 }
