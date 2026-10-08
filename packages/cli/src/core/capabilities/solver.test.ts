@@ -1,9 +1,8 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { RecipeDescriptor } from "../contracts/capability.ts";
 import type { Recipe } from "../recipes/types.ts";
 import { appFixture, blueprintFixture, observationFixture, unitFixture } from "../test-fixtures.ts";
-import { registerRecipe } from "./registry.ts";
-import { solve } from "./solver.ts";
+import { type SolveInput, solve } from "./solver.ts";
 
 function descriptor(
   overrides: Partial<RecipeDescriptor> & Pick<RecipeDescriptor, "id" | "capability">,
@@ -43,32 +42,33 @@ function fakeRecipe(desc: RecipeDescriptor): Recipe {
   };
 }
 
-beforeAll(() => {
-  registerRecipe(fakeRecipe(descriptor({ id: "data.test-sqlite", capability: "data" })));
-  registerRecipe(
-    fakeRecipe(
-      descriptor({
-        id: "auth.test-auth",
-        capability: "auth",
-        requires: [{ capability: "data", recipes: ["data.test-sqlite"] }],
-        conflicts: [
-          {
-            capability: null,
-            recipe: null,
-            dependency: "next-auth",
-            reason: "another auth library is already installed",
-          },
-        ],
-      }),
-    ),
-  );
-});
+const CATALOG: Recipe[] = [
+  fakeRecipe(descriptor({ id: "data.test-sqlite", capability: "data" })),
+  fakeRecipe(
+    descriptor({
+      id: "auth.test-auth",
+      capability: "auth",
+      requires: [{ capability: "data", recipes: ["data.test-sqlite"] }],
+      conflicts: [
+        {
+          capability: null,
+          recipe: null,
+          dependency: "next-auth",
+          reason: "another auth library is already installed",
+        },
+      ],
+    }),
+  ),
+];
+
+/** Solve against this file's own catalog — no shared registry state between test files. */
+const solveWith = (input: Omit<SolveInput, "recipes">) => solve({ ...input, recipes: CATALOG });
 
 const observation = observationFixture([unitFixture({ path: "apps/api" })]);
 
 describe("compatibility solver", () => {
   test("orders requirements first and pins them to the dependent's app", () => {
-    const result = solve({
+    const result = solveWith({
       requested: [{ capability: "auth" }],
       blueprint: blueprintFixture(),
       observation,
@@ -94,13 +94,13 @@ describe("compatibility solver", () => {
         },
       ],
     });
-    const result = solve({ requested: [{ capability: "auth" }], blueprint, observation });
+    const result = solveWith({ requested: [{ capability: "auth" }], blueprint, observation });
     expect(result.selections[0]).toMatchObject({ capability: "data", alreadySatisfied: true });
     expect(result.selections[1]).toMatchObject({ capability: "auth", alreadySatisfied: false });
   });
 
   test("refuses unknown capabilities with the known alternatives", () => {
-    const result = solve({
+    const result = solveWith({
       requested: [{ capability: "billing" }],
       blueprint: blueprintFixture(),
       observation,
@@ -114,7 +114,7 @@ describe("compatibility solver", () => {
     const blueprint = blueprintFixture({
       apps: [appFixture({ id: "web", path: "apps/web", kind: "web", framework: "next" })],
     });
-    const result = solve({ requested: [{ capability: "auth" }], blueprint, observation });
+    const result = solveWith({ requested: [{ capability: "auth" }], blueprint, observation });
     expect(result.ok).toBe(false);
     expect(result.refusals[0]?.code).toBe("no-compatible-target");
     expect(result.refusals[0]?.message).toContain("web is a web app");
@@ -124,7 +124,7 @@ describe("compatibility solver", () => {
     const conflicted = observationFixture([
       unitFixture({ path: "apps/api", dependencies: { hono: "^4", "next-auth": "^5" } }),
     ]);
-    const result = solve({
+    const result = solveWith({
       requested: [{ capability: "auth" }],
       blueprint: blueprintFixture(),
       observation: conflicted,
@@ -144,9 +144,13 @@ describe("compatibility solver", () => {
       unitFixture({ path: "apps/api" }),
       unitFixture({ path: "apps/admin" }),
     ]);
-    const ambiguous = solve({ requested: [{ capability: "data" }], blueprint, observation: two });
+    const ambiguous = solveWith({
+      requested: [{ capability: "data" }],
+      blueprint,
+      observation: two,
+    });
     expect(ambiguous.refusals[0]?.alternatives).toEqual(["--target api", "--target admin"]);
-    const pinned = solve({
+    const pinned = solveWith({
       requested: [{ capability: "data", target: "admin" }],
       blueprint,
       observation: two,
@@ -168,7 +172,26 @@ describe("compatibility solver", () => {
         },
       ],
     });
-    const result = solve({ requested: [{ capability: "data" }], blueprint, observation });
+    const result = solveWith({ requested: [{ capability: "data" }], blueprint, observation });
     expect(result.refusals[0]?.code).toBe("recipe-conflict");
+  });
+
+  test("two recipes that could supply a capability require an explicit --recipe", () => {
+    const catalog = [
+      ...CATALOG,
+      fakeRecipe(descriptor({ id: "data.other-sqlite", capability: "data" })),
+    ];
+    const input = { blueprint: blueprintFixture(), observation, recipes: catalog };
+    const ambiguous = solve({ ...input, requested: [{ capability: "data" }] });
+    expect(ambiguous.refusals[0]?.code).toBe("ambiguous-choice");
+    expect(ambiguous.refusals[0]?.alternatives).toEqual([
+      "--recipe data.test-sqlite",
+      "--recipe data.other-sqlite",
+    ]);
+    const chosen = solve({
+      ...input,
+      requested: [{ capability: "data", recipe: "data.other-sqlite" }],
+    });
+    expect(chosen.selections[0]?.recipe).toBe("data.other-sqlite");
   });
 });

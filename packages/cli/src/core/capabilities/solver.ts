@@ -11,7 +11,7 @@ import type { BlueprintApp, BlueprintV2 } from "../contracts/blueprint.ts";
 import type { SolverRefusal, SolverResult, SolverSelection } from "../contracts/capability.ts";
 import type { ProjectObservation } from "../contracts/project.ts";
 import type { Recipe, RecipeTarget } from "../recipes/types.ts";
-import { CAPABILITIES, getRecipe, listRecipes } from "./registry.ts";
+import { CAPABILITIES, listRecipes } from "./registry.ts";
 
 export interface CapabilityRequest {
   readonly capability: string;
@@ -26,6 +26,8 @@ export interface SolveInput {
   readonly observation: ProjectObservation;
   /** Permit experimental (not yet certified) recipes. */
   readonly allowExperimental?: boolean;
+  /** Recipe catalog (defaults to the registry; injected by tests and future recipe sources). */
+  readonly recipes?: readonly Recipe[];
 }
 
 function targetOf(app: BlueprintApp, observation: ProjectObservation): RecipeTarget {
@@ -89,12 +91,11 @@ function resolveOne(
       alternatives: CAPABILITIES.map((entry) => entry.id),
     };
   }
-  const candidates = listRecipes().filter(
-    (recipe) => recipe.descriptor.capability === capability.id,
-  );
+  const catalog = input.recipes ?? listRecipes();
+  const candidates = catalog.filter((recipe) => recipe.descriptor.capability === capability.id);
   let pool = candidates;
   if (request.recipe) {
-    const named = getRecipe(request.recipe);
+    const named = catalog.find((recipe) => recipe.descriptor.id === request.recipe);
     if (named === undefined || named.descriptor.capability !== capability.id) {
       return {
         code: "unknown-recipe",
@@ -157,9 +158,18 @@ function resolveOne(
   const distinctApps = [...new Set(fits.map((fit) => fit.app.id))];
   if (distinctApps.length > 1) {
     return {
-      code: "no-compatible-target",
+      code: "ambiguous-choice",
       message: `${capability.title} fits several apps (${distinctApps.join(", ")}); choose one with --target.`,
       alternatives: distinctApps.map((id) => `--target ${id}`),
+    };
+  }
+  // Never pick silently between recipes that could both supply the capability.
+  const distinctRecipes = [...new Set(fits.map((fit) => fit.recipe.descriptor.id))];
+  if (distinctRecipes.length > 1) {
+    return {
+      code: "ambiguous-choice",
+      message: `Several recipes supply ${capability.title.toLowerCase()} for ${distinctApps[0]} (${distinctRecipes.join(", ")}); choose one with --recipe.`,
+      alternatives: distinctRecipes.map((id) => `--recipe ${id}`),
     };
   }
   return fits[0] as { recipe: Recipe; app: BlueprintApp };

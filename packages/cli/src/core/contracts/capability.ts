@@ -134,6 +134,7 @@ export const SolverRefusal = z
       "missing-requirement",
       "unsupported-topology",
       "not-certified",
+      "ambiguous-choice",
     ]),
     message: z.string(),
     alternatives: z.array(z.string()),

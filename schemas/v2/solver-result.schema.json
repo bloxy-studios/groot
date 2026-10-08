@@ -59,7 +59,8 @@
               "dependency-conflict",
               "missing-requirement",
               "unsupported-topology",
-              "not-certified"
+              "not-certified",
+              "ambiguous-choice"
             ]
           },
           "message": {

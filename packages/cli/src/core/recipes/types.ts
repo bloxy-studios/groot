@@ -11,7 +11,7 @@ import type { RecipeDescriptor, SolverSelection } from "../contracts/capability.
 import type { Decision, EnvVarContract, VerificationContract } from "../contracts/common.ts";
 import type { RecipeLock } from "../contracts/lock.ts";
 import type { ProjectObservation, ProjectUnit } from "../contracts/project.ts";
-import type { PlanBuilder } from "../planner/builder.ts";
+import type { ActionDraft, PlanBuilder } from "../planner/builder.ts";
 import type { CoreContext } from "../runtime.ts";
 
 export type RecipeOptions = Readonly<Record<string, string | number | boolean>>;
@@ -46,6 +46,12 @@ export interface RecipeContribution {
   readonly verification: readonly VerificationContract[];
   readonly lock: RecipeLock;
   readonly decisions: readonly Decision[];
+  /**
+   * Steps that need installed dependencies (codegen, migrations). The
+   * add-capability planner appends them after its single `bun install` step,
+   * so every recipe's packages are present first.
+   */
+  readonly postInstall?: readonly ActionDraft[];
 }
 
 export interface Recipe {
