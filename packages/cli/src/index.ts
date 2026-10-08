@@ -5,8 +5,12 @@ import pkg from "../package.json";
 import { banner, scaffoldMatrixSummary } from "./banner.ts";
 import { normalizeArgv } from "./cli-compat.ts";
 import { add } from "./commands/add.ts";
+import { apply } from "./commands/apply.ts";
 import { doctor } from "./commands/doctor.ts";
 import { init } from "./commands/init.ts";
+import { resume } from "./commands/resume.ts";
+import { rollback } from "./commands/rollback.ts";
+import { status } from "./commands/status.ts";
 
 const main = defineCommand({
   meta: {
@@ -14,7 +18,7 @@ const main = defineCommand({
     version: pkg.version,
     description: pkg.description,
   },
-  subCommands: { init, add, doctor },
+  subCommands: { init, add, doctor, apply, resume, rollback, status },
   run({ args }) {
     // Bare invocation: show the banner and point at help.
     if (args._.length === 0) {
