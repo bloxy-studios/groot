@@ -4,7 +4,18 @@
  * redaction, git porcelain parsing, ids, and the contract registry.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTRACTS, contractJsonSchema } from "./contracts/index.ts";
@@ -20,6 +31,16 @@ import { redact } from "./redact.ts";
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), "groot-core-"));
+}
+
+/** The error `fn` throws (fails the test when it returns normally). */
+function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the call to throw");
 }
 
 describe("project boundary", () => {
@@ -40,6 +61,46 @@ describe("project boundary", () => {
     expect(() => resolveInProject(root, "linked/new-file.ts")).toThrow(/symlink/);
     mkdirSync(join(root, "real"));
     expect(resolveInProject(root, "real/new-file.ts")).toBe(join(root, "real/new-file.ts"));
+  });
+
+  test("refuses dangling symlinks that point outside the project", () => {
+    // Arrange: links whose targets do not exist yet, so realpath cannot follow them.
+    const root = scratch();
+    const outside = scratch();
+    symlinkSync(join(outside, "new-dir"), join(root, "linkdir"));
+    symlinkSync(join(outside, "target.txt"), join(root, "linkfile"));
+    symlinkSync("../../escape.txt", join(root, "relative-link"));
+
+    // Act + Assert
+    for (const path of ["linkdir/file.txt", "linkdir", "linkfile", "relative-link"]) {
+      expect(() => resolveInProject(root, path)).toThrow(/symlink/);
+    }
+  });
+
+  test("accepts dangling symlinks whose targets stay inside the project", () => {
+    // Arrange
+    const root = scratch();
+    mkdirSync(join(root, "real"));
+    symlinkSync("real/not-yet.txt", join(root, "inner-link"));
+    symlinkSync(join(root, "real", "later"), join(root, "inner-dir"));
+
+    // Act
+    const file = resolveInProject(root, "inner-link");
+    const nested = resolveInProject(root, "inner-dir/x/y.ts");
+
+    // Assert
+    expect(file).toBe(join(root, "inner-link"));
+    expect(nested).toBe(join(root, "inner-dir/x/y.ts"));
+  });
+
+  test("refuses a symlink loop instead of looping", () => {
+    // Arrange
+    const root = scratch();
+    symlinkSync("b", join(root, "a"));
+    symlinkSync("a", join(root, "b"));
+
+    // Act + Assert
+    expect(() => resolveInProject(root, "a/file.txt")).toThrow(GrootV2Error);
   });
 
   test("joinRel treats '.' as the root", () => {
@@ -66,6 +127,53 @@ describe("durable writes", () => {
     expect(readFileSync(file, "utf8")).toBe('{"seq":0}\n{"seq":1}\n');
     expect(() => appendLineDurable(file, "a\nb")).toThrow();
   });
+
+  test.skipIf(process.platform === "win32")(
+    "appendLineDurable never appends through a symlink",
+    () => {
+      // Arrange
+      const root = scratch();
+      const escaped = join(scratch(), "escaped.txt");
+      symlinkSync(escaped, join(root, "journal.jsonl"));
+
+      // Act
+      const error = thrownBy(() => appendLineDurable(join(root, "journal.jsonl"), "line"));
+
+      // Assert
+      expect((error as GrootV2Error).id).toBe("GROOT_E_PATH_OUTSIDE_PROJECT");
+      expect(existsSync(escaped)).toBe(false);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "writeFileAtomic keeps the mode of the file it replaces unless one is given",
+    () => {
+      // Arrange
+      const root = scratch();
+      const secret = join(root, ".env.local");
+      const script = join(root, "run.sh");
+      const loose = join(root, "loose.env");
+      writeFileSync(secret, "A=1\n");
+      chmodSync(secret, 0o600);
+      writeFileSync(script, "#!/bin/sh\n");
+      chmodSync(script, 0o755);
+      writeFileSync(loose, "B=1\n");
+      chmodSync(loose, 0o644);
+
+      // Act
+      writeFileAtomic(secret, "A=2\n");
+      writeFileAtomic(script, "#!/bin/sh\necho hi\n");
+      writeFileAtomic(loose, "B=2\n", 0o600);
+      writeFileAtomic(join(root, "new.txt"), "fresh", 0o600);
+
+      // Assert
+      expect(statSync(secret).mode & 0o777).toBe(0o600);
+      expect(statSync(script).mode & 0o777).toBe(0o755);
+      expect(statSync(loose).mode & 0o777).toBe(0o600);
+      expect(statSync(join(root, "new.txt")).mode & 0o777).toBe(0o600);
+      expect(readFileSync(secret, "utf8")).toBe("A=2\n");
+    },
+  );
 
   test("hashTree is order-independent and ignores node_modules", async () => {
     const root = scratch();
@@ -112,6 +220,55 @@ describe("writer lock", () => {
     const root = scratch();
     acquireProjectLock(root, { command: "x", operationId: null }).release();
     expect(readFileSync(join(root, ".groot/.gitignore"), "utf8")).toContain("*");
+  });
+
+  test("a fresh unreadable lock counts as held and is left in place", () => {
+    // Arrange: the state between another writer's create and its holder write.
+    const root = scratch();
+    mkdirSync(join(root, ".groot"));
+    const lockPath = join(root, ".groot/lock.json");
+    writeFileSync(lockPath, "");
+
+    // Act
+    const error = thrownBy(() => acquireProjectLock(root, { command: "apply", operationId: null }));
+
+    // Assert
+    expect(error).toBeInstanceOf(GrootV2Error);
+    expect((error as GrootV2Error).id).toBe("GROOT_E_LOCKED");
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, "utf8")).toBe("");
+  });
+
+  test("an unreadable lock older than the grace period is recovered", () => {
+    // Arrange: a writer crashed between its create and its holder write long ago.
+    const root = scratch();
+    mkdirSync(join(root, ".groot"));
+    const lockPath = join(root, ".groot/lock.json");
+    writeFileSync(lockPath, "");
+    const longAgo = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, longAgo, longAgo);
+
+    // Act
+    const lock = acquireProjectLock(root, { command: "apply", operationId: null });
+
+    // Assert
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+    lock.release();
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("the lock file never exists without its holder record", () => {
+    // Arrange
+    const root = scratch();
+
+    // Act
+    const lock = acquireProjectLock(root, { command: "apply", operationId: "op_x" });
+
+    // Assert: created complete, and no temp files are left beside it.
+    const lockPath = join(root, ".groot/lock.json");
+    expect(JSON.parse(readFileSync(lockPath, "utf8"))).toMatchObject({ operationId: "op_x" });
+    expect(readdirSync(join(root, ".groot")).sort()).toEqual([".gitignore", "lock.json"]);
+    lock.release();
   });
 });
 
