@@ -6,7 +6,7 @@
  */
 
 import { EXIT, GrootError } from "../engine/errors.ts";
-import type { ErrorId, ErrorInfo } from "./contracts/envelope.ts";
+import type { BlockedDecision, ErrorId, ErrorInfo } from "./contracts/envelope.ts";
 
 export const EXIT_V2 = {
   ...EXIT,
@@ -62,11 +62,17 @@ export function exitCodeFor(id: ErrorId): ExitCodeV2 {
 export class GrootV2Error extends GrootError {
   readonly id: ErrorId;
   readonly details: Record<string, unknown> | null;
+  /** The decisions that resolve a blocked (exit 7) failure — see blockedDecisions(). */
+  readonly blocked: readonly BlockedDecision[];
 
   constructor(
     id: ErrorId,
     message: string,
-    options: { hint?: string; details?: Record<string, unknown> } = {},
+    options: {
+      hint?: string;
+      details?: Record<string, unknown>;
+      blocked?: readonly BlockedDecision[];
+    } = {},
   ) {
     // The v1 base types exitCode as the v1 union; v2 codes (6/7/8) are a
     // deliberate superset used only by v2 surfaces.
@@ -74,6 +80,7 @@ export class GrootV2Error extends GrootError {
     this.name = "GrootV2Error";
     this.id = id;
     this.details = options.details ?? null;
+    this.blocked = options.blocked ?? [];
   }
 
   toInfo(): ErrorInfo {
@@ -117,4 +124,26 @@ export function toErrorInfo(error: unknown): ErrorInfo {
     exitCode: EXIT_V2.INTERNAL,
     details: null,
   };
+}
+
+/**
+ * The `blocked[]` entries for a failure (docs/v2-cli-spec.md#machine-contract:
+ * exit 7 always names what to resolve): the decisions the error carries, or —
+ * for any other blocked error — one derived from its id, message, and hint.
+ */
+export function blockedDecisions(
+  error: unknown,
+  info: ErrorInfo = toErrorInfo(error),
+): BlockedDecision[] {
+  if (error instanceof GrootV2Error && error.blocked.length > 0) return [...error.blocked];
+  if (info.exitCode !== EXIT_V2.BLOCKED) return [];
+  return [
+    {
+      id: info.id,
+      kind: info.id === "GROOT_E_POLICY_DENIED" ? "policy" : "prerequisite",
+      question: info.message,
+      options: [],
+      resolveWith: info.hint ?? "Resolve what the question names, then run the command again.",
+    },
+  ];
 }

@@ -666,6 +666,9 @@
     },
     "ok": {
       "type": "boolean"
+    },
+    "interrupted": {
+      "type": "boolean"
     }
   },
   "required": [

@@ -2,7 +2,9 @@
  * MCP contract tests against the real `runMcp` server (fake core API):
  * both protocol eras via the official v2 client, truthful tool annotations,
  * structured results with summary + next steps, self-contained GROOT_E_*
- * errors, bounded waits with operation ids for long operations, explicit
+ * errors, blocked errors that always carry blocked[] (one plan_add case runs
+ * the real core), verify_run results that never call a partial run clean,
+ * bounded waits with operation ids for long operations, explicit
  * cancellation, and a raw harness proving stdout carries only JSON-RPC even
  * when core code writes to console.log.
  */
@@ -10,17 +12,30 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import {
+  evidenceFixture,
+  registeredProject,
+  verificationReportFixture,
+} from "../../cli/test-support.ts";
+import type { BlockedDecision } from "../contracts/envelope.ts";
+import { GrootV2Error } from "../errors.ts";
+import { fail } from "./results.ts";
+import { verificationSummary } from "./tools-project.ts";
 
 const SERVER = join(import.meta.dir, "testing/fake-server.ts");
+const CLI_ENTRY = join(import.meta.dir, "../../index.ts");
 const clients: Client[] = [];
 
-async function connect(era: "legacy" | "modern"): Promise<Client> {
+async function connect(
+  era: "legacy" | "modern",
+  server: { args: string[]; cwd?: string } = { args: [SERVER] },
+): Promise<Client> {
   const client = new Client(
     { name: "groot-test", version: "0.0.0" },
     era === "modern" ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
   );
   await client.connect(
-    new StdioClientTransport({ command: process.execPath, args: [SERVER], stderr: "pipe" }),
+    new StdioClientTransport({ command: process.execPath, ...server, stderr: "pipe" }),
   );
   clients.push(client);
   return client;
@@ -134,6 +149,91 @@ describe("groot mcp (official client, both eras)", () => {
     expect(result.content[0]?.text.startsWith("GROOT_E_UNKNOWN_CAPABILITY:")).toBe(true);
     expect(result.content[0]?.text).toContain("Next:");
     expect(result.structuredContent.error.id).toBe("GROOT_E_UNKNOWN_CAPABILITY");
+  }, 60_000);
+});
+
+describe("verify_run results", () => {
+  test("a finished run reports its profiles (fake core, over the protocol)", async () => {
+    const client = await connect("modern");
+    const result = structured(await client.callTool({ name: "verify_run", arguments: {} }));
+    expect(result.summary).toContain("found no failures");
+    expect(result.interrupted).toBe(false);
+  }, 60_000);
+
+  test("an interrupted run is partial — never 'found no failures' — and says to re-run", () => {
+    const partial = verificationReportFixture(
+      [
+        evidenceFixture("build.typecheck.api", "pass"),
+        evidenceFixture("build.script.api", "skipped", { reason: "cancelled" }),
+      ],
+      true,
+    );
+
+    const result = verificationSummary(partial);
+
+    expect(result.summary).toContain("INTERRUPTED");
+    expect(result.summary).not.toContain("found no failures");
+    expect(result.next[0]).toContain("verify_run again");
+    expect(result.interrupted).toBe(true);
+    const finished = verificationSummary(
+      verificationReportFixture([evidenceFixture("build.typecheck.api", "pass")]),
+    );
+    expect(finished.summary).toContain("found no failures");
+  });
+});
+
+describe("blocked decisions over MCP (exit 7 ⇒ blocked[])", () => {
+  const blockedOf = (result: unknown) =>
+    (result as { structuredContent: { blocked: BlockedDecision[] } }).structuredContent.blocked;
+
+  test("fail() passes an error's decisions through, derives one for any other blocked error", () => {
+    const decision: BlockedDecision = {
+      id: "choice.1",
+      kind: "decision",
+      question: "Typed persistence fits several apps (api, admin); choose one with --target.",
+      options: [],
+      resolveWith: "--target <app>",
+    };
+    const explicit = new GrootV2Error("GROOT_E_BLOCKED", decision.question, {
+      blocked: [decision],
+    });
+    expect(blockedOf(fail(explicit))).toEqual([decision]);
+
+    const denied = new GrootV2Error("GROOT_E_POLICY_DENIED", "The plan needs install.", {
+      hint: "Approve install for this run.",
+    });
+    expect(blockedOf(fail(denied))).toEqual([
+      {
+        id: "GROOT_E_POLICY_DENIED",
+        kind: "policy",
+        question: "The plan needs install.",
+        options: [],
+        resolveWith: "Approve install for this run.",
+      },
+    ]);
+
+    expect(blockedOf(fail(new GrootV2Error("GROOT_E_NOT_FOUND", "No plan.")))).toEqual([]);
+  });
+
+  test("plan_add with several fitting apps answers exit 7 with the decision (real core)", async () => {
+    const root = registeredProject(["api", "admin"]);
+    const client = await connect("modern", { args: [CLI_ENTRY, "mcp"], cwd: root });
+
+    const result = (await client.callTool({
+      name: "plan_add",
+      arguments: { capabilities: [{ capability: "data" }] },
+    })) as {
+      isError?: boolean;
+      structuredContent: { error: { id: string; exitCode: number }; blocked: BlockedDecision[] };
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent.error).toMatchObject({ id: "GROOT_E_BLOCKED", exitCode: 7 });
+    expect(result.structuredContent.blocked).toHaveLength(1);
+    expect(result.structuredContent.blocked[0]).toMatchObject({
+      kind: "decision",
+      resolveWith: "--target <app>",
+    });
   }, 60_000);
 });
 

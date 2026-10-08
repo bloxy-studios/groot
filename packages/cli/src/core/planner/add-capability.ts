@@ -20,6 +20,7 @@ import type {
   Sha256,
   VerificationContract,
 } from "../contracts/common.ts";
+import type { BlockedDecision } from "../contracts/envelope.ts";
 import type { GrootLock, RecipeLock } from "../contracts/lock.ts";
 import type { JsonOp, OperationPlan } from "../contracts/plan.ts";
 import type { ProjectObservation } from "../contracts/project.ts";
@@ -45,18 +46,54 @@ export interface AddCapabilityInput {
 
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
+/**
+ * An ambiguous-choice refusal as the decision that resolves it. The solver
+ * lists the choices as "--target <app>" or "--recipe <id>" alternatives.
+ */
+function choiceDecision(refusal: SolverRefusal, index: number): BlockedDecision {
+  const flag = refusal.alternatives.every((entry) => entry.startsWith("--recipe "))
+    ? "--recipe"
+    : "--target";
+  return {
+    id: `choice.${index + 1}`,
+    kind: "decision",
+    question: refusal.message,
+    options: refusal.alternatives.map((alternative) => {
+      const value = alternative.slice(flag.length + 1);
+      return {
+        id: value,
+        label: alternative,
+        effect: flag === "--target" ? `plan it for ${value}` : `plan it with ${value}`,
+        recommended: false,
+      };
+    }),
+    resolveWith: flag === "--target" ? "--target <app>" : "--recipe <id>",
+  };
+}
+
 function refusalError(refusals: readonly SolverRefusal[]): GrootV2Error {
+  const message = refusals.map((refusal) => refusal.message).join(" ");
+  const hint = refusals
+    .flatMap((refusal) => refusal.alternatives)
+    .slice(0, 6)
+    .join(" · ");
+  // A missing choice (several apps or recipes fit) is not an incompatibility:
+  // it is blocked on a decision that --target or --recipe resolves (exit 7).
+  if (refusals.every((refusal) => refusal.code === "ambiguous-choice")) {
+    return new GrootV2Error("GROOT_E_BLOCKED", message, {
+      hint,
+      details: { refusals },
+      blocked: refusals.map(choiceDecision),
+    });
+  }
   const unknown = refusals.every(
     (refusal) => refusal.code === "unknown-capability" || refusal.code === "unknown-recipe",
   );
   return new GrootV2Error(
     unknown ? "GROOT_E_UNKNOWN_CAPABILITY" : "GROOT_E_INCOMPATIBLE",
-    refusals.map((refusal) => refusal.message).join(" "),
+    message,
     {
-      hint: refusals
-        .flatMap((refusal) => refusal.alternatives)
-        .slice(0, 6)
-        .join(" · "),
+      hint,
       details: { refusals },
     },
   );

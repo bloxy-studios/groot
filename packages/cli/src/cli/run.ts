@@ -10,6 +10,7 @@
  * - SIGINT/SIGTERM abort the core operation through its AbortSignal (the
  *   executor checkpoints and exits 130); a second SIGINT forces exit 130.
  */
+import { format } from "node:util";
 import pc from "picocolors";
 import { schemaUrl } from "../core/contracts/common.ts";
 import type {
@@ -18,7 +19,7 @@ import type {
   GrootEvent,
   ResultEnvelope,
 } from "../core/contracts/envelope.ts";
-import { EXIT_V2, toErrorInfo } from "../core/errors.ts";
+import { blockedDecisions, EXIT_V2, GrootV2Error, toErrorInfo } from "../core/errors.ts";
 import { redactValue } from "../core/redact.ts";
 import {
   type CoreContext,
@@ -49,8 +50,15 @@ export interface CommandResult {
   };
   /** Defaults: 0 when ok; 7 when blocked; 1 otherwise. */
   readonly exitCode?: number;
-  /** Human rendering (stdout) when --json is off. */
-  readonly human?: () => void;
+  /** The structured error of a failed result that still carries data (envelope `error`). */
+  readonly error?: ErrorInfo | null;
+  /**
+   * Human rendering (stdout) when --json is off: print with console.log, or
+   * return the text (any other return value is ignored). The runner collects
+   * both and writes them with an awaited flush — a large console.log straight
+   * to a pipe can be cut at 64 KiB.
+   */
+  readonly human?: () => unknown;
 }
 
 /** Shared citty arg definitions for the v2 machine contract. */
@@ -128,6 +136,52 @@ async function printJson(value: unknown): Promise<void> {
   await writeStdout(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+/**
+ * Run a human renderer and return what it printed with console.log, plus any
+ * text it returned. In Bun, a console.log larger than the pipe buffer loses
+ * everything past 64 KiB once process.stdout has been touched (picocolors
+ * does at import), so the runner writes the collected text itself.
+ */
+export function renderHuman(human: CommandResult["human"]): string {
+  if (human === undefined) return "";
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...args: unknown[]): void => {
+    lines.push(`${format(...args)}\n`);
+  };
+  let returned: unknown;
+  try {
+    returned = human();
+  } finally {
+    console.log = log;
+  }
+  if (typeof returned === "string" && returned !== "") {
+    lines.push(returned.endsWith("\n") ? returned : `${returned}\n`);
+  }
+  return lines.join("");
+}
+
+/**
+ * A result's blocked[]: never empty when it exits 7 — a result without its
+ * own decisions gets one derived from its error (docs/v2-cli-spec.md#machine-contract).
+ */
+function resultBlocked(
+  command: string,
+  result: CommandResult,
+  exitCode: number,
+): BlockedDecision[] {
+  const blocked = [...(result.blocked ?? [])];
+  if (blocked.length > 0 || exitCode !== EXIT_V2.BLOCKED) return blocked;
+  const info: ErrorInfo = result.error ?? {
+    id: "GROOT_E_BLOCKED",
+    message: `groot ${command} needs a decision or prerequisite before it can continue.`,
+    hint: null,
+    exitCode: EXIT_V2.BLOCKED,
+    details: null,
+  };
+  return blockedDecisions(null, { ...info, exitCode: EXIT_V2.BLOCKED });
+}
+
 function printHumanError(error: ErrorInfo): void {
   process.stderr.write(`${pc.red("groot error:")} ${error.message}\n`);
   if (error.hint !== null) process.stderr.write(`  ${pc.dim(error.hint)}\n`);
@@ -174,15 +228,18 @@ export async function runV2Command(
   let exitCode: number;
   try {
     const result = await body(ctx);
-    const blocked = result.blocked ?? [];
     exitCode =
       result.exitCode ??
-      (result.ok ? EXIT_V2.OK : blocked.length > 0 ? EXIT_V2.BLOCKED : EXIT_V2.INTERNAL);
+      (result.ok
+        ? EXIT_V2.OK
+        : (result.blocked ?? []).length > 0
+          ? EXIT_V2.BLOCKED
+          : EXIT_V2.INTERNAL);
+    const blocked = resultBlocked(command, result, exitCode);
     if (flags.json) {
-      await printJson(envelope(command, result));
+      await printJson(envelope(command, { ...result, blocked }));
     } else {
-      result.human?.();
-      await writeStdout("");
+      await writeStdout(renderHuman(result.human));
       for (const warning of result.warnings ?? []) {
         process.stderr.write(`${pc.yellow("●")} ${warning}\n`);
       }
@@ -192,9 +249,13 @@ export async function runV2Command(
     const info = toErrorInfo(error);
     exitCode = info.exitCode;
     if (flags.json) {
-      await printJson(envelope(command, { ok: false, error: info }));
+      await printJson(
+        envelope(command, { ok: false, error: info, blocked: blockedDecisions(error, info) }),
+      );
     } else {
       printHumanError(info);
+      // A derived decision would only repeat the error and its hint.
+      if (error instanceof GrootV2Error && error.blocked.length > 0) printBlocked(error.blocked);
     }
   }
   process.off("SIGINT", onSignal);

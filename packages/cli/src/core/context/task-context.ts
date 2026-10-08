@@ -9,7 +9,7 @@
 import type { BlueprintV2 } from "../contracts/blueprint.ts";
 import { schemaUrl } from "../contracts/common.ts";
 import type { TaskContext } from "../contracts/context.ts";
-import type { Evidence } from "../contracts/evidence.ts";
+import { CANCELLED_REASON, type Evidence } from "../contracts/evidence.ts";
 import type { ProjectObservation } from "../contracts/project.ts";
 import { missingRequiredEnv } from "../env.ts";
 
@@ -245,6 +245,8 @@ export function buildTaskContext(input: TaskContextInput): TaskContext {
 
   const latest = new Map<string, Evidence>();
   for (const record of input.evidence) {
+    // A cancelled run's placeholder is not a result; the one before it still stands.
+    if (record.reason === CANCELLED_REASON) continue;
     const relevantRecord =
       (record.scope.unit !== null && relevantPaths.has(record.scope.unit)) ||
       (record.scope.capability !== null && capabilityIds.has(record.scope.capability)) ||

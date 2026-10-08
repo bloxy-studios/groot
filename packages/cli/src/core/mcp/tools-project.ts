@@ -6,9 +6,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { VerificationProfile } from "../contracts/common.ts";
+import type { VerificationReport } from "../contracts/evidence.ts";
 import { createContext } from "../runtime.ts";
 import type { ToolDeps } from "./deps.ts";
-import { fail, ok, planDigest } from "./results.ts";
+import { fail, ok, planDigest, type Structured } from "./results.ts";
 
 const Root = z
   .string()
@@ -19,6 +20,42 @@ const Summary = z.looseObject({
   summary: z.string().describe("One-paragraph result for the model"),
   next: z.array(z.string()).describe("Explicit follow-up steps"),
 });
+
+/** verify_run's result: an interrupted run is partial — never "found no failures". */
+export function verificationSummary(report: VerificationReport): Structured {
+  const failing = report.evidence.filter(
+    (entry) => entry.status === "fail" || entry.status === "blocked",
+  );
+  const statuses = Object.entries(report.profiles)
+    .map(([profile, entry]) => `${profile} ${entry.status}`)
+    .join(", ");
+  const interrupted = report.interrupted === true;
+  return {
+    summary: interrupted
+      ? `Verification was INTERRUPTED before every check ran (partial results): ${statuses}.`
+      : `Verification ${report.ok ? "found no failures" : "FAILED"}: ${statuses}.`,
+    next: [
+      ...(interrupted
+        ? ["Call verify_run again — the checks marked skipped (cancelled) did not run."]
+        : []),
+      ...failing.map(
+        (entry) =>
+          `${entry.check} is ${entry.status}: ${entry.nextStep ?? entry.summary} (evidence ${entry.id})`,
+      ),
+    ],
+    interrupted,
+    profiles: report.profiles,
+    revision: report.revision,
+    evidence: report.evidence.map((entry) => ({
+      id: entry.id,
+      check: entry.check,
+      profile: entry.profile,
+      status: entry.status,
+      summary: entry.summary,
+      reason: entry.reason,
+    })),
+  };
+}
 
 export function registerProjectTools(server: McpServer, deps: ToolDeps): void {
   const ctxFor = (root: string, signal: AbortSignal) =>
@@ -280,30 +317,7 @@ export function registerProjectTools(server: McpServer, deps: ToolDeps): void {
           profiles: profiles ?? ["structural", "build"],
           capability: capability ?? null,
         });
-        const failing = report.evidence.filter(
-          (entry) => entry.status === "fail" || entry.status === "blocked",
-        );
-        return ok({
-          summary: `Verification ${report.ok ? "found no failures" : "FAILED"}: ${Object.entries(
-            report.profiles,
-          )
-            .map(([profile, entry]) => `${profile} ${entry.status}`)
-            .join(", ")}.`,
-          next: failing.map(
-            (entry) =>
-              `${entry.check} is ${entry.status}: ${entry.nextStep ?? entry.summary} (evidence ${entry.id})`,
-          ),
-          profiles: report.profiles,
-          revision: report.revision,
-          evidence: report.evidence.map((entry) => ({
-            id: entry.id,
-            check: entry.check,
-            profile: entry.profile,
-            status: entry.status,
-            summary: entry.summary,
-            reason: entry.reason,
-          })),
-        });
+        return ok(verificationSummary(report));
       } catch (error) {
         return fail(error);
       }

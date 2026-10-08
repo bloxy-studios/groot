@@ -21,6 +21,13 @@ import {
 export const EvidenceStatus = z.enum(["pass", "fail", "skipped", "blocked"]);
 export type EvidenceStatus = z.infer<typeof EvidenceStatus>;
 
+/**
+ * `reason` of a check that verification was cancelled before or while it ran
+ * (status `skipped`). Such a record says nothing about the check itself, so it
+ * never replaces the check's last real result.
+ */
+export const CANCELLED_REASON = "cancelled";
+
 export const EvidenceArtifact = z
   .object({
     /** Project-relative, under .groot/evidence/<id>/ (secret-redacted). */
@@ -121,8 +128,14 @@ export const VerificationReport = z
       })
       .strict(),
     evidence: z.array(Evidence),
-    /** No check failed. Blocked/skipped checks are reported, not hidden. */
+    /** No check failed and the run finished. Blocked/skipped checks are reported, not hidden. */
     ok: z.boolean(),
+    /**
+     * Verification was cancelled (SIGINT/SIGTERM, MCP cancellation) before
+     * every selected check finished: the report is partial, `ok` is false,
+     * and the checks it never ran are `skipped` with reason "cancelled".
+     */
+    interrupted: z.boolean().optional(),
   })
   .strict();
 export type VerificationReport = z.infer<typeof VerificationReport>;

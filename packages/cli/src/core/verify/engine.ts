@@ -3,7 +3,9 @@
  * requested profiles, turns every outcome into stored evidence tied to the
  * revision and environment actually checked, and summarizes each profile
  * separately. Missing checkers, toolchains, or credentials become `blocked`
- * evidence with the exact prerequisite — never a silent pass.
+ * evidence with the exact prerequisite — never a silent pass. A cancelled run
+ * is reported as interrupted (never ok), and the checks it did not finish are
+ * `skipped` with reason "cancelled" — never a pass, never a failure.
  */
 import type { BlueprintV2 } from "../contracts/blueprint.ts";
 import type {
@@ -12,14 +14,16 @@ import type {
   VerificationProfile,
 } from "../contracts/common.ts";
 import { schemaUrl } from "../contracts/common.ts";
-import type {
-  Evidence,
-  EvidenceStatus,
-  ProfileSummary,
-  VerificationReport,
+import {
+  CANCELLED_REASON,
+  type Evidence,
+  type EvidenceStatus,
+  type ProfileSummary,
+  type VerificationReport,
 } from "../contracts/evidence.ts";
 import type { GrootLock } from "../contracts/lock.ts";
 import type { ProjectObservation } from "../contracts/project.ts";
+import { envNamesIn } from "../env.ts";
 import { revisionInfo } from "../git.ts";
 import { newId, nowIso } from "../ids.ts";
 import { type CoreContext, environmentInfo } from "../runtime.ts";
@@ -102,41 +106,98 @@ function missingToolchains(contract: VerificationContract): string[] {
   return contract.needs.toolchains.filter((tool) => Bun.which(tool) === null);
 }
 
+/**
+ * Credentials the contract needs that are set neither in the environment nor
+ * — by name — in a storage file the blueprint's environment contracts declare
+ * for them. Values are never read into evidence.
+ */
+function missingCredentials(
+  ctx: CoreContext,
+  request: VerifyRequest,
+  contract: VerificationContract,
+): string[] {
+  return contract.needs.credentials.filter(
+    (name) =>
+      (ctx.env[name] ?? "") === "" &&
+      !request.blueprint.environment.some(
+        (entry) => entry.name === name && envNamesIn(request.root, entry.storage).has(name),
+      ),
+  );
+}
+
+const ENGINE_METHOD: Evidence["method"] = { kind: "static", tool: "groot.verify", command: null };
+
+/** Blocked evidence naming a missing toolchain or credential, or null when the check can run. */
+function missingPrerequisite(
+  ctx: CoreContext,
+  request: VerifyRequest,
+  contract: VerificationContract,
+): CheckOutcome | null {
+  const toolchains = missingToolchains(contract);
+  if (toolchains.length > 0) {
+    return {
+      status: "blocked",
+      summary: `requires ${toolchains.join(", ")} which ${toolchains.length === 1 ? "is" : "are"} not installed`,
+      method: ENGINE_METHOD,
+      reason: `missing toolchain: ${toolchains.join(", ")}`,
+      nextStep: `Install ${toolchains.join(", ")} and re-run groot verify.`,
+    };
+  }
+  const credentials = missingCredentials(ctx, request, contract);
+  if (credentials.length === 0) return null;
+  const where = credentials.map((name) => {
+    const storage = request.blueprint.environment.find((entry) => entry.name === name)?.storage;
+    return storage === undefined ? name : `${name} in ${storage}`;
+  });
+  return {
+    status: "blocked",
+    summary: `requires ${credentials.join(", ")} which ${credentials.length === 1 ? "is" : "are"} not set`,
+    method: ENGINE_METHOD,
+    reason: `missing credential: ${credentials.join(", ")}`,
+    nextStep: `Set ${where.join(", ")} (or export it in the environment), then re-run groot verify.`,
+    details: { missingCredentials: credentials },
+  };
+}
+
+/** Verification was cancelled before the check ran, or while it ran (`outcome`). */
+function cancelled(outcome?: CheckOutcome): CheckOutcome {
+  if (outcome === undefined) {
+    return {
+      status: "skipped",
+      summary: "not run — verification was cancelled",
+      method: ENGINE_METHOD,
+      reason: CANCELLED_REASON,
+    };
+  }
+  return {
+    ...outcome,
+    status: "skipped",
+    summary: "cancelled while the check was running",
+    reason: CANCELLED_REASON,
+  };
+}
+
 async function runOne(
   ctx: CoreContext,
   request: VerifyRequest,
   contract: VerificationContract,
 ): Promise<CheckOutcome> {
-  if (ctx.signal.aborted) {
-    return {
-      status: "skipped",
-      summary: "not run — verification was cancelled",
-      method: { kind: "static", tool: "groot.verify", command: null },
-      reason: "cancelled",
-    };
-  }
+  if (ctx.signal.aborted) return cancelled();
   const checker = checkers.get(contract.checker);
   if (checker === undefined) {
     return {
       status: "blocked",
       summary: `no checker "${contract.checker}" in this Groot version`,
-      method: { kind: "static", tool: "groot.verify", command: null },
+      method: ENGINE_METHOD,
       reason: `checker ${contract.checker} is not registered`,
       nextStep: "Upgrade groot, or remove the stale verification contract from groot.json.",
     };
   }
-  const missing = missingToolchains(contract);
-  if (missing.length > 0) {
-    return {
-      status: "blocked",
-      summary: `requires ${missing.join(", ")} which ${missing.length === 1 ? "is" : "are"} not installed`,
-      method: { kind: "static", tool: "groot.verify", command: null },
-      reason: `missing toolchain: ${missing.join(", ")}`,
-      nextStep: `Install ${missing.join(", ")} and re-run groot verify.`,
-    };
-  }
+  const blocked = missingPrerequisite(ctx, request, contract);
+  if (blocked !== null) return blocked;
+  let outcome: CheckOutcome;
   try {
-    return await checker({
+    outcome = await checker({
       ctx,
       root: request.root,
       contract,
@@ -145,13 +206,16 @@ async function runOne(
       lock: request.lock,
     });
   } catch (error) {
-    return {
+    outcome = {
       status: "fail",
       summary: `checker crashed: ${error instanceof Error ? error.message : String(error)}`,
       method: { kind: "static", tool: contract.checker, command: null },
       reason: "internal checker error",
     };
   }
+  // Cut short by cancellation (a killed process, an aborted request): that is
+  // not the check's own result.
+  return ctx.signal.aborted && outcome.status !== "pass" ? cancelled(outcome) : outcome;
 }
 
 function summarize(evidence: readonly Evidence[], requested: boolean): ProfileSummary {
@@ -163,11 +227,13 @@ function summarize(evidence: readonly Evidence[], requested: boolean): ProfileSu
     skipped: count("skipped"),
     blocked: count("blocked"),
   };
+  // A profile whose checks did not all run (cancelled) never reads as passed.
+  const complete = evidence.every((entry) => entry.reason !== CANCELLED_REASON);
   let status: ProfileSummary["status"] = "not-run";
   if (requested && evidence.length > 0) {
     if (summary.fail > 0) status = "fail";
     else if (summary.blocked > 0) status = "blocked";
-    else if (summary.pass > 0) status = "pass";
+    else if (summary.pass > 0 && complete) status = "pass";
     else status = "skipped";
   }
   return { status, ...summary };
@@ -239,6 +305,7 @@ export async function runVerification(
       evidence.filter((entry) => entry.profile === profile),
       request.profiles.includes(profile),
     );
+  const interrupted = ctx.signal.aborted;
   return {
     $schema: schemaUrl("verification"),
     schemaVersion: 1,
@@ -256,6 +323,7 @@ export async function runVerification(
       "product-flow": profileSummary("product-flow"),
     },
     evidence,
-    ok: evidence.every((entry) => entry.status !== "fail"),
+    ok: !interrupted && evidence.every((entry) => entry.status !== "fail"),
+    interrupted,
   };
 }
