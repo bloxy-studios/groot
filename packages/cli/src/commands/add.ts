@@ -34,6 +34,13 @@ async function runAdd(args: {
     throw new GrootError("--json currently requires --dry-run", EXIT.USAGE);
   }
   const loaded = await loadManifest(process.cwd());
+  if (loaded.blueprint?.project.topology === "single") {
+    throw new GrootError(
+      `${loaded.workspaceRoot} is a single-app project; groot add grows monorepo workspaces.`,
+      EXIT.USAGE,
+      "Add capabilities with `groot plan add <capability>`, or create a monorepo with `groot init <dir>`.",
+    );
+  }
   const { scaffold, warnings } = await resolveAddScaffold(
     loaded.manifest,
     loaded.workspaceRoot,

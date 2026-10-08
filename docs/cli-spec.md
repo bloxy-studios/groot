@@ -35,6 +35,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | `--github` | — | off | After the initial commit: create + push a GitHub repository via `gh` (see [GitHub publishing](#github-publishing)) |
 | `--public` | — | off | With `--github`: make the created repository public (private otherwise) |
 | `--dir-conflict <policy>` | `error` \| `merge` \| `increment` | `error` | Non-empty target directory policy |
+| `--topology <shape>` | `monorepo` \| `single` | `monorepo` | `single` plants exactly one app at the project root (no trunk, workspaces, or backend package) — see [Topology](#topology) (v2) |
 | `--keep-failed` | — | off | Don't delete the target dir if a generator fails |
 | `--verbose` | — | off | Stream generator output instead of spinners |
 | `--version`, `-v` / `--help`, `-h` | — | — | Standard |
@@ -42,6 +43,10 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 ### Defaults (`--yes` with no selection flags)
 
 `--web next --mobile none --api none --backend convex` — a Next.js app wired to a Convex backend: groot's flagship pairing.
+
+### Topology
+
+`--topology monorepo` (default) plants the Turborepo trunk with apps under `apps/*` and packages under `packages/*`. `--topology single` plants **one** app at the project root: the chosen generator runs in a disposable sibling directory and its output moves into the target (so `--dir-conflict` behaves as for the trunk), then a root-level stitch renames the package, applies the app's port, tops up `.gitignore`, and writes a v2 `groot.json` with `project.topology: "single"`. Exactly one of `--web`/`--mobile`/`--desktop`/`--api` is required (`--yes` alone picks the default web app); `--backend` other than `none` is a usage error (exit 2). Slots without a flag are `none`, and single-topology runs never prompt for slots. `groot add` refuses single-app projects (use `groot plan add <capability>`). Certified end to end (real generator E2E): `--api hono`; other app frameworks use the same adapters but are not yet E2E-certified in single topology.
 
 ### GitHub publishing
 
@@ -118,7 +123,7 @@ Verify workspace health: workspace globs valid, single lockfile, no port collisi
 
 ## `groot.json` manifest
 
-Written to the workspace root by `init`, updated by `add`. The manifest is groot's memory — never required by the apps themselves at runtime.
+Written to the workspace root by `init`, updated by `add`. The manifest is groot's memory — never required by the apps themselves at runtime. **Groot v2:** `init` writes version 2 — the blueprint, a strict superset of the version 1 shape below (`createdWith`, `conventions`, and `scaffolds` keep their meaning; see [v2-cli-spec.md](./v2-cli-spec.md#compatibility-with-v1)); `add` keeps whichever version a workspace already has, and `groot migrate` converts v1 to v2 explicitly.
 
 ```jsonc
 {

@@ -51,6 +51,7 @@ describe("stability contract: command surface", () => {
         "github",
         "public",
         "dir-conflict",
+        "topology",
         "keep-failed",
         "verbose",
       ].sort(),

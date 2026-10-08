@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BLUEPRINT_VERSION, BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { MANIFEST_SCHEMA_URL, MANIFEST_VERSION } from "../engine/types.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
@@ -206,7 +207,11 @@ describe("groot init (process-level, non-TTY)", () => {
     ]);
     expect(exitCode).toBe(0);
     const plan = JSON.parse(stdout); // throws if stdout isn't pure JSON
-    expect(plan.version).toBe(MANIFEST_VERSION);
+    // Deliberate v2 change: init writes (and previews) the v2 blueprint, a
+    // superset of the v1 manifest (docs/v2-cli-spec.md#compatibility-with-v1).
+    expect(plan.version).toBe(BLUEPRINT_VERSION);
+    expect(BlueprintV2.safeParse(plan).success).toBe(true);
+    expect(plan.project).toMatchObject({ topology: "monorepo", origin: "created" });
     expect(plan.scaffolds).toHaveLength(1);
     expect(plan.scaffolds.at(0)?.framework).toBe("next");
     // Preflight check lines land on stderr in --json mode.

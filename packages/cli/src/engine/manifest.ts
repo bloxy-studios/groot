@@ -5,6 +5,7 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { BLUEPRINT_VERSION, BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { findChoice } from "./matrix.ts";
 import { MANIFEST_VERSION, type Manifest, type PlannedScaffold, type Slot } from "./types.ts";
@@ -12,7 +13,10 @@ import { MANIFEST_VERSION, type Manifest, type PlannedScaffold, type Slot } from
 const SLOTS: readonly Slot[] = ["web", "mobile", "desktop", "api", "backend"];
 
 export interface LoadedManifest {
+  /** The v1-compatible view (v2 blueprints are read through the same fields). */
   readonly manifest: Manifest;
+  /** The full v2 blueprint, or null for a v1 manifest. */
+  readonly blueprint: BlueprintV2 | null;
   /** Absolute path of groot.json. */
   readonly path: string;
   /** Absolute path of the workspace root (the directory containing groot.json). */
@@ -42,15 +46,45 @@ function invalid(detail: string, path: string): GrootError {
   );
 }
 
-/** Structural validation mirroring schemas/groot.schema.json. */
+/**
+ * Structural validation mirroring schemas/groot.schema.json — version 1 or 2.
+ * A v2 blueprint is validated against its contract AND the v1 rules for the
+ * scaffolds it carries (known framework per slot, port and generator shapes).
+ */
+export function validateAnyManifest(
+  value: unknown,
+  path: string,
+): { manifest: Manifest; blueprint: BlueprintV2 | null } {
+  const record =
+    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+  if (record !== null && !Array.isArray(value) && record.version === BLUEPRINT_VERSION) {
+    const parsed = BlueprintV2.safeParse(value);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      throw invalid(
+        `${issue?.path.join(".") || "(root)"}: ${issue?.message ?? "invalid document"}`,
+        path,
+      );
+    }
+    validateV1Manifest({ ...parsed.data, version: MANIFEST_VERSION }, path);
+    return { manifest: parsed.data as unknown as Manifest, blueprint: parsed.data };
+  }
+  return { manifest: validateV1Manifest(value, path), blueprint: null };
+}
+
+/** The v1-compatible view of any supported groot.json (presets, add, doctor). */
 export function validateManifest(value: unknown, path: string): Manifest {
+  return validateAnyManifest(value, path).manifest;
+}
+
+function validateV1Manifest(value: unknown, path: string): Manifest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw invalid("expected a JSON object", path);
   }
   const record = value as Record<string, unknown>;
   if (record.version !== MANIFEST_VERSION) {
     throw invalid(
-      `unsupported manifest version ${JSON.stringify(record.version)} (this CLI supports version ${MANIFEST_VERSION})`,
+      `unsupported manifest version ${JSON.stringify(record.version)} (this CLI reads versions ${MANIFEST_VERSION} and ${BLUEPRINT_VERSION})`,
       path,
     );
   }
@@ -138,7 +172,8 @@ export async function loadManifest(startDir: string): Promise<LoadedManifest> {
   } catch (error) {
     throw invalid(error instanceof Error ? error.message : String(error), path);
   }
-  return { manifest: validateManifest(parsed, path), path, workspaceRoot };
+  const { manifest, blueprint } = validateAnyManifest(parsed, path);
+  return { manifest, blueprint, path, workspaceRoot };
 }
 
 /** Persist an updated manifest in place. */

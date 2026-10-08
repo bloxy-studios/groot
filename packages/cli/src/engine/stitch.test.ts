@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { buildPlan } from "./plan.ts";
 import { stitch, stitchBackendLinks, stitchTrustedDependencies } from "./stitch.ts";
 import type { Plan, Slot } from "./types.ts";
@@ -215,9 +216,15 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     expect(rootPkg.name).toBe("demo");
     const gitignore = await readFile(join(root, ".gitignore"), "utf8");
     expect(gitignore).toContain("!.env.example");
-    const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-    expect(manifest.version).toBe(1);
+    // Fresh workspaces get the v2 blueprint (superset of v1): scaffolds plus
+    // the general app model and the backend env contracts the stitch implies.
+    const manifest = BlueprintV2.parse(
+      JSON.parse(await readFile(join(root, "groot.json"), "utf8")),
+    );
+    expect(manifest.version).toBe(2);
     expect(manifest.scaffolds).toHaveLength(3);
+    expect(manifest.apps.map((app) => app.path)).toEqual(manifest.scaffolds.map((s) => s.path));
+    expect(manifest.environment.every((contract) => contract.sensitivity === "config")).toBe(true);
 
     expect(notes.length).toBeGreaterThanOrEqual(6);
   });

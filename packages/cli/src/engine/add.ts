@@ -216,6 +216,10 @@ export function buildAddPlan(
     createdWith: loaded.manifest.createdWith,
     conventions: loaded.manifest.conventions,
     scaffolds: [...loaded.manifest.scaffolds, scaffold],
+    // Keep the manifest version the workspace already has — never migrate implicitly.
+    manifestVersion: loaded.manifest.version,
+    blueprint: loaded.blueprint,
+    topology: loaded.blueprint?.project.topology ?? "monorepo",
     options: {
       install: options.install,
       // add never initializes git: init-created workspaces already have .git
