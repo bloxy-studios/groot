@@ -4,8 +4,11 @@
  * bounded parallelism (default 2, max 4). Tasks whose ownership overlaps a
  * task already in flight wait for it instead of running beside it, so two
  * agents never edit the same files at once. Abort stops scheduling and
- * interrupts the runs in flight through the same signal.
+ * interrupts the runs in flight through the same signal. A task that could
+ * not even start (a git error creating its worktree, a lock held elsewhere)
+ * is reported with its error — never mistaken for one that ran.
  */
+import type { ErrorInfo } from "../contracts/envelope.ts";
 import type { Task } from "../contracts/task.ts";
 import { toErrorInfo } from "../errors.ts";
 import type { CoreContext } from "../runtime.ts";
@@ -27,9 +30,26 @@ export function isReady(task: Task, byId: ReadonlyMap<string, Task>): boolean {
   return waiting && task.dependsOn.every((id) => byId.get(id)?.status === "completed");
 }
 
+/** A task that could not be started, and why (its state is whatever it was). */
+export interface StartFailure {
+  readonly taskId: string;
+  readonly error: ErrorInfo;
+}
+
+export interface ReadyRun {
+  /** Final states of every scheduled task (including those that could not start). */
+  readonly tasks: Task[];
+  readonly failures: StartFailure[];
+}
+
+interface Outcome {
+  readonly task: Task;
+  readonly failure: StartFailure | null;
+}
+
 interface InFlight {
   readonly task: Task;
-  readonly done: Promise<Task>;
+  readonly done: Promise<Outcome>;
 }
 
 async function runOne(
@@ -37,26 +57,28 @@ async function runOne(
   root: string,
   task: Task,
   options: RunTaskOptions,
-): Promise<Task> {
+): Promise<Outcome> {
   try {
-    return await runTask(ctx, root, task.id, options);
+    return { task: await runTask(ctx, root, task.id, options), failure: null };
   } catch (error) {
+    const info = toErrorInfo(error);
     ctx.events.emit({
       type: "task.warning",
       level: "warn",
-      message: `${task.id}: not run — ${toErrorInfo(error).message}`,
+      message: `${task.id}: not run — ${info.message}`,
       taskId: task.id,
     });
-    return readTask(root, task.id).catch(() => task);
+    const current = await readTask(root, task.id).catch(() => task);
+    return { task: current, failure: { taskId: task.id, error: info } };
   }
 }
 
-/** Run every ready task (see the module comment); returns their final states. */
+/** Run every ready task (see the module comment); returns their final states and start failures. */
 export async function runReadyTasks(
   ctx: CoreContext,
   root: string,
   options: { parallel: number } & RunTaskOptions,
-): Promise<Task[]> {
+): Promise<ReadyRun> {
   const repo = await repositoryRoot(root, ctx.env);
   const parallel = clampParallel(options.parallel);
   const all = await listTasks(repo);
@@ -68,7 +90,7 @@ export async function runReadyTasks(
     message: `${queue.length} ready task(s); running up to ${parallel} at a time`,
     data: { ready: queue.map((task) => task.id), parallel },
   });
-  const results: Task[] = [];
+  const results: Outcome[] = [];
   const inFlight = new Map<string, InFlight>();
   while (!ctx.signal.aborted && (queue.length > 0 || inFlight.size > 0)) {
     for (const task of [...queue]) {
@@ -83,12 +105,15 @@ export async function runReadyTasks(
     if (inFlight.size === 0) break;
     const finished = await Promise.race(
       [...inFlight.values()].map((entry) =>
-        entry.done.then((task) => ({ id: entry.task.id, task })),
+        entry.done.then((outcome) => ({ id: entry.task.id, outcome })),
       ),
     );
     inFlight.delete(finished.id);
-    results.push(finished.task);
+    results.push(finished.outcome);
   }
   for (const entry of inFlight.values()) results.push(await entry.done);
-  return results;
+  return {
+    tasks: results.map((outcome) => outcome.task),
+    failures: results.flatMap((outcome) => (outcome.failure === null ? [] : [outcome.failure])),
+  };
 }

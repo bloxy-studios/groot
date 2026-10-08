@@ -6,14 +6,23 @@
  * SIGINT to a running `groot task run` (exit 130, no surviving runner
  * processes) followed by `groot task resume`.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { ResultEnvelope } from "../core/contracts/envelope.ts";
-import { FIXED_MATH, type TempProject, tempProject } from "../core/tasks/testing/temp-project.ts";
+import { groupMembers } from "../core/runners/supervise.ts";
+import {
+  FIXED_MATH,
+  removeTempProjects,
+  type TempProject,
+  tempProject,
+} from "../core/tasks/testing/temp-project.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
 const TIMEOUT = 240_000;
+
+afterAll(removeTempProjects);
 
 interface CliRun {
   readonly stdout: string;
@@ -208,6 +217,117 @@ describe("groot task / groot review (process-level, simulated runner)", () => {
       // An invalid effort is refused before any worktree or runner is touched.
       expect(badEffort.exitCode).toBe(2);
       expect(badEffort.stderr).toContain('Unknown Claude effort "ultra"');
+      expect(project.fakes.records()).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "`task run --ready` exits non-zero and names a task that could not start",
+    async () => {
+      // Arrange — a ref the task branch cannot coexist with makes its worktree fail.
+      const project = await tempProject();
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const created = envelopeOf(
+        await runCli(project, ["task", "create", "fix add", "--accept", "bun test", "--json"]),
+      );
+      const id = created.data.id as string;
+      await project.git("branch", `groot/task/${id}/blocker`);
+
+      // Act
+      const ran = await runCli(project, ["task", "run", "--ready", "--json"]);
+
+      // Assert
+      const envelope = envelopeOf(ran);
+      expect(ran.exitCode).toBe(4);
+      expect(envelope.ok).toBe(false);
+      expect(envelope.warnings.join("\n")).toContain(id);
+      expect(project.fakes.records()).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "wall times and acceptance timeouts beyond 24 hours are refused (exit 2)",
+    async () => {
+      // Arrange
+      const project = await tempProject();
+
+      // Act — 2147484 s is the first value whose milliseconds overflow a timer.
+      const wall = await runCli(project, ["task", "create", "x", "--wall-time", "2147484"]);
+      const accept = await runCli(project, ["task", "create", "x", "--accept-timeout", "86401"]);
+      const listed = envelopeOf(await runCli(project, ["task", "list", "--json"]));
+
+      // Assert
+      expect(wall.exitCode).toBe(2);
+      expect(wall.stderr).toContain("wallTimeSec");
+      expect(accept.exitCode).toBe(2);
+      expect(accept.stderr).toContain("86400");
+      expect(listed.data as unknown).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "SIGHUP (terminal closed) to `groot task run` takes the runner along; show then reports it interrupted",
+    async () => {
+      // Arrange
+      const project = await tempProject();
+      project.fakes.scenario({ steps: [{ mode: "hang", grandchild: true }] });
+      const created = envelopeOf(
+        await runCli(project, ["task", "create", "fix add", "--accept", "bun test", "--json"]),
+      );
+      const id = created.data.id as string;
+
+      // Act
+      const proc = spawnCli(project, ["task", "run", id, "--json"]);
+      void new Response(proc.stdout).text();
+      void new Response(proc.stderr).text();
+      const runnerPid = await project.fakes.waitReady();
+      proc.kill("SIGHUP");
+      const exitCode = await proc.exited;
+      const deadline = Date.now() + 15_000;
+      while ((await groupMembers(runnerPid)).length > 0 && Date.now() < deadline) {
+        await Bun.sleep(100);
+      }
+      const shown = envelopeOf(await runCli(project, ["task", "show", id, "--json"]));
+
+      // Assert
+      expect(exitCode).toBe(129);
+      expect(await groupMembers(runnerPid)).toEqual([]);
+      expect(shown.data.status).toBe("interrupted");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a task overlapping one that runs in another process is blocked (exit 7), nothing starts",
+    async () => {
+      // Arrange — task A is running in a live process (this test's) on this host.
+      const project = await tempProject();
+      const a = envelopeOf(
+        await runCli(project, ["task", "create", "A", "--owns", "src/**", "--json"]),
+      ).data;
+      const b = envelopeOf(
+        await runCli(project, ["task", "create", "B", "--owns", "src/math.ts", "--json"]),
+      ).data;
+      const taskDir = join(project.root, ".groot", "tasks", a.id as string);
+      writeFileSync(join(taskDir, "task.json"), JSON.stringify({ ...a, status: "running" }));
+      writeFileSync(
+        join(taskDir, "runner.json"),
+        JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() }),
+      );
+
+      // Act
+      const ran = await runCli(project, ["task", "run", b.id as string, "--json"]);
+
+      // Assert
+      expect(ran.exitCode).toBe(7);
+      const envelope = envelopeOf(ran);
+      expect(envelope.data.status).toBe("blocked");
+      expect(envelope.blocked[0]?.question).toContain(`overlaps running task ${a.id}`);
       expect(project.fakes.records()).toEqual([]);
     },
     TIMEOUT,

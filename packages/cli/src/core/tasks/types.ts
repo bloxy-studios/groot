@@ -46,5 +46,7 @@ export const DEFAULT_MAX_TURNS = 25;
 export const DEFAULT_CLAUDE_BUDGET_USD = 2;
 export const DEFAULT_MAX_ATTEMPTS = 2;
 export const DEFAULT_ACCEPT_TIMEOUT_SEC = 600;
+/** Upper bound for a wall time or an acceptance timeout (timers overflow beyond ~24.8 days). */
+export const MAX_TIMEOUT_SEC = 86_400;
 export const MAX_PARALLEL = 4;
 export const DEFAULT_PARALLEL = 2;

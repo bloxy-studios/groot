@@ -15,6 +15,7 @@ import { newId, nowIso } from "../ids.ts";
 import { truncate } from "../runners/common.ts";
 import type { CoreContext } from "../runtime.ts";
 import { type Env, gitReadRaw, repositoryRoot, revParse } from "./git-ops.ts";
+import { withProjectLock } from "./lock.ts";
 import { matchesOwnership } from "./ownership.ts";
 import { blockedAfterReview } from "./run.ts";
 import { findSecrets, parseAddedLines } from "./secrets.ts";
@@ -155,17 +156,18 @@ async function acceptanceSummary(root: string, task: Task): Promise<Review["acce
   });
 }
 
-/** Build (or refresh) the task's review and record a decision when given. */
-export async function reviewTask(
-  ctx: CoreContext,
+const isDeciding = (decision: ReviewDecision): boolean =>
+  decision.approve === true || decision.requestChanges !== undefined;
+
+/** The task and its branch head, when the task has a finished change that can take `decision`. */
+async function reviewable(
   root: string,
   id: string,
-  decision: ReviewDecision = {},
-): Promise<Review> {
-  validateDecision(decision);
-  const repo = await repositoryRoot(root, ctx.env);
-  const task = await readTask(repo, id);
-  const head = await revParse(repo, `refs/heads/${taskBranch(id)}`, ctx.env);
+  decision: ReviewDecision,
+  env: Env,
+): Promise<{ task: Task; head: string }> {
+  const task = await readTask(root, id);
+  const head = await revParse(root, `refs/heads/${taskBranch(id)}`, env);
   if (task.attempts.length === 0 || head === null || task.status === "running") {
     throw new GrootV2Error(
       "GROOT_E_TASK_STATE",
@@ -178,28 +180,42 @@ export async function reviewTask(
       },
     );
   }
-  const deciding = decision.approve === true || decision.requestChanges !== undefined;
-  if (deciding && task.status !== "awaiting-review" && !blockedAfterReview(task)) {
+  if (isDeciding(decision) && task.status !== "awaiting-review" && !blockedAfterReview(task)) {
     throw new GrootV2Error(
       "GROOT_E_TASK_STATE",
       `Task ${id} is ${task.status}; only a task awaiting review takes a decision.`,
       { hint: task.statusReason ?? `See groot task show ${id}.` },
     );
   }
+  return { task, head };
+}
+
+type ReviewContent = Pick<
+  Review,
+  "files" | "ownershipViolations" | "secretFindings" | "acceptance"
+>;
+
+/** Save the review (reusing the id while base and head are unchanged) and point the task at it. */
+async function recordReview(
+  root: string,
+  current: { task: Task; head: string },
+  content: ReviewContent,
+  decision: ReviewDecision,
+): Promise<Review> {
+  const { task, head } = current;
   const previous =
-    task.review === null ? null : await readReview(repo, task.review).catch(() => null);
+    task.review === null ? null : await readReview(root, task.review).catch(() => null);
   const same = previous !== null && previous.head === head && previous.base === task.base.commit;
-  const review = saveReview(repo, {
+  const review = saveReview(root, {
     $schema: schemaUrl("review"),
     schemaVersion: 1,
     kind: "groot.review",
     id: same ? previous.id : newId("rev"),
-    taskId: id,
+    taskId: task.id,
     createdAt: same ? previous.createdAt : nowIso(),
     base: task.base.commit,
     head,
-    ...(await summarize(repo, task, head, ctx.env)),
-    acceptance: await acceptanceSummary(repo, task),
+    ...content,
     verdict: decision.approve
       ? "approved"
       : decision.requestChanges !== undefined
@@ -207,12 +223,12 @@ export async function reviewTask(
         : same
           ? previous.verdict
           : "pending",
-    reviewer: deciding ? "human" : same ? previous.reviewer : null,
+    reviewer: isDeciding(decision) ? "human" : same ? previous.reviewer : null,
     notes: decision.requestChanges?.trim() ?? (same ? previous.notes : null),
   });
   const sentBack = review.verdict === "changes-requested" && decision.requestChanges !== undefined;
   writeTask(
-    repo,
+    root,
     touch(task, {
       review: review.id,
       ...(sentBack
@@ -223,6 +239,41 @@ export async function reviewTask(
         : {}),
     }),
   );
+  return review;
+}
+
+/**
+ * Build (or refresh) the task's review and record a decision when given. The
+ * diff is summarized first; the review and the task are then written under
+ * the project lock against a FRESH read — a task that changed meanwhile (a
+ * new run, another decision) is refused instead of overwritten.
+ */
+export async function reviewTask(
+  ctx: CoreContext,
+  root: string,
+  id: string,
+  decision: ReviewDecision = {},
+): Promise<Review> {
+  validateDecision(decision);
+  const repo = await repositoryRoot(root, ctx.env);
+  const read = await reviewable(repo, id, decision, ctx.env);
+  const content: ReviewContent = {
+    ...(await summarize(repo, read.task, read.head, ctx.env)),
+    acceptance: await acceptanceSummary(repo, read.task),
+  };
+  const review = await withProjectLock(repo, "review", async () => {
+    const fresh = await reviewable(repo, id, decision, ctx.env);
+    if (fresh.head !== read.head || fresh.task.updatedAt !== read.task.updatedAt) {
+      throw new GrootV2Error(
+        "GROOT_E_TASK_STATE",
+        `Task ${id} changed while it was being reviewed.`,
+        {
+          hint: `Review it again: groot review ${id}`,
+        },
+      );
+    }
+    return recordReview(repo, fresh, content, decision);
+  });
   ctx.events.emit({
     type: "task.review",
     level: review.ownershipViolations.length + review.secretFindings.length > 0 ? "warn" : "info",

@@ -172,6 +172,19 @@ describe("acceptance commands without a shell", () => {
       /profile/,
     );
   });
+
+  test("wall time and acceptance timeouts are capped at 24 hours (timers overflow beyond ~24.8 days)", () => {
+    // Act / Assert
+    expect(buildLimits("claude-code", { wallTimeSec: 86_400 }).wallTimeSec).toBe(86_400);
+    expect(() => buildLimits("claude-code", { wallTimeSec: 86_401 })).toThrow(/wallTimeSec/);
+    expect(() => buildLimits("claude-code", { wallTimeSec: 2_147_484 })).toThrow(/86400/);
+    expect(
+      buildAcceptance({ objective: "x", accept: ["bun test"], acceptTimeoutSec: 86_400 })[0],
+    ).toMatchObject({ timeoutMs: 86_400_000 });
+    expect(() =>
+      buildAcceptance({ objective: "x", accept: ["bun test"], acceptTimeoutSec: 86_401 }),
+    ).toThrow(/86400/);
+  });
 });
 
 describe("prompts", () => {

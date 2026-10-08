@@ -1,6 +1,7 @@
 /**
  * Git operations for tasks: canonical repository roots, task/integration
- * worktrees, Groot's own commits, merges, and cleanliness checks. Every call
+ * worktrees, Groot's own commits, merges, cleanliness checks, and ref
+ * snapshots (what an attempt moved). Every call
  * is an argv array (never a shell), bounded by a timeout, and configured to
  * never prompt or open an editor. Groot commits with the user's identity
  * when one is configured, otherwise as `groot <groot@localhost>`; task
@@ -138,6 +139,71 @@ export async function statusEntries(cwd: string, env: Env): Promise<string[]> {
   const result = await gitRun(cwd, ["status", "--porcelain=v1", "--untracked-files=all"], env);
   if (result.exitCode !== 0) return ["(git status failed)"];
   return result.stdout.split("\n").filter((line) => line.trim() !== "");
+}
+
+/** Absolute path of the repository's common git directory (shared by every worktree). */
+export async function gitCommonDir(cwd: string, env: Env): Promise<string> {
+  const out = await gitOut(
+    cwd,
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    env,
+    "Locating the git directory",
+  );
+  return realpathSync(out.trim());
+}
+
+/** Is `path` (relative to `cwd`) git-ignored there? */
+export async function isIgnored(cwd: string, path: string, env: Env): Promise<boolean> {
+  return (await gitRun(cwd, ["check-ignore", "-q", path], env)).exitCode === 0;
+}
+
+/** Name → value of every ref, plus each checkout's HEAD (symbolic target or commit). */
+export type RefSnapshot = ReadonlyMap<string, string>;
+
+async function headOf(cwd: string, env: Env): Promise<string> {
+  const symbolic = await gitRun(cwd, ["symbolic-ref", "-q", "HEAD"], env);
+  if (symbolic.exitCode === 0) return `ref: ${symbolic.stdout.trim()}`;
+  return (await revParse(cwd, "HEAD", env)) ?? "(none)";
+}
+
+/**
+ * Every ref in the repository and the HEADs of the main checkout and the
+ * task worktree — compared before and after an attempt. Read raw (exact
+ * names; this never leaves memory unredacted).
+ */
+export async function refSnapshot(root: string, worktree: string, env: Env): Promise<RefSnapshot> {
+  const refs = await gitReadRaw(
+    root,
+    ["for-each-ref", "--format=%(refname) %(objectname)"],
+    env,
+    "Listing the repository's refs",
+  );
+  const snapshot = new Map<string, string>();
+  for (const line of refs.split("\n")) {
+    const [name, object] = line.split(" ");
+    if (name !== undefined && name !== "" && object !== undefined) snapshot.set(name, object);
+  }
+  snapshot.set("HEAD", await headOf(root, env));
+  snapshot.set("HEAD (task worktree)", await headOf(worktree, env));
+  return snapshot;
+}
+
+/** Refs that differ between two snapshots (added, removed, or moved), as "name a → b". */
+export function refChanges(
+  before: RefSnapshot,
+  after: RefSnapshot,
+  mayMove: (name: string) => boolean,
+): string[] {
+  const names = [...new Set([...before.keys(), ...after.keys()])].sort();
+  const short = (value: string | undefined): string =>
+    value === undefined
+      ? "(none)"
+      : value.startsWith("ref: ")
+        ? value.slice(5)
+        : value.slice(0, 12);
+  return names
+    .filter((name) => !mayMove(name) && before.get(name) !== after.get(name))
+    .map((name) => `${name} ${short(before.get(name))} → ${short(after.get(name))}`);
 }
 
 /** Identity flags for Groot's commits: the user's when configured, else groot's. */

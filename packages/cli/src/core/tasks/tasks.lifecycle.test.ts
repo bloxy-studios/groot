@@ -6,17 +6,20 @@
  * main checkout is clean) → completed. Also: requested changes resume the
  * same session; ownership violations are reported.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Evidence } from "../contracts/evidence.ts";
 import { Review, Task } from "../contracts/task.ts";
+import { appFixture, blueprintFixture } from "../test-fixtures.ts";
 import { readEvidence } from "../verify/store.ts";
 import { createTask, integrateTask, readTask, reviewTask, runTask } from "./index.ts";
-import { FIXED_MATH, tempProject } from "./testing/temp-project.ts";
+import { FIXED_MATH, removeTempProjects, tempProject } from "./testing/temp-project.ts";
 
 const TIMEOUT = 180_000;
 const GRACE = { interruptMs: 2000, terminateMs: 2000 };
+
+afterAll(removeTempProjects);
 
 describe("task lifecycle (simulated runner, real git)", () => {
   test(
@@ -169,6 +172,61 @@ describe("task lifecycle (simulated runner, real git)", () => {
       // Assert
       expect(done.status).toBe("completed");
       expect(readFileSync(join(project.root, "src/math.ts"), "utf8")).toBe(FIXED_MATH);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a structural/build check that could not run (blocked) gates integration like a failure",
+    async () => {
+      // Arrange — a registered project with a check that needs a tool this machine lacks.
+      const project = await tempProject();
+      const needsTool = {
+        id: "structural.needs-tool",
+        profile: "structural" as const,
+        description: "needs a toolchain this machine lacks",
+        checker: "structural.blueprint",
+        capability: null,
+        unit: null,
+        needs: {
+          network: false,
+          processes: false,
+          credentials: [],
+          toolchains: ["groot-missing-toolchain"],
+        },
+      };
+      project.write(
+        "groot.json",
+        JSON.stringify(
+          blueprintFixture({
+            apps: [appFixture({ id: "demo", path: "." })],
+            verification: [needsTool],
+          }),
+        ),
+      );
+      await project.git("add", "-A");
+      await project.git("commit", "-q", "-m", "register");
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const ctx = project.context();
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        accept: ["bun test"],
+      });
+      await runTask(ctx, project.root, task.id, { grace: GRACE });
+      await reviewTask(ctx, project.root, task.id, { approve: true });
+      const before = (await project.git("rev-parse", "main")).trim();
+
+      // Act
+      const blocked = await integrateTask(ctx, project.root, task.id);
+
+      // Assert
+      expect(blocked.status).toBe("blocked");
+      expect(blocked.integration).toMatchObject({ status: "failed", commit: null });
+      expect(blocked.statusReason).toContain("structural.needs-tool");
+      expect(blocked.statusReason).not.toContain("passed");
+      expect((await project.git("rev-parse", "main")).trim()).toBe(before);
     },
     TIMEOUT,
   );
