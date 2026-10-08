@@ -2,24 +2,20 @@
 
 > Status: **living handoff record** for the v2 refactor (build brief: [GROOT_V2_BUILD_PROMPT.md](../GROOT_V2_BUILD_PROMPT.md)). Update it at every checkpoint. A fresh session resumes from **Next runnable task**.
 
-## Current state — ⏸ PAUSED (2026-10-07, by request)
+## Current state — ▶ RESUMED (2026-10-08)
 
 | Item | Value |
 | --- | --- |
-| Branch | `refactor/groot-v2-core` (from `main` @ `cfd2eb0`), local only — not pushed |
-| Last checkpoint commit | see `git log -1` (context-module checkpoint `0efe58d` + this record) |
-| Current gate | **B (operation core)** in progress — foundations, contracts, schemas, solver, verify engine, context module landed; executor, discovery/adoption, runners not started in-tree |
-| Background work | **none running** — all subagents stopped cleanly before writing files; their (empty) worktrees and branches were removed |
-| Working tree | clean |
+| Branch | `refactor/groot-v2-core`, local only — not pushed |
+| Current gate | **B → C** — operation core landing; compatibility path, single-app creation, MCP facade, context sync done |
+| Background work | workflow `groot-v2-core-units` (run `wf_51587296-f9b`): executor, discovery+blueprint, runners+tasks, auth/data recipes — each in an isolated worktree, each followed by an adversarial review |
 
 ### Next runnable task (resume here)
 
-1. Re-dispatch the three implementation units (briefs reproducible from this record and docs/v2-architecture.md), ideally ≤ 2 in parallel on this machine:
-   - **Executor** — implement `core/executor/*` behind the stub interface (`apply/resume/rollback/status`, journal, crash hook, policy, stale-plan checks) + `apply/resume/rollback/status` commands. Note: citty keeps only the last value of a repeated flag — collect `--allow` from raw args.
-   - **Discovery + blueprint** — `core/discovery`, `core/blueprint` (read/serialize/migrate v1→v2), `core/registry` (exact generator resolution), `planAdopt`/`planMigrate`, `inspect/adopt/migrate` commands. Discovery must skip `node_modules`, `.git`, `.groot`, `.claude/worktrees`.
-   - **Runners + tasks** — Claude Code adapter (real-run validation ≤ 2 runs, ≤ $0.75 each), Codex adapter (report blocked locally), tasks/worktrees/review/integration, `task`/`review` commands.
-2. Coordinator, in parallel: tests for `core/context` (sync preserves human text, conflicts, nested shims, budgets, skills ownership) and the `context` / `context sync` / `verify` / `evidence` commands once discovery lands.
-3. Then Gate C: auth/data recipes from the certified prototype (preserved locally, see Research artifacts), product-flow checker, fresh (single + monorepo) and adopted flows, interrupted-operation recovery demo; Gate D: MCP (`@modelcontextprotocol/server` ~2.3.1, lazy-loaded), task flows; Gate E: docs, changesets (prerelease `next`), compiled-binary demos, draft PR.
+1. When the workflow finishes: merge each unit branch into `refactor/groot-v2-core` (expect trivial conflicts in `src/index.ts` / `src/cli-compat.ts` command registration), address review findings, run lint/typecheck/test (Bun 1.4 + 1.3.14).
+2. Integration glue (coordinator): `core/api.ts` real `GrootApi` (discovery + planners + executor + verify + context + tasks), commands `plan` (add/context-sync/init), `verify`, `evidence`, `context` (+ `sync`), `mcp` (lazy import), register recipes/checkers at startup; wire `contextProvider` for tasks; lock file for init (exact generator resolution via `resolveSeries`).
+3. Gate C proof: fresh single-app + monorepo + adopted custom project → plan add auth → apply → verify all four profiles (product-flow real) → context sync → interrupted-operation recovery demo.
+4. Gate D/E: real Claude Code task run evidence (unit report), MCP end-to-end with the real API, docs (README, architecture, stability, roadmap ledger), changesets (prerelease), compiled-binary demos, draft PR.
 
 ## Baseline (2026-10-07, before any v2 change)
 
@@ -46,6 +42,10 @@ Open upstream drift (issue #81 + new): `@tanstack/cli` 0.69→0.71.1, `create-ex
 | checkpoint 1 | full CLI suite under **Bun 1.3.14** | ✅ 230 pass · 4 skip · 0 fail |
 | checkpoint 5 | `bun test src/core` + `src/contract.test.ts` (Bun 1.4.0) | ✅ 48 pass (core 40 + contract 8) |
 | every commit | `biome ci .`, `tsc --noEmit`, `bun scripts/generate-schemas.ts --check` | ✅ |
+| `efd8569` | full CLI suite (Bun 1.4.0) | ✅ 269 pass · 5 skip · 0 fail |
+| `efd8569` | real single-app E2E: `GROOT_E2E=1 bun test single.e2e` (create-hono 0.19.5) | ✅ planted, stitched, installed, committed, doctor healthy, serves 200 |
+| `f16b6c9` | MCP contract tests (official client, both eras + raw harness) | ✅ 6 pass |
+| `f16b6c9` | Bun 1.3.14 frozen install with MCP deps | ✅ lockfile stays v1 |
 
 ## Commits on the branch
 
@@ -57,6 +57,14 @@ Open upstream drift (issue #81 + new): `@tanstack/cli` 0.69→0.71.1, `create-ex
 | `daf0077` | recipe contract, capability registry, compatibility solver (+ tests), ports, env contracts; plan-id provenance |
 | `58c8c49` | verification engine, evidence store (redacted artifacts), built-in structural/build checkers, server harness (+ tests) |
 | `0efe58d` | context module checkpoint (managed AGENTS.md/CLAUDE.md, skills, task context) — **untested** |
+| `03263c2` | research synthesis + paused execution record |
+| `f93b301` | context module tests (9) — sync preserves human text, conflicts, shims, budgets, skills, task context |
+| `8e91361` | release hardening: compiled binaries no longer autoload .env/bunfig (probe-proven leak), `--no-orphans` |
+| `e4f4caa` | `groot schema` discovery command |
+| `9c45d0b` | add-capability planner; solver refuses ambiguous recipe/app choices; injectable recipe catalog |
+| `4786e93` | docs/v2-cli-spec.md (normative v2 contract, draft) |
+| `efd8569` | **BREAKING** init writes v2 blueprint; `--topology single`; v1 compat path (add keeps version, doctor/preset read v2, env contracts) |
+| `f16b6c9` | MCP facade (18 tools, both protocol eras, bounded waits, stdout purity tests) |
 
 ## Decisions log
 
