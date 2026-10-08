@@ -12,41 +12,139 @@
  *
  * Portable state (groot.json, groot.lock.json) lives at the project root and
  * is committed.
+ *
+ * A repository can ship anything at these paths, including symlinks, so state
+ * paths are contained: `.groot/` must be a real directory inside the project,
+ * no existing component below it may be a symlink, and ids are validated
+ * before they become path segments.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  type Stats,
+  writeSync,
+} from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
+import type { z } from "zod";
+import { EvidenceId, OperationId, PlanId, TaskId } from "./contracts/common.ts";
+import { GrootV2Error } from "./errors.ts";
 
 export const STATE_DIR_NAME = ".groot";
 
-export function stateDir(root: string): string {
-  return join(root, STATE_DIR_NAME);
+const IGNORE_FILE_CONTENT =
+  "# Groot local state (journals, backups, evidence, tasks) — never committed.\n*\n";
+
+/** Not defined on Windows, where opening a symlink this way is not a concern. */
+const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined; // absent (ENOENT/ENOTDIR) — nothing there to follow
+  }
 }
 
-/** Create `.groot/` (self-ignoring) if needed; returns its absolute path. */
-export function ensureStateDir(root: string): string {
-  const dir = stateDir(root);
-  mkdirSync(dir, { recursive: true });
-  const ignore = join(dir, ".gitignore");
-  if (!existsSync(ignore)) {
-    writeFileSync(
-      ignore,
-      "# Groot local state (journals, backups, evidence, tasks) — never committed.\n*\n",
-    );
+function refuse(path: string, reason: string): GrootV2Error {
+  return new GrootV2Error(
+    "GROOT_E_PATH_OUTSIDE_PROJECT",
+    `Refusing Groot state path "${path}": ${reason}.`,
+    {
+      hint: "Groot keeps its state in a real .groot/ directory inside the project; remove what is at that path and retry.",
+      details: { path, reason },
+    },
+  );
+}
+
+/** `.groot/` when absent or a real directory inside the project — never a symlink. */
+export function stateDir(root: string): string {
+  const dir = join(root, STATE_DIR_NAME);
+  const entry = lstatOrUndefined(dir);
+  if (entry === undefined) return dir;
+  if (entry.isSymbolicLink()) throw refuse(dir, "it is a symlink");
+  if (!entry.isDirectory()) throw refuse(dir, "it is not a directory");
+  const rel = relative(realpathSync(root), realpathSync(dir));
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw refuse(dir, "it resolves outside the project root");
   }
   return dir;
 }
 
+/** Create `.gitignore` exclusively and never through a symlink; an existing file is left alone. */
+function writeIgnoreFile(path: string): void {
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | O_NOFOLLOW,
+      0o644,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (lstatOrUndefined(path)?.isSymbolicLink()) throw refuse(path, "it is a symlink");
+    return;
+  }
+  try {
+    writeSync(fd, IGNORE_FILE_CONTENT);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Create `.groot/` (self-ignoring) if needed; returns its absolute path. */
+export function ensureStateDir(root: string): string {
+  mkdirSync(stateDir(root), { recursive: true });
+  const dir = stateDir(root); // re-check what now exists
+  writeIgnoreFile(join(dir, ".gitignore"));
+  return dir;
+}
+
+/**
+ * A path under `.groot/`: every component that already exists must not be a
+ * symlink (and all but the last must be directories), so a committed link
+ * cannot redirect state writes or reads outside the project.
+ */
+function statePath(root: string, ...segments: readonly string[]): string {
+  let current = stateDir(root);
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    const entry = lstatOrUndefined(current);
+    if (entry === undefined) return join(current, ...segments.slice(index + 1));
+    if (entry.isSymbolicLink()) throw refuse(current, "it is a symlink");
+    if (index < segments.length - 1 && !entry.isDirectory()) {
+      throw refuse(current, "it is not a directory");
+    }
+  }
+  return current;
+}
+
+/** An id that is safe to use as a path segment, or GROOT_E_USAGE. */
+function checkedId(kind: string, schema: z.ZodType<string>, id: string): string {
+  if (!schema.safeParse(id).success) {
+    throw new GrootV2Error("GROOT_E_USAGE", `"${id}" is not a ${kind} id.`, {
+      details: { kind, id },
+    });
+  }
+  return id;
+}
+
 export const statePaths = {
-  plans: (root: string): string => join(stateDir(root), "plans"),
-  plan: (root: string, planId: string): string => join(stateDir(root), "plans", `${planId}.json`),
-  operations: (root: string): string => join(stateDir(root), "operations"),
+  plans: (root: string): string => statePath(root, "plans"),
+  plan: (root: string, planId: string): string =>
+    statePath(root, "plans", `${checkedId("plan", PlanId, planId)}.json`),
+  operations: (root: string): string => statePath(root, "operations"),
   operation: (root: string, operationId: string): string =>
-    join(stateDir(root), "operations", operationId),
-  evidenceRoot: (root: string): string => join(stateDir(root), "evidence"),
+    statePath(root, "operations", checkedId("operation", OperationId, operationId)),
+  evidenceRoot: (root: string): string => statePath(root, "evidence"),
   evidence: (root: string, evidenceId: string): string =>
-    join(stateDir(root), "evidence", evidenceId),
-  tasks: (root: string): string => join(stateDir(root), "tasks"),
-  task: (root: string, taskId: string): string => join(stateDir(root), "tasks", taskId),
-  reviews: (root: string): string => join(stateDir(root), "reviews"),
-  cache: (root: string): string => join(stateDir(root), "cache"),
+    statePath(root, "evidence", checkedId("evidence", EvidenceId, evidenceId)),
+  tasks: (root: string): string => statePath(root, "tasks"),
+  task: (root: string, taskId: string): string =>
+    statePath(root, "tasks", checkedId("task", TaskId, taskId)),
+  reviews: (root: string): string => statePath(root, "reviews"),
+  cache: (root: string): string => statePath(root, "cache"),
 };

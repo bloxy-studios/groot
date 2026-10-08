@@ -4,7 +4,8 @@
  * AbortSignal, and process-tree termination (the child runs in its own process
  * group on POSIX so SIGTERM/SIGKILL reach grandchildren such as a server a
  * script started). Output is captured with a size cap and redacted before it
- * is persisted anywhere.
+ * is persisted anywhere — as a whole after exit, never chunk by chunk, so a
+ * secret split across pipe reads is still matched.
  *
  * Why the group sweep: Bun's `kill()`, `timeout`, and `AbortSignal` reach only
  * the direct child (docs/v2-research.md#bun). A script that backgrounds work
@@ -13,7 +14,7 @@
  * cancelled) the whole group gets SIGTERM, is polled with `kill(-pgid, 0)`
  * until it is gone (ESRCH), and is SIGKILLed when the grace period runs out.
  */
-import { redact } from "./redact.ts";
+import { createLineRedactor, redact } from "./redact.ts";
 
 export interface SpawnOptions {
   readonly argv: readonly string[];
@@ -22,9 +23,12 @@ export interface SpawnOptions {
   readonly stdin?: string | null;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
-  /** Called with each chunk of combined output (already redacted). */
+  /**
+   * Called with redacted output as it arrives, in complete lines (a partial
+   * last line is held back until its newline, or flushed at exit).
+   */
   readonly onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
-  /** Max bytes kept per stream (head is dropped beyond it). */
+  /** Max characters kept per stream (whole lines are dropped from the head beyond it). */
   readonly captureLimit?: number;
   /** Values to redact exactly from captured output. */
   readonly secrets?: readonly string[];
@@ -47,6 +51,9 @@ const isPosix = process.platform !== "win32";
 
 /** Polling interval while waiting for a signalled process group to disappear. */
 const SWEEP_POLL_MS = 25;
+
+/** Bound on the final flush of a capture whose pipe reads had to be cancelled. */
+const CANCEL_FLUSH_MS = 500;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,13 +105,36 @@ export async function sweepProcessGroup(pgid: number, graceMs = 3000): Promise<v
   while (Date.now() < reapDeadline && isProcessGroupAlive(pgid)) await sleep(SWEEP_POLL_MS);
 }
 
-function appendCapped(buffer: string, chunk: string, limit: number): string {
-  const next = buffer + chunk;
-  return next.length > limit ? next.slice(next.length - limit) : next;
+/**
+ * Raw output with its head dropped beyond `limit` characters. Cuts fall on
+ * line boundaries, so the capture — redacted once, as a whole — never holds a
+ * line (or a secret) whose start was cut off.
+ */
+function cappedText(limit: number): { append: (chunk: string) => void; value: () => string } {
+  let text = "";
+  let inDroppedLine = false; // the last cut fell inside the line still being written
+  return {
+    append(chunk: string): void {
+      let next = chunk;
+      if (inDroppedLine) {
+        const newline = next.indexOf("\n");
+        if (newline === -1) return;
+        next = next.slice(newline + 1);
+        inDroppedLine = false;
+      }
+      text += next;
+      if (text.length <= limit) return;
+      const newline = text.indexOf("\n", text.length - limit - 1);
+      inDroppedLine = newline === -1;
+      text = inDroppedLine ? "" : text.slice(newline + 1);
+    },
+    value: () => text,
+  };
 }
 
 interface OutputCapture {
   readonly done: Promise<void>;
+  /** The whole capture, redacted. */
   readonly text: () => string;
   /** Stop reading (a process outside the group may still hold the pipe open). */
   readonly cancel: () => void;
@@ -117,17 +147,21 @@ function captureStream(
   limit: number,
   secrets: readonly string[],
 ): OutputCapture {
-  let text = "";
+  const raw = cappedText(limit);
+  const text = (): string => redact(raw.value(), secrets);
   if (stream === null || stream === undefined) {
-    return { done: Promise.resolve(), text: () => text, cancel: () => {} };
+    return { done: Promise.resolve(), text, cancel: () => {} };
   }
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  const push = (raw: string): void => {
-    if (raw.length === 0) return;
-    const chunk = redact(raw, secrets);
-    text = appendCapped(text, chunk, limit);
-    options.onOutput?.(chunk, name);
+  const lines = options.onOutput === undefined ? null : createLineRedactor(secrets);
+  const emit = (redacted: string | undefined): void => {
+    if (redacted !== undefined && redacted !== "") options.onOutput?.(redacted, name);
+  };
+  const push = (chunk: string): void => {
+    if (chunk.length === 0) return;
+    raw.append(chunk);
+    emit(lines?.push(chunk));
   };
   const done = (async () => {
     try {
@@ -140,11 +174,11 @@ function captureStream(
       // cancelled or the pipe broke — keep what was captured
     }
     push(decoder.decode());
+    emit(lines?.flush());
   })();
   return {
     done,
-    // Re-redact the whole capture: a secret split across two chunks escapes chunk-wise redaction.
-    text: () => redact(text, secrets),
+    text,
     cancel: () => {
       reader.cancel().catch(() => {});
     },
@@ -248,6 +282,8 @@ export async function runProcess(options: SpawnOptions): Promise<SpawnResult> {
   if (!drained) {
     stdout.cancel();
     stderr.cancel();
+    // Cancelling settles the pending reads; let each capture flush its held-back line.
+    await settledWithin(Promise.all([stdout.done, stderr.done]), CANCEL_FLUSH_MS);
   }
 
   return {

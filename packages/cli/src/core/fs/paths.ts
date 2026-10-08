@@ -1,30 +1,58 @@
 /**
  * Project boundary enforcement. Every write Groot performs resolves through
  * `resolveInProject`, which rejects absolute paths, `..` escapes, and symlinks
- * whose real target lies outside the project root (the nearest existing
- * ancestor is realpath'd, so a not-yet-created file under a symlinked
- * directory is checked too).
+ * whose real target lies outside the project root. The deepest existing entry
+ * (found with lstat, so a dangling link counts as existing) is resolved, and a
+ * link whose target does not exist yet is followed by reading it — a
+ * not-yet-created file is judged by where a write would actually land.
  */
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, readlinkSync, realpathSync, type Stats } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { GrootV2Error } from "../errors.ts";
+
+/** Symlinks followed by hand per resolution before giving up (Linux's MAXSYMLINKS). */
+const MAX_SYMLINK_HOPS = 40;
 
 /** Normalize an OS path fragment to the contracts' POSIX form. */
 export function toPosix(path: string): string {
   return path.split(sep).join("/");
 }
 
-function realpathOfNearestExisting(abs: string): string {
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined; // absent (ENOENT/ENOTDIR) or unreadable: judged by its parent
+  }
+}
+
+/**
+ * The real location `abs` refers to, or null when symlinks loop (or chain
+ * past MAX_SYMLINK_HOPS). A dangling link is followed by its link text,
+ * relative to the link's own directory.
+ */
+function realTargetOf(abs: string, hops = 0): string | null {
+  if (hops > MAX_SYMLINK_HOPS) return null;
   let current = abs;
   const tail: string[] = [];
-  while (!existsSync(current)) {
+  let entry = lstatOrUndefined(current);
+  while (entry === undefined) {
     const parent = dirname(current);
     if (parent === current) break;
-    tail.unshift(current.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+    tail.unshift(basename(current));
     current = parent;
+    entry = lstatOrUndefined(current);
   }
-  const real = realpathSync(current);
-  return tail.length === 0 ? real : join(real, ...tail);
+  if (entry?.isSymbolicLink()) {
+    try {
+      return join(realpathSync(current), ...tail);
+    } catch {
+      // Dangling (or looping): follow the link text to where a write would land.
+      const target = resolve(realpathSync(dirname(current)), readlinkSync(current));
+      return realTargetOf(join(target, ...tail), hops + 1);
+    }
+  }
+  return join(realpathSync(current), ...tail);
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -48,7 +76,10 @@ export function resolveInProject(root: string, relPath: string): string {
     throw outside(relPath, "the path escapes the project root");
   }
   const realRoot = realpathSync(root);
-  const realTarget = realpathOfNearestExisting(lexical);
+  const realTarget = realTargetOf(lexical);
+  if (realTarget === null) {
+    throw outside(relPath, "a symlink on the path loops or chains too deep to resolve");
+  }
   if (!isWithin(realRoot, realTarget)) {
     throw outside(relPath, "a symlink resolves outside the project root");
   }

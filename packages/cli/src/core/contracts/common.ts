@@ -27,17 +27,21 @@ export const Sha256 = z
   .regex(/^sha256:[0-9a-f]{64}$/, "expected sha256:<64 lowercase hex>");
 export type Sha256 = z.infer<typeof Sha256>;
 
+/** One path segment: non-empty, not `..`, no separators or control characters. */
+const PATH_SEGMENT = String.raw`(?!\.\.(?:/|$))[^/\\\x00-\x1f\x7f]+`;
+
 /**
- * Project-relative POSIX path. Never absolute, never escaping the project
- * (`..` segments), never backslashes. Runtime path resolution additionally
- * enforces symlink containment (core/fs/paths.ts).
+ * Project-relative POSIX path, validated segment by segment. Never absolute,
+ * never escaping the project (`..` segments), no empty segments, backslashes,
+ * or control characters. Runtime path resolution additionally enforces
+ * symlink containment (core/fs/paths.ts).
  */
 export const RelPath = z
   .string()
   .min(1)
   .regex(
-    /^(?!\/)(?![A-Za-z]:)(?!(?:.*\/)?\.\.(?:\/|$))[^\\\0]+$/,
-    "expected a project-relative POSIX path without .. segments",
+    new RegExp(`^(?![A-Za-z]:)${PATH_SEGMENT}(?:/${PATH_SEGMENT})*$`),
+    "expected a project-relative POSIX path (no leading /, no empty or .. segments, no backslashes or control characters)",
   );
 export type RelPath = z.infer<typeof RelPath>;
 
