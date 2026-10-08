@@ -13,12 +13,13 @@
  * already contains the import region). This module also reads what the
  * transform can't know: the app's variable name (from the declaration) and
  * the file's quote/semicolon style (so inserted lines read like the human's
- * code). It reads code, not raw text (./scan.ts), so comments and strings
- * can't mislead it: a declaration whose statement continues past its end
- * (`new Hono()`, then `.use(…)` — comments in between or not) is refused,
- * because a region inserted after it would split the expression. Once the
- * regions are planned, each new one must start right after its anchor's
- * statement, and the entry must still parse — otherwise the plan is refused.
+ * code). It reads code, not raw text (./scan.ts), so comments, strings and
+ * regular expressions can't mislead it: a declaration whose statement
+ * continues past its end (`new Hono()`, then `.use(…)` — comments in between
+ * or not) is refused, because a region inserted after it would split the
+ * expression. Once the regions are planned, each new one must start right
+ * after its anchor's statement and stand between top-level statements, and
+ * the entry must still parse — otherwise the plan is refused.
  */
 import type { StructuredEdit } from "../../contracts/plan.ts";
 import { GrootV2Error } from "../../errors.ts";
@@ -295,8 +296,8 @@ export function assertMountedAfterStatement(
   if (expected !== null && landed === expected) return;
   throw conflict(
     path,
-    `groot could not place "${edit.regionId}" safely after ${edit.anchorDescription} — where that statement ends can't be read unambiguously (a quote or bracket inside a comment?).`,
-    "Simplify the statement (e.g. move comments out of it), or add the lines yourself, then plan again.",
+    `groot could not place "${edit.regionId}" safely after ${edit.anchorDescription} — where that statement ends can't be read unambiguously (a quote or bracket inside a comment or a regular expression?).`,
+    "Simplify the statement (e.g. move comments or regular expressions out of it), or add the lines yourself, then plan again.",
     "region placement",
   );
 }
@@ -310,13 +311,47 @@ function parses(text: string, path: string): boolean {
   }
 }
 
-/** Safety net: refuse a planned entry that no longer parses (when the human's own version did). */
+/**
+ * Stands in for a region's body: legal only between the module's top-level
+ * statements — inside a function, a block, an object or an unfinished
+ * expression it no longer parses (and a chain can't continue after it).
+ */
+const TOP_LEVEL_PROBE = "export {};";
+
+function withProbe(text: string, region: RegionMatch): string {
+  const lines = linesOf(text);
+  return [
+    ...lines.slice(0, region.beginLine + 1),
+    TOP_LEVEL_PROBE,
+    ...lines.slice(region.endLine),
+  ].join("\n");
+}
+
+/**
+ * Safety net, whatever the scan misread (when the human's own entry parses):
+ * refuse a planned entry that no longer parses, or where a region Groot newly
+ * placed doesn't stand between top-level statements — code there would parse
+ * and still run in the wrong place (inside a handler, say). A region that
+ * already existed stays where the human keeps it.
+ */
 export function assertStillParses(original: string, planned: string, path: string): void {
-  if (planned === original || parses(planned, path) || !parses(original, path)) return;
-  throw conflict(
-    path,
-    "with the auth regions inserted, the entry would no longer parse — refusing to write it.",
-    "Mount the auth routes yourself (see the auth.routes decision), or simplify the entry around the Hono import and declaration, then plan again.",
-    "unparseable result",
-  );
+  if (planned === original || !parses(original, path)) return;
+  if (!parses(planned, path)) {
+    throw conflict(
+      path,
+      "with the auth regions inserted, the entry would no longer parse — refusing to write it.",
+      "Mount the auth routes yourself (see the auth.routes decision), or simplify the entry around the Hono import and declaration, then plan again.",
+      "unparseable result",
+    );
+  }
+  const existing = placedIn(original, path);
+  for (const region of regionsIn(planned, path)) {
+    if (existing.has(region.id) || parses(withProbe(planned, region), path)) continue;
+    throw conflict(
+      path,
+      `groot would place "${region.id}" inside a function, block, or expression instead of between top-level statements — refusing to write it.`,
+      "Mount the auth routes yourself (see the auth.routes decision), or simplify the statement before that spot (e.g. move a regular expression out of the Hono constructor's options), then plan again.",
+      "region not at top level",
+    );
+  }
 }

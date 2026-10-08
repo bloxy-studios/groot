@@ -6,7 +6,8 @@
  *    db/auth-schema.ts + db/notes-schema.ts, http/{cors,session,auth-routes,
  *    notes-routes}.ts;
  * 2. the static migration 0001_auth_init + snapshot, appended to the journal —
- *    only when the journal holds exactly data's 0000 (anything else means the
+ *    only when the journal holds exactly data's 0000 (once 0001 follows it,
+ *    auth is applied, whatever migrations came after; anything else means the
  *    schema moved on and a pre-generated 0001 would be wrong → conflict);
  * 3. managed regions: `auth.schema` in the schema barrel, `auth.imports` +
  *    `auth.routes` in the server entry (anchored on the unique Hono import and
@@ -120,7 +121,10 @@ async function requireDataLayer(builder: PlanBuilder, layout: RecipeLayout): Pro
   return journal;
 }
 
-/** "ready" = only data's 0000; "applied" = 0000 + auth's 0001 already; anything else conflicts. */
+/**
+ * "ready" = only data's 0000; "applied" = 0000 then auth's 0001 — whatever the
+ * developer's own db:generate appended after them; anything else conflicts.
+ */
 export function journalState(text: string, path: string): "ready" | "applied" {
   let tags: unknown[] = [];
   try {
@@ -132,7 +136,7 @@ export function journalState(text: string, path: string): "ready" | "applied" {
   const data = DATA_MIGRATION.entry.tag;
   const auth = AUTH_MIGRATION.entry.tag;
   if (tags.length === 1 && tags[0] === data) return "ready";
-  if (tags.length === 2 && tags[0] === data && tags[1] === auth) return "applied";
+  if (tags[0] === data && tags[1] === auth) return "applied";
   throw new GrootV2Error(
     "GROOT_E_CONFLICT",
     `${path} lists ${tags.length === 0 ? "no readable migrations" : `migrations ${tags.join(", ")}`}; ${AUTH_RECIPE_ID} ships ${auth} pre-generated to follow ${data} directly.`,
@@ -247,6 +251,11 @@ async function mount(
 /** What the preview must say about where the routes sit relative to the app's own middleware. */
 export function routesOrderNote(appVar: string, entry: string): string {
   return `Groot mounts /api/auth and /api/notes right after \`${appVar} = new Hono()\` in ${entry}, ahead of any middleware added later with ${appVar}.use(…) (logging, secure headers, rate limits) — that middleware doesn't run for these routes. To put them behind it, move the groot:begin/end auth.routes block below it; Groot refreshes the block where it stands.`;
+}
+
+/** The same, once the block exists — the human may have moved it, so no position is claimed. */
+function routesKeptNote(appVar: string, entry: string): string {
+  return `Groot refreshes the groot:begin/end auth.routes block in ${entry} where it stands; middleware registered with ${appVar}.use(…) below that block doesn't run for these routes.`;
 }
 
 async function planRegions(
@@ -372,6 +381,10 @@ function decisions(input: RecipePlanInput, layout: RecipeLayout, plan: AuthPlan)
     });
   const portSource =
     app.port === null ? "Bun's default port — groot.json records none" : "groot.json";
+  const { appVar, routesPlaced } = plan.analysis;
+  const routesNote = routesPlaced
+    ? routesKeptNote(appVar, layout.entry)
+    : routesOrderNote(appVar, layout.entry);
   const kept = decision(
     "auth.secret",
     `kept the existing ${SECRET_NAME} in ${layout.envLocal}`,
@@ -385,8 +398,8 @@ function decisions(input: RecipePlanInput, layout: RecipeLayout, plan: AuthPlan)
     ),
     decision(
       "auth.routes",
-      `Better Auth at /api/auth and per-user notes (the protected example) at /api/notes, mounted on ${plan.analysis.appVar} in ${layout.entry}`,
-      `Better Auth's default basePath; the notes routes prove the authorization boundary. ${routesOrderNote(plan.analysis.appVar, layout.entry)}`,
+      `Better Auth at /api/auth and per-user notes (the protected example) at /api/notes, mounted on ${appVar} in ${layout.entry}`,
+      `Better Auth's default basePath; the notes routes prove the authorization boundary. ${routesNote}`,
     ),
     decision(
       "auth.origin",

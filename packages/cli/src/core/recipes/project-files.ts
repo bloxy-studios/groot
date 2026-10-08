@@ -12,17 +12,20 @@
  * - .env.local may already hold the developer's own secrets, so its edit is
  *   computed at apply time and its content never enters a plan, and a
  *   generated secret is written by a dedicated env.secret step whose value is
- *   never part of the plan, journal, or output. Assignments are read exactly
- *   as the executor reads them (core/executor/secrets.ts), so a plan never
- *   promises a value the executor would then decline to write.
+ *   never part of the plan, journal, or output. Whether a name is assigned is
+ *   read exactly as the executor reads it (core/executor/secrets.ts), and
+ *   what the assignment holds as Bun loads it (./dotenv.ts), so a plan never
+ *   promises a value the executor would decline to write, nor keeps one the
+ *   app would load as empty.
  */
 import { readFileSync } from "node:fs";
 import { isAbsolute, posix } from "node:path";
 import { GrootV2Error } from "../errors.ts";
-import { envValue, hasEnvAssignment } from "../executor/secrets.ts";
+import { hasEnvAssignment } from "../executor/secrets.ts";
 import { joinRel, resolveInProject } from "../fs/paths.ts";
 import { git } from "../git.ts";
 import type { PlanBuilder } from "../planner/builder.ts";
+import { dotenvValues } from "./dotenv.ts";
 import type { RecipeLayout } from "./layout.ts";
 
 export interface IgnoreTarget {
@@ -227,23 +230,29 @@ export async function addEnvLocal(
 }
 
 /**
- * How .env.local assigns `name`, read the way the executor's env.secret step
- * reads it: any `NAME=` line counts as set there, so an empty one must be
- * caught here (the value itself never leaves this function).
+ * How .env.local holds `name` (the value itself never leaves this function):
+ * "set" when Bun loads a non-blank value for it (a `$NAME` reference counts —
+ * Bun expands it from the environment the app starts in); "empty" when Bun
+ * loads nothing usable (`NAME=`, empty quotes, only a `# comment`) yet the
+ * executor's env.secret step reads a `NAME=` line there and keeps it as it
+ * stands; "absent" otherwise — then the step appends an assignment, which Bun
+ * reads last, so it wins.
  */
 function secretAssignment(root: string, path: string, name: string): "absent" | "empty" | "set" {
   const text = envText(root, path);
-  const value = text === null ? null : envValue(text, name);
-  if (value === null) return "absent";
-  return value.trim() === "" ? "empty" : "set";
+  if (text === null) return "absent";
+  const loaded = dotenvValues(text).get(name);
+  if (loaded !== undefined && loaded.trim() !== "") return "set";
+  return hasEnvAssignment(text, name) ? "empty" : "absent";
 }
 
 /**
  * Generate a local secret into .env.local unless the developer already set
  * one (the value is never read into the plan). Returns false when an existing
- * value is kept. An empty placeholder (`NAME=`) is refused: the executor
- * keeps every assignment as it stands, so planning a generated secret there
- * would promise a value that never gets written.
+ * value is kept. An assignment Bun loads as blank (`NAME=`, `NAME=""`,
+ * `NAME= # comment`) is refused: the executor keeps every assignment as it
+ * stands, so planning a generated secret there would promise a value that
+ * never gets written, and keeping it would leave the app without a secret.
  */
 export async function addSecret(
   builder: PlanBuilder,
@@ -256,9 +265,9 @@ export async function addSecret(
   if (assignment === "empty") {
     throw new GrootV2Error(
       "GROOT_E_CONFLICT",
-      `${layout.envLocal} assigns ${name} an empty value; Groot generates a secret only where none is assigned and never rewrites an assignment.`,
+      `${layout.envLocal} assigns ${name}, but Bun loads it as empty (a blank value, empty quotes, or only a # comment); Groot generates a secret only where none is assigned and never rewrites an assignment.`,
       {
-        hint: `Delete the empty ${name}= line (Groot then generates one), or set a value yourself (>= 32 random characters, e.g. openssl rand -base64 32), then plan again.`,
+        hint: `Delete that ${name} line (Groot then generates one), or set a value yourself (>= 32 random characters, e.g. openssl rand -base64 32), then plan again.`,
         details: { path: layout.envLocal, conflict: "empty-env-value", name },
       },
     );

@@ -27,6 +27,7 @@ import { ephemeralPort } from "../../ports.ts";
 import { runProcess, tail } from "../../process.ts";
 import type { CoreContext } from "../../runtime.ts";
 import type { CheckInput, CheckOutcome } from "../../verify/engine.ts";
+import { argPath } from "../layout.ts";
 
 export interface UnitUnderTest {
   readonly app: BlueprintApp;
@@ -262,6 +263,6 @@ export async function runMigrations(
 export function startCommand(unit: UnitUnderTest): string[] | null {
   if (unit.scripts.dev !== undefined) return ["bun", "run", "dev"];
   if (unit.scripts.start !== undefined) return ["bun", "run", "start"];
-  if (unit.app.entry !== null) return ["bun", unit.app.entry];
+  if (unit.app.entry !== null) return ["bun", argPath(unit.app.entry)];
   return null;
 }

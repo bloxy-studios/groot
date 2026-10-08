@@ -33,6 +33,35 @@ describe("codeOnly", () => {
     // Assert
     expect(code).toContain("; const t = (1)");
   });
+
+  test.each([
+    ["closing brackets in a class", "x.replace(", "[)}\\]]+$", ', "")'],
+    ["a quote", "const q = ", '"', "g; const t = (1)"],
+    ["a backtick", "const q = ", "`", "; const t = (1)"],
+    ["escaped slashes (not a comment)", "const u = ", "^https?:\\/\\/", "; f(1)"],
+    ["a slash in a class", "const s = ", "[/]", "; f(1)"],
+    ["an arrow before it", "(s) => ", "[(]", ".test(s)"],
+    ["`return` before it", "return ", "[)]", ".test(s)"],
+  ])("a regular expression literal with %s is blanked like a string", (_case, before, body, after) => {
+    // Arrange
+    const text = `${before}/${body}/${after}\n`;
+    // Act
+    const code = codeOnly(text);
+    // Assert
+    expect(code).toBe(`${before}/${" ".repeat(body.length)}/${after}\n`);
+  });
+
+  test.each([
+    ["between names", "const r = a / b / c(1)"],
+    ["after a call", "const r = f(x) / g(y) / 2"],
+    ["after an index", "const r = a[0] / b[1]"],
+    ["after a number", "const r = 10 / n / (2)"],
+    ["in a TSX closing tag", "const el = <b>{a}</b>{(x)}<i>{y}</i>"],
+    ["after a property named like a keyword", "const r = o.return / 2 / (x)"],
+    ["that closes nothing on its line (after i++)", "const r = i++ / (2)"],
+  ])("a slash %s stays code: it divides (or closes a tag)", (_case, text) => {
+    expect(codeOnly(text)).toBe(text);
+  });
 });
 
 describe("statementEnd", () => {
@@ -54,6 +83,15 @@ describe("statementEnd", () => {
 
   test("never-balanced brackets → null", () => {
     expect(statementEnd(codeLines("const app = new Hono({\n"), 0)).toBeNull();
+  });
+
+  test("closing brackets inside a regular expression don't end the statement", () => {
+    // Arrange
+    const code = codeLines(
+      'const app = new Hono({\n  getPath: (req) => {\n    const path = new URL(req.url).pathname.replace(/[)}\\]]+$/, "")\n    return path\n  },\n});\n',
+    );
+    // Act / Assert
+    expect(statementEnd(code, 0)).toBe(5);
   });
 });
 
@@ -88,6 +126,11 @@ describe("continuationAfter", () => {
       "CRLF line endings",
       "const app = new Hono()\r\n  // logging first\r\n  .use(logger())\r\n",
       2,
+    ],
+    [
+      "a regular expression on the next line (no ASI before `/`: it divides)",
+      "const app = new Hono()\n/[)]/.test(x)\n",
+      1,
     ],
   ])("%s → the continuing line", (_name, text, line) => {
     expect(after(text)).toBe(line);

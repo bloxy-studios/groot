@@ -382,6 +382,8 @@ describe("build.bundle", () => {
         "fail",
         "fail",
       ]);
+      expect(artifactText(brokenImport, importFails)).toContain('"./does-not-exist"');
+      expect(artifactText(brokenSchema, schemaFails)).toContain("src/db/schema.ts");
       expect(passing.method.command?.argv).toEqual([
         "bun",
         "build",
@@ -425,6 +427,35 @@ describe("build.bundle", () => {
         "src/http/auth-routes.ts",
         "src/http/notes-routes.ts",
       ]);
+      expect(artifactText(root, evidence)).toContain('"./not-there"');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an entry directory starting with '-' is bundled as ./-src/…, never read as a flag",
+    async () => {
+      // Arrange
+      const root = scratchDir("bundle-dash");
+      writeFiles(root, {
+        "package.json": JSON.stringify({ name: "bundle-dash" }),
+        "-src/index.ts": 'export default { fetch: () => new Response("hi") };\n',
+        "-src/db/client.ts": "export const db = {};\n",
+        "-src/db/migrate.ts": 'import { db } from "./client";\nconsole.log(db);\n',
+      });
+      // Act
+      const evidence = await verifyOne(
+        root,
+        contract("build.bundle", "data", "build"),
+        "-src/index.ts",
+      );
+      // Assert
+      expect(evidence.status).toBe("pass");
+      expect(evidence.method.command?.argv.slice(2, 5)).toEqual([
+        "./-src/index.ts",
+        "./-src/db/client.ts",
+        "./-src/db/migrate.ts",
+      ]);
     },
     TIMEOUT,
   );
@@ -446,6 +477,8 @@ describe("build.bundle", () => {
       writeFiles(broken, {
         "package.json": JSON.stringify({ name: "bundle-broken" }),
         "src/index.ts": 'import { greet } from "./missing";\nexport default greet;\n',
+        "src/db/client.ts": "export const db = {};\n",
+        "src/db/migrate.ts": 'import { db } from "./client";\nconsole.log(db);\n',
       });
       const check = contract("build.bundle", "data", "build");
       // Act
@@ -466,6 +499,10 @@ describe("build.bundle", () => {
       ]);
       expect(failing.status).toBe("fail");
       expect(failing.summary).toContain("bun build failed for src/index.ts");
+      // It fails on the entry's own import — every entrypoint exists.
+      const log = artifactText(broken, failing);
+      expect(log).toContain('"./missing"');
+      expect(log).not.toContain("ModuleNotFound");
     },
     TIMEOUT,
   );

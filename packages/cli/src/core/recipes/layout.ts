@@ -78,12 +78,21 @@ export function inSrc(layout: RecipeLayout, ...parts: string[]): string {
 }
 
 /**
+ * A relative path as a command-line argument: one starting with "-" is
+ * written "./-…", so bun (or any CLI) reads it as a path, never as a flag.
+ */
+export function argPath(path: string): string {
+  return path.startsWith("-") ? `./${path}` : path;
+}
+
+/**
  * A path as one word of a package.json script — bun runs scripts through
  * bash/sh/zsh (Bun's shell on Windows), all of which take single quotes
  * literally. layoutCompatibility() refuses directories a quote can't carry.
  */
 export function scriptWord(path: string): string {
-  return /^[\w./@+-]+$/.test(path) ? path : `'${path}'`;
+  const word = argPath(path);
+  return /^[\w./@+-]+$/.test(word) ? word : `'${word}'`;
 }
 
 /**
@@ -100,9 +109,9 @@ const TS_ENTRY = /\.(?:[cm]?ts|tsx)$/;
 
 /**
  * Characters the entry's directory may use: its paths go into package.json
- * scripts (quoted by scriptWord), TypeScript string literals, and
- * drizzle-kit's schema option, which is a glob — so no quotes, no shell or
- * glob metacharacters.
+ * scripts (quoted by scriptWord), command lines (a leading "-" is written
+ * "./-…" by argPath), TypeScript string literals, and drizzle-kit's schema
+ * option, which is a glob — so no quotes, no shell or glob metacharacters.
  */
 const EXPRESSIBLE_DIR = /^[\p{L}\p{N} ._@+/-]+$/u;
 

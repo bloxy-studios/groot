@@ -179,6 +179,78 @@ describe("entry anchors", () => {
   );
 
   test(
+    "closing brackets in a regular expression inside the Hono options never get a region inside the declaration",
+    async () => {
+      // Arrange
+      const entry =
+        'import { Hono } from "hono";\n\nconst app = new Hono({\n  getPath: (req) => {\n    const path = new URL(req.url).pathname.replace(/[)}\\]]+$/, "")\n    return path\n  },\n});\n\napp.get("/", (c) => c.text("hi"));\n\nexport default app;\n';
+      const fx = await singleApp(writeEntry(entry));
+      // Act
+      let planned: PlannedRecipes;
+      try {
+        planned = await planBoth(fx);
+      } catch (error) {
+        // Assert (refused): the transform reads that statement differently, so it's never guessed.
+        expect(error).toBeInstanceOf(GrootV2Error);
+        expect((error as GrootV2Error).id).toBe("GROOT_E_CONFLICT");
+        expect((error as GrootV2Error).details).toMatchObject({
+          path: "src/index.ts",
+          conflict: "transform",
+        });
+        return;
+      }
+      // Assert (planned): mounted after the declaration's closing line, never inside getPath.
+      await materializePlan(fx.root, planned.plan);
+      const mounted = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(mounted).toContain("  },\n});\n// groot:begin auth.routes");
+      expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(mounted)).not.toThrow();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a statement the recipe and the transform both misread can't put a region inside a function: the entry must keep it top-level",
+    async () => {
+      // Arrange — `/` after `)` reads as a division to both, so the regex's closers end the statement early.
+      const fx = await singleApp(
+        writeEntry(
+          'import { Hono } from "hono";\n\nconst app = new Hono({\n  getPath: (req) => {\n    if (req.url) /[)}\\]]+$/.test(req.url)\n    return new URL(req.url).pathname\n  },\n});\n\nexport default app;\n',
+        ),
+      );
+      // Act
+      const error = await planError(fx);
+      // Assert
+      expect(error.id).toBe("GROOT_E_CONFLICT");
+      expect(error.details).toMatchObject({
+        path: "src/index.ts",
+        conflict: "transform",
+        reason: "region not at top level",
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a regular expression in the Hono options with balanced brackets is mounted after the declaration",
+    async () => {
+      // Arrange — Hono's documented getPath example.
+      const entry =
+        'import { Hono } from "hono";\n\nconst app = new Hono({\n  getPath: (req) => req.url.replace(/^https?:\\/\\/[^/]+(\\/[^?]*)/, "$1"),\n});\n\nexport default app;\n';
+      const fx = await singleApp(writeEntry(entry));
+      const { plan } = await planBoth(fx);
+      // Act
+      await materializePlan(fx.root, plan);
+      // Assert
+      const mounted = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(mounted).toContain('"$1"),\n});\n// groot:begin auth.routes');
+      expect(removeRegion(removeRegion(mounted, "auth.imports", "e"), "auth.routes", "e")).toBe(
+        entry,
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
     'a formatter\'s multi-line `import {\\n  Hono,\\n} from "hono"` is anchored on its closing line',
     async () => {
       // Arrange
@@ -331,6 +403,14 @@ describe("existing human files and scripts", () => {
     ["an empty value", "BETTER_AUTH_SECRET=\n"],
     ["empty quotes", 'BETTER_AUTH_SECRET=""\n'],
     ["an exported blank", "export BETTER_AUTH_SECRET=   \n"],
+    // Bun reads `#` as a comment in an unquoted value, and backticks as quotes.
+    ["only a comment", "BETTER_AUTH_SECRET= # generate with openssl rand -base64 32\n"],
+    ["empty quotes and a comment", 'BETTER_AUTH_SECRET="" # set me\n'],
+    ["empty backticks", "BETTER_AUTH_SECRET=``\n"],
+    [
+      "a later blank assignment",
+      "BETTER_AUTH_SECRET=an-earlier-value-0123456789abcdef\nBETTER_AUTH_SECRET=\n",
+    ],
   ])(
     "a BETTER_AUTH_SECRET placeholder with %s → conflict: no plan promises a secret the executor won't write",
     async (_case, line) => {
@@ -347,6 +427,30 @@ describe("existing human files and scripts", () => {
         name: "BETTER_AUTH_SECRET",
       });
       expect(error.hint).toContain("openssl rand -base64 32");
+    },
+    TIMEOUT,
+  );
+
+  test.each([
+    [
+      "a quoted value with # in it",
+      'BETTER_AUTH_SECRET="value#with-hash-0123456789abcdef" # mine\n',
+    ],
+    // The executor never reads `NAME: value` as an assignment; a step would append one that wins.
+    ["a `NAME: value` assignment", "BETTER_AUTH_SECRET: colon-style-value-0123456789abcdef\n"],
+    ["a reference Bun expands at startup", "BETTER_AUTH_SECRET=$SHARED_AUTH_SECRET\n"],
+  ])(
+    "a BETTER_AUTH_SECRET Bun loads from %s is kept: no env.secret step overrides it",
+    async (_case, line) => {
+      // Arrange
+      const fx = await singleApp();
+      writeFileSync(join(fx.root, ".env.local"), `FEATURE_FLAG=on\n${line}`);
+      // Act
+      const { plan, contributions } = await planBoth(fx);
+      // Assert
+      expect(plan.actions.some((action) => action.type === "env.secret")).toBe(false);
+      const kept = contributions[1]?.decisions.find((decision) => decision.topic === "auth.secret");
+      expect(kept?.value).toBe("kept the existing BETTER_AUTH_SECRET in .env.local");
     },
     TIMEOUT,
   );

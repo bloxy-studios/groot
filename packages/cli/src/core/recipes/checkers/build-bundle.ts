@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProcess, type SpawnResult, tail } from "../../process.ts";
 import type { CheckInput, CheckOutcome } from "../../verify/engine.ts";
-import { inSrc, type RecipeLayout, recipeLayout } from "../layout.ts";
+import { argPath, inSrc, type RecipeLayout, recipeLayout } from "../layout.ts";
 import {
   blockedOnInstall,
   failure,
@@ -55,6 +55,12 @@ interface Bundled {
   readonly modules: readonly string[];
 }
 
+/** The `bun build` command line (paths relative to the unit; "-…" paths written "./-…"). */
+function bundleArgv(bundled: Bundled, outdir: string): string[] {
+  const paths = [bundled.entry, ...bundled.modules].map(argPath);
+  return ["bun", "build", ...paths, "--target", "bun", "--outdir", outdir];
+}
+
 function bundleOutcome(
   unit: UnitUnderTest,
   bundled: Bundled,
@@ -64,16 +70,7 @@ function bundleOutcome(
   const { entry, modules } = bundled;
   const log = `${result.stdout}\n${result.stderr}`;
   // The temporary output path is meaningless in evidence; record a stable placeholder.
-  const argv = [
-    "bun",
-    "build",
-    entry,
-    ...modules,
-    "--target",
-    "bun",
-    "--outdir",
-    "<temporary directory>",
-  ];
+  const argv = bundleArgv(bundled, "<temporary directory>");
   const method = {
     kind: "command" as const,
     tool: TOOL,
@@ -123,7 +120,7 @@ async function bundle(
   const out = mkdtempSync(join(tmpdir(), "groot-bundle-"));
   try {
     const result = await runProcess({
-      argv: ["bun", "build", bundled.entry, ...bundled.modules, "--target", "bun", "--outdir", out],
+      argv: bundleArgv(bundled, out),
       cwd: unit.dir,
       env: input.ctx.env,
       timeoutMs: BUNDLE_TIMEOUT_MS,

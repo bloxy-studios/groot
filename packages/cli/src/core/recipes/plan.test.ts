@@ -11,7 +11,7 @@ import { OperationPlan, type PlannedAction } from "../contracts/plan.ts";
 import { envContractViolations } from "../env.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { joinRel } from "../fs/paths.ts";
-import { removeRegion } from "../transforms/index.ts";
+import { applyEdit, removeRegion } from "../transforms/index.ts";
 import { dataDrizzleSqlite } from "./data/recipe.ts";
 import { SCHEMA_TS } from "./data/templates.ts";
 import { materializePlan } from "./testing/apply.ts";
@@ -27,6 +27,22 @@ import { observeUnit } from "./testing/plan.ts";
 import { ADOPTED_AGENTS, CREATE_HONO_INDEX, commitAll } from "./testing/projects.ts";
 
 const TIMEOUT = 60_000;
+
+/**
+ * Whether the shared structured edits (core/transforms, not the recipes) keep
+ * a file's line endings — the recipes rewrite none of their own.
+ */
+const TRANSFORMS_KEEP_CRLF = applyEdit(
+  "a\r\nb\r\n",
+  {
+    kind: "managed-region",
+    regionId: "probe",
+    content: "x",
+    commentStyle: "slash",
+    placement: "end",
+  },
+  "probe.ts",
+).startsWith("a\r\nb\r\n");
 
 afterAll(removeScratchDirs);
 
@@ -393,6 +409,23 @@ describe("a CRLF entry", () => {
     },
     TIMEOUT,
   );
+
+  test.skipIf(!TRANSFORMS_KEEP_CRLF)(
+    "where the shared transform keeps line endings, every line stays CRLF and removing Groot's regions restores the entry byte-for-byte",
+    async () => {
+      // Arrange
+      const crlf = CREATE_HONO_INDEX.replace(/\n/g, "\r\n");
+      const fx = await singleApp((root) => writeFileSync(join(root, "src/index.ts"), crlf));
+      const { plan } = await planBoth(fx);
+      // Act
+      await materializePlan(fx.root, plan);
+      // Assert
+      const entry = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(entry).not.toMatch(/(?:^|[^\r])\n/);
+      expect(removeRegion(removeRegion(entry, "auth.imports", "e"), "auth.routes", "e")).toBe(crlf);
+    },
+    TIMEOUT,
+  );
 });
 
 describe("an entry directory with a space (my server/main.ts)", () => {
@@ -431,6 +464,41 @@ describe("an entry directory with a space (my server/main.ts)", () => {
   );
 });
 
+describe("an entry directory starting with '-' (-src/main.ts)", () => {
+  test(
+    "scripts name its paths ./-src/…, so Bun never reads them as flags",
+    async () => {
+      // Arrange
+      const fx = await singleApp((root) => {
+        mkdirSync(join(root, "-src"));
+        renameSync(join(root, "src/index.ts"), join(root, "-src/main.ts"));
+      });
+      const app = { ...fx.app, entry: "-src/main.ts" };
+      const { plan } = await planBoth({ ...fx, app, blueprint: { ...fx.blueprint, apps: [app] } });
+      await materializePlan(fx.root, plan);
+      // A stand-in migrate.ts: nothing is installed here, the script line is what's under test.
+      writeFileSync(join(fx.root, "-src/db/migrate.ts"), 'console.log("migrate ran");\n');
+      // Act
+      const migrate = Bun.spawnSync(["bun", "run", "db:migrate"], {
+        cwd: fx.root,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      // Assert
+      const pkg = JSON.parse(readFileSync(join(fx.root, "package.json"), "utf8"));
+      expect(pkg.scripts["db:migrate"]).toBe("bun run ./-src/db/migrate.ts");
+      expect(pkg.scripts["auth:generate"]).toContain(
+        "--config ./-src/auth.ts --output ./-src/db/auth-schema.ts",
+      );
+      expect([migrate.exitCode, migrate.stdout.toString()]).toEqual([0, "migrate ran\n"]);
+      expect(readFileSync(join(fx.root, "drizzle.config.ts"), "utf8")).toContain(
+        'schema: "./-src/db/schema.ts",',
+      );
+    },
+    TIMEOUT,
+  );
+});
+
 describe("re-planning an applied project", () => {
   test(
     "data + auth again: nothing to do — starters, the journal, and assigned env values are left alone",
@@ -446,6 +514,45 @@ describe("re-planning an applied project", () => {
       expect(plan.actions.map(outline)).toEqual([]);
       const secret = contributions[1]?.decisions.find((entry) => entry.topic === "auth.secret");
       expect(secret?.value).toBe("kept the existing BETTER_AUTH_SECRET in .env.local");
+      // The block may have been moved since: nothing claims it still sits right after the declaration.
+      expect(plan.assumptions.some((text) => text.includes("right after"))).toBe(false);
+      const routes = contributions[1]?.decisions.find((entry) => entry.topic === "auth.routes");
+      expect(routes?.rationale).not.toContain("right after");
+      expect(routes?.rationale).toContain("auth.routes block in src/index.ts where it stands");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "data + auth again after the developer's own migration (db:generate appended 0002): nothing to do",
+    async () => {
+      // Arrange
+      const fx = await singleApp();
+      await materializePlan(fx.root, (await planBoth(fx)).plan);
+      appendFileSync(join(fx.root, "src/db/schema.ts"), "\nexport const owners = 1;\n");
+      const journalPath = join(fx.root, "drizzle/meta/_journal.json");
+      const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+      const entry = {
+        idx: 2,
+        version: "6",
+        when: 1760000000000,
+        tag: "0002_owners",
+        breakpoints: true,
+      };
+      writeFileSync(
+        journalPath,
+        `${JSON.stringify({ ...journal, entries: [...journal.entries, entry] }, null, 2)}\n`,
+      );
+      writeFileSync(
+        join(fx.root, "drizzle/0002_owners.sql"),
+        "CREATE TABLE `owners` (`id` text);\n",
+      );
+      commitAll(fx.root, "add data and auth, then a migration of the developer's own");
+      const applied = { ...fx, observation: await observeUnit(fx.root, fx.app, "single") };
+      // Act
+      const { plan } = await planBoth(applied);
+      // Assert
+      expect(plan.actions.map(outline)).toEqual([]);
     },
     TIMEOUT,
   );
