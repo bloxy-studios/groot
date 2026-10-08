@@ -203,7 +203,10 @@ describe("stability contract: groot.json schema", () => {
           properties: { kind: { enum: string[] }; origin: { enum: string[] } };
         };
       };
-      policy: { required: string[] };
+      policy: {
+        required: string[];
+        properties: { allow: { items: { enum: string[] } }; external: { enum: string[] } };
+      };
     };
   }>("v2/blueprint.schema.json");
 
@@ -244,5 +247,28 @@ describe("stability contract: groot.json schema", () => {
       ["web", "mobile", "desktop", "api", "backend", "library", "config", "unknown"].sort(),
     );
     expect([...apps.items.properties.origin.enum].sort()).toEqual(["adopted", "generated"]);
+  });
+
+  test("v2 blueprint: the action classes a policy can allow, and external modes, are frozen", () => {
+    const { policy } = blueprint.properties;
+    // "external" may be listed but approves nothing: external effects always need
+    // policy.external "ask" plus a per-run --allow external from a person.
+    expect([...policy.properties.allow.items.enum].sort()).toEqual(
+      [
+        "fs.create",
+        "fs.edit",
+        "fs.delete",
+        "fs.move",
+        "deps.change",
+        "install",
+        "generator",
+        "command",
+        "network",
+        "git",
+        "process",
+        "external",
+      ].sort(),
+    );
+    expect([...policy.properties.external.enum].sort()).toEqual(["ask", "deny"]);
   });
 });
