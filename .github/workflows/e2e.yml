@@ -1,6 +1,7 @@
 # Full-pipeline E2E: runs the REAL upstream generators (create-turbo, create-next-app,
 # sv, create-hono) plus groot's direct-write scaffolds, stitches, and installs the
-# result. Network-dependent and slower than CI, so it lives in its own workflow.
+# result — for both topologies (Turborepo monorepo and single-app). Network-dependent
+# and slower than CI, so it lives in its own workflow.
 #
 # The weekly cron doubles as upstream drift detection (docs/roadmap.md v0.4): when a
 # generator changes flags or output shape, this goes red before any user hits it.
@@ -46,4 +47,5 @@ jobs:
         working-directory: packages/cli
         env:
           GROOT_E2E: "1"
-        run: bun test generate.e2e
+        # generate.e2e: monorepo matrix · single.e2e: single-app topology (create-hono)
+        run: bun test generate.e2e single.e2e
