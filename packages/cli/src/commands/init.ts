@@ -22,6 +22,7 @@ import {
   gitIdentityPresent,
   publishToGitHub,
 } from "../engine/github.ts";
+import { resolveGenerators } from "../engine/locks.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
 import {
   applyYesDefaults,
@@ -332,14 +333,24 @@ async function runInit(args: {
   const step = (label: string): void => {
     console.log(`${pc.green("◇")} ${label}…`);
   };
-  if (topology === "single") {
-    await generateSingle(plan, { verbose: args.verbose, onStep: step });
-    await stitchSingle(plan, { onStep: step });
-  } else {
-    await generate(plan, { verbose: args.verbose, onStep: step });
-    await stitch(plan, { onStep: step });
+  // Exact generator versions (groot.lock.json): series pins resolve once, here,
+  // and generators run at exactly those versions. Offline → recorded as unresolved.
+  step("Resolving exact generator versions");
+  const generatorLocks = await resolveGenerators(plan, { includeTrunk: topology === "monorepo" });
+  for (const lock of generatorLocks) {
+    console.log(
+      `  ${pc.dim(`${lock.package}@${lock.range} → ${lock.version ?? "unresolved (registry unreachable; using the series)"}`)}`,
+    );
   }
-  const verifyNotes = await verify(plan, { verbose: args.verbose, onStep: step });
+  const run: Plan = { ...plan, generatorLocks };
+  if (topology === "single") {
+    await generateSingle(run, { verbose: args.verbose, onStep: step });
+    await stitchSingle(run, { onStep: step });
+  } else {
+    await generate(run, { verbose: args.verbose, onStep: step });
+    await stitch(run, { onStep: step });
+  }
+  const verifyNotes = await verify(run, { verbose: args.verbose, onStep: step });
 
   // After the initial commit: detect gh → auth → create + push. Degrades to
   // printed fallback steps, never a failure — the workspace itself is valid.

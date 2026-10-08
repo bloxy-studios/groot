@@ -17,6 +17,7 @@ import {
   resolveAddScaffold,
 } from "../engine/add.ts";
 import { EXIT, GrootError } from "../engine/errors.ts";
+import { resolveGenerators } from "../engine/locks.ts";
 import { loadManifest } from "../engine/manifest.ts";
 import { describeScaffold, planToManifest } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
@@ -87,7 +88,13 @@ async function runAdd(args: {
   const step = (label: string): void => {
     console.log(`${pc.green("◇")} ${label}…`);
   };
-  await executeAdd(plan, scaffold, { verbose: args.verbose, onStep: step });
+  // v2 workspaces record the exact generator version in groot.lock.json; v1
+  // workspaces stay exactly as v1 wrote them (no lock, no migration).
+  const generatorLocks =
+    plan.manifestVersion === 2
+      ? await resolveGenerators({ ...plan, scaffolds: [scaffold] }, { includeTrunk: false })
+      : undefined;
+  await executeAdd({ ...plan, generatorLocks }, scaffold, { verbose: args.verbose, onStep: step });
   printNextSteps(plan, scaffold);
 }
 

@@ -25,6 +25,7 @@ import { GrootV2Error } from "../errors.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import type { PlanBuilder } from "../planner/builder.ts";
+import { planLockUpdate } from "../planner/lock-edit.ts";
 import { findRegions, upsertRegion } from "../transforms/regions.ts";
 import {
   AGENTS_REGION_ID,
@@ -303,13 +304,13 @@ export async function planContextSync(input: ContextSyncInput): Promise<ContextS
     JSON.stringify(artifacts) ===
     JSON.stringify([...input.lock.context].sort((a, b) => a.path.localeCompare(b.path)));
   if (!unchanged) {
-    await builder.editFile({
-      path: "groot.lock.json",
-      edit: { kind: "json", ops: [{ op: "set", pointer: "/context", value: artifacts }] },
-      description: "record the managed instruction files and their hashes in groot.lock.json",
-      owns: ["/context"],
-      createIfMissing: false,
-    });
+    await planLockUpdate(
+      builder,
+      input.lock,
+      [{ op: "set", pointer: "/context", value: artifacts }],
+      "record the managed instruction files and their hashes in groot.lock.json",
+      ["/context"],
+    );
   }
   return {
     changes: session.changes,

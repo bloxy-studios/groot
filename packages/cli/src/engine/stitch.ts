@@ -10,6 +10,7 @@ import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { backendEnvLines } from "./env-names.ts";
 import { EXIT, GrootError } from "./errors.ts";
+import { stitchLock } from "./locks.ts";
 import { planToManifest } from "./plan.ts";
 import type { FrameworkId, Plan } from "./types.ts";
 
@@ -434,6 +435,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchTrustedDependencies(plan));
   push(await stitchRootGitignore(plan));
   push(await stitchManifest(plan));
+  push(stitchLock(plan));
   return notes;
 }
 

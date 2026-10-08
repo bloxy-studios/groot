@@ -28,6 +28,7 @@ import { GrootV2Error } from "../errors.ts";
 import type { Recipe, RecipeOptions } from "../recipes/types.ts";
 import { type CoreContext, createdWith } from "../runtime.ts";
 import { PlanBuilder } from "./builder.ts";
+import { planLockUpdate } from "./lock-edit.ts";
 
 export interface AddCapabilityInput {
   readonly root: string;
@@ -203,14 +204,13 @@ export async function planAddCapability(
     owns: ["/capabilities", "/environment", "/verification", "/decisions"],
     createIfMissing: false,
   });
-  await builder.editFile({
-    path: "groot.lock.json",
-    edit: { kind: "json", ops: appendAll("/recipes", locks) },
-    description:
-      "record exact recipe versions, dependencies, and owned artifacts in groot.lock.json",
-    owns: ["/recipes"],
-    createIfMissing: false,
-  });
+  await planLockUpdate(
+    builder,
+    input.lock,
+    appendAll("/recipes", locks),
+    "record exact recipe versions, dependencies, and owned artifacts in groot.lock.json",
+    ["/recipes"],
+  );
   builder.own({
     path: "groot.json",
     owner: "groot",

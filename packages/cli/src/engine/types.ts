@@ -5,6 +5,7 @@
  */
 
 import type { BlueprintV2 } from "../core/contracts/blueprint.ts";
+import type { GeneratorLock } from "../core/contracts/lock.ts";
 
 /** The five scaffold slots a groot workspace can fill. */
 export type Slot = "web" | "mobile" | "desktop" | "api" | "backend";
@@ -96,6 +97,11 @@ export interface Plan {
   readonly manifestVersion?: 1 | 2;
   /** The existing v2 blueprint being grown (groot add on a v2 workspace). */
   readonly blueprint?: BlueprintV2 | null;
+  /**
+   * Exact generator resolutions (engine/locks.ts). When present, generators
+   * run as `bunx <pkg>@<exact>` and stitch records them in groot.lock.json.
+   */
+  readonly generatorLocks?: readonly GeneratorLock[];
 }
 
 /** Current groot.json manifest schema version. */

@@ -15,6 +15,7 @@ import { basename, dirname, join } from "node:path";
 import { ADAPTERS } from "../adapters/index.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { type GenerateOptions, growScaffold, moveDirContents } from "./generate.ts";
+import { stitchLock } from "./locks.ts";
 import {
   stitchFastifyScripts,
   stitchHonoPort,
@@ -137,5 +138,6 @@ export async function stitchSingle(
   push(await stitchTrustedDependencies(plan));
   push(await stitchRootGitignore(plan));
   push(await stitchManifest(plan));
+  push(stitchLock(plan));
   return notes;
 }
