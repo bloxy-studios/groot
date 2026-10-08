@@ -2,6 +2,25 @@ import { describe, expect, test } from "bun:test";
 import type { JsonOp, StructuredEdit } from "../contracts/plan.ts";
 import { applyEdit, findRegions, removeRegion, TransformConflict } from "./index.ts";
 
+/**
+ * Run `body`, then put Object.prototype back exactly as it was, so a
+ * prototype-pollution regression fails its own test without leaking into the
+ * rest of the run: members `body` added are deleted and every original member
+ * is redefined. Membership is tested with Object.hasOwn: `key in original`
+ * would also find an added member through the polluted prototype itself.
+ */
+function isolatingObjectPrototype<T>(body: () => T): T {
+  const original = Object.getOwnPropertyDescriptors(Object.prototype);
+  try {
+    return body();
+  } finally {
+    for (const key of Reflect.ownKeys(Object.prototype)) {
+      if (!Object.hasOwn(original, key)) Reflect.deleteProperty(Object.prototype, key);
+    }
+    Object.defineProperties(Object.prototype, original);
+  }
+}
+
 describe("json edits", () => {
   const pkg = `{\n    "name": "api",\n    "scripts": {\n        "dev": "bun --watch src/index.ts"\n    }\n}\n`;
 
@@ -54,7 +73,6 @@ describe("json edits", () => {
   });
 
   test("pointers into the prototype chain are conflicts and leave Object.prototype untouched", () => {
-    const original = Object.getOwnPropertyDescriptors(Object.prototype);
     const originalNames = Object.getOwnPropertyNames(Object.prototype).sort();
     const originalHasOwn = Object.prototype.hasOwnProperty;
     const attempts: JsonOp[] = [
@@ -64,29 +82,38 @@ describe("json edits", () => {
       { op: "set", pointer: "/constructor/prototype/isAdmin", value: true },
       { op: "append-unique", pointer: "/scripts/prototype", value: "x" },
     ];
-    let outcomes: unknown[] = [];
-    let names: string[] = [];
-    let hasOwn: unknown;
-    try {
-      outcomes = attempts.map((op) => {
+    const { outcomes, names, hasOwn } = isolatingObjectPrototype(() => ({
+      outcomes: attempts.map((op) => {
         try {
           return applyEdit(`{"name":"app","scripts":{}}\n`, { kind: "json", ops: [op] }, "a.json");
         } catch (error) {
           return error;
         }
-      });
-      names = Object.getOwnPropertyNames(Object.prototype).sort();
-      hasOwn = Object.prototype.hasOwnProperty;
-    } finally {
-      // A regression must not leak into the rest of the test run.
-      for (const key of Object.getOwnPropertyNames(Object.prototype)) {
-        if (!(key in original)) delete (Object.prototype as Record<string, unknown>)[key];
-      }
-      Object.defineProperties(Object.prototype, original);
-    }
+      }),
+      names: Object.getOwnPropertyNames(Object.prototype).sort(),
+      hasOwn: Object.prototype.hasOwnProperty,
+    }));
     for (const outcome of outcomes) expect(outcome).toBeInstanceOf(TransformConflict);
     expect(names).toEqual(originalNames);
     expect(hasOwn).toBe(originalHasOwn);
+  });
+
+  test("the prototype isolation those checks run in removes members a regression adds", () => {
+    // Arrange: a harmless stand-in for pollution (unique name, not enumerable).
+    const probe = "grootPollutionProbe";
+
+    // Act
+    isolatingObjectPrototype(() => {
+      Object.defineProperty(Object.prototype, probe, {
+        value: true,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    // Assert
+    expect(Object.hasOwn(Object.prototype, probe)).toBe(false);
+    expect(probe in {}).toBe(false);
   });
 
   test("inherited members are not JSON members: ops create own members instead", () => {

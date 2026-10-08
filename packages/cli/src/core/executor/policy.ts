@@ -70,7 +70,8 @@ export function requiredClasses(plan: OperationPlan): ActionClass[] {
 /**
  * Classes the policy (plus explicit approvals) does not permit. External
  * effects are never implicit: they additionally need `policy.external: "ask"`
- * AND an explicit "external" approval for this run.
+ * AND an explicit "external" approval for this run — "external" listed in
+ * `policy.allow` does not count.
  */
 export function deniedClasses(
   plan: OperationPlan,

@@ -1,10 +1,9 @@
 /**
  * Contract guards for untrusted documents: a plan cannot carry the contents
- * of a dotenv file, a JSON edit cannot address prototype machinery, and a
- * committed groot.json cannot pre-approve external effects.
+ * of a dotenv file (whatever the letter case of its name), and a JSON edit
+ * cannot address prototype machinery.
  */
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY, Policy } from "./blueprint.ts";
 import { isSecretBearingEdit, JsonOp, PlannedAction, type StructuredEdit } from "./plan.ts";
 
 const SHA = `sha256:${"a".repeat(64)}`;
@@ -55,6 +54,18 @@ describe("file.edit never carries dotenv contents", () => {
     expect(isSecretBearingEdit("README.md", ENV_EDIT)).toBe(true);
     expect(isSecretBearingEdit("apps/web/.env.development.local", LINES_EDIT)).toBe(true);
   });
+
+  test("a dotenv name is matched in any letter case, as case-insensitive filesystems resolve it", () => {
+    // Default macOS and Windows volumes open .env.local for `.ENV.local`.
+    for (const path of [".ENV.local", "apps/web/.Env", ".env.PRODUCTION.LOCAL"]) {
+      expect(isSecretBearingEdit(path, LINES_EDIT)).toBe(true);
+      const parsed = PlannedAction.safeParse(fileEdit(path, LINES_EDIT, "SECRET=hunter2\n"));
+      expect(parsed.error?.issues[0]?.path).toEqual(["after"]);
+    }
+    for (const path of [".ENV.EXAMPLE", "apps/web/.env.Sample", ".environment", "..env"]) {
+      expect(isSecretBearingEdit(path, LINES_EDIT)).toBe(false);
+    }
+  });
 });
 
 describe("JSON pointers", () => {
@@ -77,14 +88,5 @@ describe("JSON pointers", () => {
     ]) {
       expect(JsonOp.safeParse({ op: "remove", pointer }).success).toBe(true);
     }
-  });
-});
-
-describe("policy", () => {
-  test("policy.allow cannot pre-approve external effects", () => {
-    expect(Policy.safeParse({ allow: ["fs.edit", "external"], external: "ask" }).success).toBe(
-      false,
-    );
-    expect(Policy.safeParse(DEFAULT_POLICY).success).toBe(true);
   });
 });

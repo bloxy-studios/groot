@@ -114,11 +114,15 @@ export const StructuredEdit = z.discriminatedUnion("kind", [
 ]);
 export type StructuredEdit = z.infer<typeof StructuredEdit>;
 
-/** Dotenv files by basename: `.env`, `.env.local`, `.env.production`, … */
-const DOTENV_FILE = /^\.env(?:\..+)?$/;
+/**
+ * Dotenv files by basename: `.env`, `.env.local`, `.env.production`, … in any
+ * letter case, because case-insensitive filesystems (the macOS and Windows
+ * defaults) open `.env.local` for `.ENV.local`.
+ */
+const DOTENV_FILE = /^\.env(?:\..+)?$/i;
 
 /** Committed example dotenv files, which hold placeholders only. */
-const DOTENV_EXAMPLE = /^\.env\.(?:example|sample|template)$/;
+const DOTENV_EXAMPLE = /^\.env\.(?:example|sample|template)$/i;
 
 /**
  * True when an edit's result may hold secret values: every `env` edit, and

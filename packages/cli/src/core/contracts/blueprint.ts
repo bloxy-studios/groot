@@ -144,10 +144,13 @@ export type ContextSettings = z.infer<typeof ContextSettings>;
 export const Policy = z
   .object({
     /**
-     * Classes allowed without a per-run approval. Never `external`: a
-     * committed groot.json cannot pre-approve effects on provider accounts.
+     * Classes allowed without a per-run approval. Listing `external` here
+     * approves nothing: the executor only takes an explicit per-run approval
+     * for external effects, so a committed groot.json can never pre-approve
+     * them. The entry stays valid, so such a policy is still read and
+     * enforced as written.
      */
-    allow: z.array(ActionClass.exclude(["external"])),
+    allow: z.array(ActionClass),
     /** Effects on provider accounts are never implicit ("ask" = each run needs --allow external). */
     external: z.enum(["deny", "ask"]),
   })
