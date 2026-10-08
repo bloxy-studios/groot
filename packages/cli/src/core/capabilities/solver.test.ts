@@ -195,3 +195,209 @@ describe("compatibility solver", () => {
     expect(chosen.selections[0]?.recipe).toBe("data.other-sqlite");
   });
 });
+
+const recordedData = (recipe: string) =>
+  blueprintFixture({
+    capabilities: [
+      {
+        id: "data",
+        recipe,
+        recipeVersion: "1.0.0",
+        target: "api",
+        options: {},
+        addedBy: null,
+        addedAt: "2026-10-07T00:00:00.000Z",
+      },
+    ],
+  });
+
+/** Solve `requested` in the given order and in reverse — the outcome must not depend on it. */
+function bothOrders(
+  requested: SolveInput["requested"],
+  input: Omit<SolveInput, "requested">,
+): ReturnType<typeof solve>[] {
+  return [solve({ ...input, requested }), solve({ ...input, requested: [...requested].reverse() })];
+}
+
+const codes = (result: ReturnType<typeof solve>): string[] =>
+  result.refusals.map((refusal) => refusal.code);
+const keys = (result: ReturnType<typeof solve>): string[] =>
+  result.selections.map((selection) => `${selection.capability}@${selection.target}`);
+
+describe("compatibility solver: one solve equals the same steps taken one at a time", () => {
+  const TWO_DATA = [
+    ...CATALOG,
+    fakeRecipe(descriptor({ id: "data.other-sqlite", capability: "data" })),
+  ];
+  const base = { blueprint: blueprintFixture(), observation, recipes: TWO_DATA };
+
+  test("a requirement's recipe constraint holds when the required capability is requested too", () => {
+    for (const result of bothOrders(
+      [{ capability: "data", recipe: "data.other-sqlite" }, { capability: "auth" }],
+      base,
+    )) {
+      expect(result.ok).toBe(false);
+      expect(codes(result)).toContain("missing-requirement");
+      expect(result.refusals.find((r) => r.code === "missing-requirement")?.message).toContain(
+        "auth.test-auth requires data via data.test-sqlite",
+      );
+    }
+    for (const result of bothOrders(
+      [{ capability: "data", recipe: "data.test-sqlite" }, { capability: "auth" }],
+      base,
+    )) {
+      expect(result.ok).toBe(true);
+      expect(result.selections.map((s) => [s.capability, s.recipe, s.reason])).toEqual([
+        ["data", "data.test-sqlite", "requested"],
+        ["auth", "auth.test-auth", "requested"],
+      ]);
+    }
+    // The two-step equivalent was already refused.
+    const recorded = solve({
+      ...base,
+      blueprint: recordedData("data.other-sqlite"),
+      requested: [{ capability: "auth" }],
+    });
+    expect(codes(recorded)).toEqual(["missing-requirement"]);
+  });
+
+  test("a request aimed at another app does not override a requirement on this one", () => {
+    const blueprint = blueprintFixture({
+      apps: [
+        appFixture({ id: "api", path: "apps/api" }),
+        appFixture({ id: "admin", path: "apps/admin" }),
+      ],
+    });
+    const two = observationFixture([
+      unitFixture({ path: "apps/api" }),
+      unitFixture({ path: "apps/admin" }),
+    ]);
+    for (const result of bothOrders(
+      [
+        { capability: "auth", target: "api" },
+        { capability: "data", recipe: "data.other-sqlite", target: "admin" },
+      ],
+      { blueprint, observation: two, recipes: TWO_DATA },
+    )) {
+      expect(result.ok).toBe(true);
+      expect(
+        result.selections.map((s) => `${s.capability}@${s.target}=${s.recipe}`).sort(),
+      ).toEqual([
+        "auth@api=auth.test-auth",
+        "data@admin=data.other-sqlite",
+        "data@api=data.test-sqlite",
+      ]);
+    }
+  });
+
+  test("declared recipe conflicts between recipes planned together are refused", () => {
+    const conflicting = [
+      fakeRecipe(descriptor({ id: "data.x", capability: "data" })),
+      fakeRecipe(descriptor({ id: "data.y", capability: "data" })),
+      fakeRecipe(
+        descriptor({
+          id: "auth.a",
+          capability: "auth",
+          requires: [{ capability: "data", recipes: [] }],
+          conflicts: [
+            {
+              capability: "data",
+              recipe: "data.y",
+              dependency: null,
+              reason: "y can't hold sessions",
+            },
+          ],
+        }),
+      ),
+    ];
+    const input = { blueprint: blueprintFixture(), observation, recipes: conflicting };
+    for (const result of bothOrders(
+      [{ capability: "data", recipe: "data.y" }, { capability: "auth" }],
+      input,
+    )) {
+      expect(result.ok).toBe(false);
+      expect(codes(result)).toEqual(["recipe-conflict"]);
+      expect(result.refusals[0]?.message).toContain("auth.a conflicts with data.y on api");
+    }
+    for (const result of bothOrders(
+      [{ capability: "data", recipe: "data.x" }, { capability: "auth" }],
+      input,
+    )) {
+      expect(result.ok).toBe(true);
+    }
+    // A requirement that resolves to the conflicting recipe on its own is refused too…
+    const only = solve({
+      ...input,
+      recipes: conflicting.filter((recipe) => recipe.descriptor.id !== "data.x"),
+      requested: [{ capability: "auth" }],
+    });
+    expect(codes(only)).toEqual(["recipe-conflict"]);
+    // …exactly like the two-step equivalent.
+    const recorded = solve({
+      ...input,
+      blueprint: recordedData("data.y"),
+      requested: [{ capability: "auth" }],
+    });
+    expect(codes(recorded)).toEqual(["recipe-conflict"]);
+  });
+
+  test("two requests for one capability on one app with different recipes are refused, not dropped", () => {
+    for (const result of bothOrders(
+      [
+        { capability: "data", recipe: "data.other-sqlite" },
+        { capability: "data", recipe: "data.test-sqlite" },
+      ],
+      base,
+    )) {
+      expect(result.ok).toBe(false);
+      expect(codes(result)).toEqual(["recipe-conflict"]);
+      expect(result.selections).toHaveLength(1);
+    }
+    const same = solve({
+      ...base,
+      requested: [
+        { capability: "data", recipe: "data.test-sqlite" },
+        { capability: "data", recipe: "data.test-sqlite" },
+      ],
+    });
+    expect(same.ok).toBe(true);
+    expect(keys(same)).toEqual(["data@api"]);
+  });
+
+  test("re-requesting a recorded capability is already satisfied, even when several recipes fit", () => {
+    const result = solve({
+      ...base,
+      blueprint: recordedData("data.test-sqlite"),
+      requested: [{ capability: "data" }],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.selections).toEqual([
+      {
+        capability: "data",
+        recipe: "data.test-sqlite",
+        recipeVersion: "1.0.0",
+        target: "api",
+        reason: "requested",
+        alreadySatisfied: true,
+      },
+    ]);
+    // Naming a different recipe for it is still a conflict.
+    const other = solve({
+      ...base,
+      blueprint: recordedData("data.test-sqlite"),
+      requested: [{ capability: "data", recipe: "data.other-sqlite" }],
+    });
+    expect(codes(other)).toEqual(["recipe-conflict"]);
+  });
+
+  test("a satisfied requirement is listed once, whichever order requested it", () => {
+    for (const result of bothOrders([{ capability: "data" }, { capability: "auth" }], {
+      ...base,
+      blueprint: recordedData("data.test-sqlite"),
+    })) {
+      expect(result.ok).toBe(true);
+      expect(keys(result)).toEqual(["data@api", "auth@api"]);
+      expect(result.selections[0]).toMatchObject({ reason: "requested", alreadySatisfied: true });
+    }
+  });
+});
