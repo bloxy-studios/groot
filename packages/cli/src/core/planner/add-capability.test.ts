@@ -334,7 +334,7 @@ describe("add-capability planner", () => {
     expect(mixed).toMatchObject({ id: "GROOT_E_INCOMPATIBLE", exitCode: 2 });
   });
 
-  test("a recipe choice names its capability, and resolveWith is a command the CLI can follow", async () => {
+  test("a recipe choice names its capability, and appending --recipe <id> resolves it", async () => {
     // Arrange — auth.any-data takes data from any recipe, and two recipes supply data.
     const { root, blueprint, lock, blueprintSha } = project();
     const anyData = [
@@ -371,7 +371,7 @@ describe("add-capability planner", () => {
     const resolution = async (requested: CapabilityRequest[]): Promise<string[]> =>
       (await blockedOn(requested)).blocked.map((decision) => decision.resolveWith);
 
-    // Act — `groot plan add auth`: the CLI would give --recipe to auth, so data is named first.
+    // Act — `groot plan add auth`: the data dependency has two candidate recipes.
     const dependency = await blockedOn([{ capability: "auth" }]);
 
     // Assert
@@ -395,11 +395,12 @@ describe("add-capability planner", () => {
             recommended: false,
           },
         ],
-        resolveWith: "groot plan add data,auth --recipe <id>",
+        resolveWith: "--recipe <id>",
       },
     ]);
-    expect(dependency.hint).toBe("groot plan add data,auth --recipe <id>");
-    // Following it — `groot plan add data,auth --recipe data.other-test` — plans both.
+    expect(dependency.hint).toBe("--recipe data.add-test · --recipe data.other-test");
+    // Following it — `groot plan add auth --recipe data.other-test`, which the CLI turns into
+    // these requests (commands/plan.ts capabilityRequests) — plans both.
     const followed = await planAddCapability(ctx(), {
       ...base,
       requested: [{ capability: "data", recipe: "data.other-test" }, { capability: "auth" }],
@@ -408,20 +409,15 @@ describe("add-capability planner", () => {
       "data.other-test",
       "auth.any-data",
     ]);
-    // Named, but not first: one decision, the same resolution; a shared --target is kept.
-    expect(await resolution([{ capability: "auth" }, { capability: "data" }])).toEqual([
-      "groot plan add data,auth --recipe <id>",
-    ]);
-    expect(await resolution([{ capability: "auth", target: "api" }])).toEqual([
-      "groot plan add data,auth --target api --recipe <id>",
-    ]);
-    // Named first: the flag alone.
-    expect(await resolution([{ capability: "data" }, { capability: "auth" }])).toEqual([
-      "--recipe <id>",
-    ]);
-    // The one --recipe already belongs to another capability: plan the choice on its own first.
-    expect(await resolution([{ capability: "auth", recipe: "auth.any-data" }])).toEqual([
-      "groot plan add data --recipe <id>, apply it, then plan auth again",
-    ]);
+    // Named in any position, with a target, or next to another capability's recipe: the flag
+    // always resolves it, because each --recipe attaches to the capability it supplies.
+    for (const requested of [
+      [{ capability: "auth" }, { capability: "data" }],
+      [{ capability: "auth", target: "api" }],
+      [{ capability: "data" }, { capability: "auth" }],
+      [{ capability: "auth", recipe: "auth.any-data" }],
+    ] satisfies CapabilityRequest[][]) {
+      expect(await resolution(requested)).toEqual(["--recipe <id>"]);
+    }
   });
 });

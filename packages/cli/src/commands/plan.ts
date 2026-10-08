@@ -8,8 +8,9 @@ import { resolve } from "node:path";
 import { defineCommand } from "citty";
 import pc from "picocolors";
 import { renderPlan } from "../cli/render.ts";
-import { GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
+import { GLOBAL_ARGS, repeatedFlag, runV2Command } from "../cli/run.ts";
 import { createApi } from "../core/api.ts";
+import { getRecipe } from "../core/capabilities/registry.ts";
 import { GrootV2Error } from "../core/errors.ts";
 import { writeFileAtomic } from "../core/fs/atomic.ts";
 import { prettyJson } from "../core/json.ts";
@@ -19,6 +20,45 @@ function applyHint(planId: string, steps: number): string {
   return steps === 0
     ? pc.green("Nothing to do — the project already has everything this plan would add.")
     : `${pc.cyan("Apply with:")} groot apply ${planId}`;
+}
+
+/**
+ * Solver requests: every named capability, plus each `--recipe` (repeatable)
+ * attached to the capability that recipe supplies — added first when it is a
+ * dependency nobody named, so a blocked "choose with --recipe <id>" decision
+ * can always be followed by appending that flag. An unknown recipe id stays
+ * on the first capability, where the solver refuses it with alternatives.
+ */
+export function capabilityRequests(
+  names: readonly string[],
+  recipeIds: readonly string[],
+  target: string | null,
+  capabilityOf: (recipeId: string) => string | undefined,
+): CapabilityRequestInput[] {
+  const requests: CapabilityRequestInput[] = names.map((capability) => ({
+    capability,
+    target,
+    recipe: null,
+  }));
+  for (const recipe of recipeIds) {
+    const capability = capabilityOf(recipe) ?? requests[0]?.capability;
+    if (capability === undefined) continue;
+    const index = requests.findIndex((request) => request.capability === capability);
+    if (index === -1) {
+      requests.unshift({ capability, target, recipe });
+      continue;
+    }
+    const current = requests[index] as CapabilityRequestInput;
+    if (current.recipe != null && current.recipe !== recipe) {
+      throw new GrootV2Error(
+        "GROOT_E_USAGE",
+        `Two recipes for ${capability}: ${current.recipe} and ${recipe}.`,
+        { hint: "Pass one --recipe per capability." },
+      );
+    }
+    requests[index] = { ...current, recipe };
+  }
+  return requests;
 }
 
 /** Positional capability names; commas allowed ("auth,data"). */
@@ -41,7 +81,11 @@ const add = defineCommand({
       description: "Capability id(s): auth, data, …",
     },
     target: { type: "string", description: "App id or path when several apps fit" },
-    recipe: { type: "string", description: "Recipe id when several recipes fit" },
+    recipe: {
+      type: "string",
+      description:
+        "Recipe id when several recipes fit (repeatable; applies to the capability it supplies)",
+    },
     experimental: {
       type: "boolean",
       default: false,
@@ -50,7 +94,7 @@ const add = defineCommand({
     out: { type: "string", description: "Also write the plan JSON to this file" },
     ...GLOBAL_ARGS,
   },
-  async run({ args }) {
+  async run({ args, rawArgs }) {
     await runV2Command("plan add", { json: args.json, events: args.events }, async (ctx) => {
       const names = capabilityNames((args._ as string[] | undefined) ?? [args.capability]);
       if (names.length === 0) {
@@ -58,12 +102,13 @@ const add = defineCommand({
           hint: "Example: groot plan add auth --target api",
         });
       }
-      const requests: CapabilityRequestInput[] = names.map((capability, index) => ({
-        capability,
-        target: args.target ?? null,
-        recipe: index === 0 ? (args.recipe ?? null) : null,
-      }));
       const api = createApi();
+      const requests = capabilityRequests(
+        names,
+        repeatedFlag(rawArgs, "recipe"),
+        args.target ?? null,
+        (id) => getRecipe(id)?.descriptor.capability,
+      );
       const root = api.projectRoot(ctx.cwd);
       const plan = await api.planAdd(ctx, root, requests, { experimental: args.experimental });
       if (args.out !== undefined) writeFileAtomic(resolve(ctx.cwd, args.out), prettyJson(plan));

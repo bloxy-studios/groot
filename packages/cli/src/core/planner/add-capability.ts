@@ -48,31 +48,9 @@ const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
 const MAX_HINTS = 6;
 
-/** What a choice is made against: the request as given, and the recipe catalog. */
+/** What a choice is made against: the recipe catalog. */
 interface ChoiceContext {
-  readonly requested: readonly CapabilityRequest[];
   readonly catalog: readonly Recipe[];
-}
-
-/**
- * How to choose a recipe for `capability`. `groot plan add` gives its one
- * --recipe to the first capability it names, so a choice for any other — a
- * dependency, or a capability named later — names that capability first; and
- * when another capability already carries the flag, the choice is planned and
- * applied on its own first. (MCP sets `recipe` on that capability's entry.)
- */
-function recipeResolution(capability: string, requested: readonly CapabilityRequest[]): string {
-  if (requested[0]?.capability === capability) return "--recipe <id>";
-  const targets = new Set(requested.map((request) => request.target ?? null));
-  const [shared] = targets;
-  const target = targets.size === 1 && shared ? ` --target ${shared}` : "";
-  const others = [...new Set(requested.map((request) => request.capability))].filter(
-    (name) => name !== capability,
-  );
-  if (requested.some((request) => request.capability !== capability && request.recipe)) {
-    return `groot plan add ${capability}${target} --recipe <id>, apply it, then plan ${others.join(",")} again`;
-  }
-  return `groot plan add ${[capability, ...others].join(",")}${target} --recipe <id>`;
 }
 
 /** The value an alternative chooses ("--recipe data.a" → "data.a"). */
@@ -106,11 +84,10 @@ function choiceDecision(
         recommended: false,
       };
     }),
-    resolveWith: !byRecipe
-      ? "--target <app>"
-      : capability === undefined
-        ? "--recipe <id>"
-        : recipeResolution(capability, context.requested),
+    // `groot plan add` attaches each --recipe to the capability it supplies
+    // (dependencies included) and MCP sets `recipe` on that capability's
+    // entry, so appending the flag always resolves the choice.
+    resolveWith: byRecipe ? "--recipe <id>" : "--target <app>",
   };
 }
 
@@ -172,7 +149,7 @@ export async function planAddCapability(
     recipes: input.recipes,
   });
   const catalog = input.recipes ?? listRecipes();
-  if (!result.ok) throw refusalError(result.refusals, { requested: input.requested, catalog });
+  if (!result.ok) throw refusalError(result.refusals, { catalog });
 
   const pending = result.selections.filter((selection) => !selection.alreadySatisfied);
   const names = input.requested.map((request) => request.capability).join(" + ");

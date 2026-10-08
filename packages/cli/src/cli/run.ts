@@ -61,6 +61,21 @@ export interface CommandResult {
   readonly human?: () => unknown;
 }
 
+/**
+ * Every value of a repeatable string flag (`--recipe a --recipe b`,
+ * `--recipe=b`): citty keeps only the last occurrence, so they are collected
+ * from the raw args.
+ */
+export function repeatedFlag(rawArgs: readonly string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < rawArgs.length; index++) {
+    const arg = rawArgs[index] as string;
+    if (arg === `--${flag}` && index + 1 < rawArgs.length) values.push(rawArgs[++index] as string);
+    else if (arg.startsWith(`--${flag}=`)) values.push(arg.slice(flag.length + 3));
+  }
+  return values;
+}
+
 /** Shared citty arg definitions for the v2 machine contract. */
 export const GLOBAL_ARGS = {
   json: {
