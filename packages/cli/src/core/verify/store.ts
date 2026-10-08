@@ -5,13 +5,14 @@
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { EvidenceId } from "../contracts/common.ts";
 import { type Evidence, Evidence as EvidenceSchema } from "../contracts/evidence.ts";
 import { GrootV2Error } from "../errors.ts";
 import { writeFileAtomic } from "../fs/atomic.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { toProjectPath } from "../fs/paths.ts";
 import { prettyJson } from "../json.ts";
-import { redact } from "../redact.ts";
+import { redact, redactValue } from "../redact.ts";
 import { ensureStateDir, statePaths } from "../state.ts";
 
 export interface ArtifactInput {
@@ -22,8 +23,10 @@ export interface ArtifactInput {
 }
 
 /**
- * Persist evidence and its artifacts (artifact content is redacted with the
- * run's known secrets first). Returns the stored, validated record.
+ * Persist evidence and its artifacts. Everything is redacted with the run's
+ * known secrets first — artifact content and every field of the record
+ * (summary, details, reason, nextStep, limitations, …), since summaries are
+ * built from command output. Returns the stored, validated record.
  */
 export function storeEvidence(
   root: string,
@@ -44,19 +47,24 @@ export function storeEvidence(
       bytes: Buffer.byteLength(content),
     };
   });
-  const record = EvidenceSchema.parse({ ...evidence, artifacts: stored });
+  const record = EvidenceSchema.parse(redactValue({ ...evidence, artifacts: stored }, secrets));
   writeFileAtomic(join(dir, "evidence.json"), prettyJson(record));
   return record;
 }
 
 export async function readEvidence(root: string, id: string): Promise<Evidence> {
+  const notFound = (): GrootV2Error =>
+    new GrootV2Error("GROOT_E_NOT_FOUND", `No evidence ${id} in this project.`, {
+      hint: "List evidence with `groot evidence`.",
+    });
+  // Validated before it becomes a path segment: an id is never a traversal.
+  if (!EvidenceId.safeParse(id).success) throw notFound();
   let raw: string;
   try {
     raw = await readFile(join(statePaths.evidence(root, id), "evidence.json"), "utf8");
-  } catch {
-    throw new GrootV2Error("GROOT_E_NOT_FOUND", `No evidence ${id} in this project.`, {
-      hint: "List evidence with `groot evidence`.",
-    });
+  } catch (error) {
+    if (error instanceof GrootV2Error) throw error; // e.g. a symlinked state directory
+    throw notFound();
   }
   return EvidenceSchema.parse(JSON.parse(raw));
 }

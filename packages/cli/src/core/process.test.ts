@@ -96,4 +96,49 @@ describe.skipIf(!posix)("runProcess group supervision", () => {
     expect(result.stdout).not.toContain(secret);
     expect(result.stdout).toContain("[REDACTED]");
   });
+
+  test("a secret split across two writes is redacted in captured and streamed output", async () => {
+    // Arrange
+    const secret = "abcdef1234567890";
+    const streamed: string[] = [];
+
+    // Act
+    const result = await runProcess({
+      argv: [
+        "sh",
+        "-c",
+        "printf 'abcdef12'; sleep 0.3; printf '34567890\\n'; printf 'BETTER_AUTH_SECRET='; sleep 0.3; printf 'hunter2hunter2\\n'; printf 'tail'",
+      ],
+      cwd: tmpdir(),
+      timeoutMs: 20_000,
+      secrets: [secret],
+      onOutput: (chunk) => streamed.push(chunk),
+    });
+
+    // Assert
+    const expected = "[REDACTED]\nBETTER_AUTH_SECRET=[REDACTED]\ntail";
+    expect(result.stdout).toBe(expected);
+    expect(streamed.join("")).toBe(expected);
+  }, 30_000);
+
+  test("the capture cap drops whole lines from the head, never part of a secret", async () => {
+    // Arrange
+    const secret = "abcdef1234567890";
+
+    // Act
+    const result = await runProcess({
+      argv: [
+        "sh",
+        "-c",
+        "printf 'abcdef12'; sleep 0.3; printf '34567890\\nsecond line\\nthird\\n'",
+      ],
+      cwd: tmpdir(),
+      timeoutMs: 20_000,
+      secrets: [secret],
+      captureLimit: 24,
+    });
+
+    // Assert
+    expect(result.stdout).toBe("second line\nthird\n");
+  }, 30_000);
 });
