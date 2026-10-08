@@ -2,6 +2,13 @@
  * Read-only git facts: revision identity and working-tree state. Evidence and
  * plans record these so results are tied to what was actually checked — a
  * dirty tree carries a fingerprint of its uncommitted content, not just HEAD.
+ *
+ * These probes must not run commands that a repository or the inherited
+ * environment configures: every GIT_* variable is dropped (GIT_CONFIG_*,
+ * GIT_EXTERNAL_DIFF, GIT_DIR, …), the fsmonitor hook is disabled, and diffs
+ * use neither external drivers nor textconv. Clean/smudge filter drivers in
+ * the repository's own .git/config cannot be disabled by flags — an untrusted
+ * `.git` (e.g. from an extracted archive) is unsafe to inspect in place.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -15,14 +22,31 @@ export interface GitResult {
   readonly stderr: string;
 }
 
+/** Overrides that keep repository configuration from running commands. */
+const SAFE_CONFIG = ["-c", "core.fsmonitor=false"] as const;
+
+/** Diff flags that keep diff.external, GIT_EXTERNAL_DIFF, and textconv drivers from running. */
+const SAFE_DIFF = ["--binary", "--no-ext-diff", "--no-textconv"] as const;
+
+/** git's empty tree in the sha1 object format (fallback when it can't be computed). */
+const EMPTY_TREE_SHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** The inherited environment without git's own variables, plus stable output settings. */
+function childEnv(): Record<string, string | undefined> {
+  const inherited = Object.entries(process.env).filter(
+    ([key]) => !key.toUpperCase().startsWith("GIT_"),
+  );
+  return { ...Object.fromEntries(inherited), GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" };
+}
+
 export async function git(cwd: string, args: readonly string[]): Promise<GitResult> {
   try {
-    const proc = Bun.spawn(["git", ...args], {
+    const proc = Bun.spawn(["git", ...SAFE_CONFIG, ...args], {
       cwd,
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+      env: childEnv(),
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -122,17 +146,22 @@ export async function gitState(dir: string): Promise<GitState> {
   };
 }
 
+/** The empty tree in the repository's object format (sha1 or sha256). */
+async function emptyTree(dir: string): Promise<string> {
+  const result = await git(dir, ["hash-object", "-t", "tree", "--stdin"]);
+  const id = result.stdout.trim();
+  return result.exitCode === 0 && id !== "" ? id : EMPTY_TREE_SHA1;
+}
+
 async function worktreeFingerprint(
   dir: string,
   head: string | null,
   untracked: readonly string[],
 ): Promise<Sha256> {
-  const diff = await git(
-    dir,
-    head === null
-      ? ["diff", "--cached", "--binary", "--", "."]
-      : ["diff", head, "--binary", "--", "."],
-  );
+  // Tracked content on disk against HEAD — or, before the first commit,
+  // against the empty tree, so edits after `git add` still count.
+  const base = head ?? (await emptyTree(dir));
+  const diff = await git(dir, ["diff", base, ...SAFE_DIFF, "--", "."]);
   const parts: string[] = [diff.stdout];
   for (const path of [...untracked].sort()) {
     try {
