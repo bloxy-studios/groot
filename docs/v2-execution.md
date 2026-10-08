@@ -63,6 +63,9 @@ Open upstream drift (issue #81 + new): `@tanstack/cli` 0.69→0.71.1, `create-ex
 | `efd8569` | real single-app E2E: `GROOT_E2E=1 bun test single.e2e` (create-hono 0.19.5) | ✅ planted, stitched, installed, committed, doctor healthy, serves 200 |
 | `f16b6c9` | MCP contract tests (official client, both eras + raw harness) | ✅ 6 pass |
 | `f16b6c9` | Bun 1.3.14 frozen install with MCP deps | ✅ lockfile stays v1 |
+| `8759df4` | real E2E `GROOT_E2E=1 bun test v2-flow.e2e -t "allocates a free dev port"` (create-next-app + create-hono, then `groot add next --path apps/admin`) | ✅ allocated 3002 (3000 web, 3001 api), dev script `--port 3002`, doctor healthy, `next dev` served HTTP 200 on :3002 (116 s) |
+| runners unit `d132b00` | real Claude Code 2.1.293 task: create → run (opus, 3 turns, ~48 s, est. $0.27) → review → approve → integrate (fresh acceptance on the merge) | ✅ one real run; Codex 0.116.0 discovery **blocked** (config-incompatible: `~/.codex/config.toml:2:26 unknown variant `ultra``) |
+| recipes unit `e89d49f` | recipe certification `GROOT_RECIPE_E2E=1` (real create-hono 0.19.5, real installs, all four profiles) | ✅ 3/3 |
 
 ## Commits on the branch
 
