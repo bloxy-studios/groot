@@ -8,7 +8,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
 import { dotenvValues } from "./dotenv.ts";
-import { removeScratchDirs, scratchDir } from "./testing/fixtures.ts";
+import { removeScratchDirs, scratchDir } from "./recipes/testing/fixtures.ts";
 
 afterAll(removeScratchDirs);
 

@@ -1,7 +1,8 @@
 /**
  * What Bun loads from a dotenv file, read the way Bun's own loader reads it
- * (Bun 1.4; the parser behind both `.env` loading and util.parseEnv), so a
- * recipe can tell whether the app will actually see a value:
+ * (Bun 1.4; the parser behind both `.env` loading and util.parseEnv), so Groot
+ * can tell whether the app will actually see a value — recipes planning env
+ * files, and the env and credential checks deciding whether a variable is set:
  *
  * - `KEY=value` and `KEY: value`, optionally after `export`;
  * - single, double or backtick quotes: the first closing quote ends the value

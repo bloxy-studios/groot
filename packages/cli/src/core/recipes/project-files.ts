@@ -14,18 +14,18 @@
  *   generated secret is written by a dedicated env.secret step whose value is
  *   never part of the plan, journal, or output. Whether a name is assigned is
  *   read exactly as the executor reads it (core/executor/secrets.ts), and
- *   what the assignment holds as Bun loads it (./dotenv.ts), so a plan never
+ *   what the assignment holds as Bun loads it (core/dotenv.ts), so a plan never
  *   promises a value the executor would decline to write, nor keeps one the
  *   app would load as empty.
  */
 import { readFileSync } from "node:fs";
 import { isAbsolute, posix } from "node:path";
+import { dotenvValues } from "../dotenv.ts";
 import { GrootV2Error } from "../errors.ts";
 import { hasEnvAssignment } from "../executor/secrets.ts";
 import { joinRel, resolveInProject } from "../fs/paths.ts";
 import { git } from "../git.ts";
 import type { PlanBuilder } from "../planner/builder.ts";
-import { dotenvValues } from "./dotenv.ts";
 import type { RecipeLayout } from "./layout.ts";
 
 export interface IgnoreTarget {

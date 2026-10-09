@@ -7,6 +7,7 @@
  */
 import { readFileSync } from "node:fs";
 import { type EnvVarContract, PUBLIC_ENV_PREFIXES } from "./contracts/common.ts";
+import { dotenvValues } from "./dotenv.ts";
 import { GrootV2Error } from "./errors.ts";
 import { resolveInProject } from "./fs/paths.ts";
 import { git } from "./git.ts";
@@ -58,15 +59,16 @@ export async function isGitIgnored(root: string, relPath: string): Promise<boole
   return null;
 }
 
-/** Names assigned in a dotenv file (values are never returned). */
+/**
+ * Names a dotenv file sets, read the way Bun loads it: an assignment whose
+ * loaded value is blank (`NAME=`, `NAME= # note`, `NAME=""`) leaves the
+ * variable unset for the app, so it does not count. Values are never returned.
+ */
 export function envNamesIn(root: string, relPath: string): Set<string> {
   try {
     const text = readFileSync(resolveInProject(root, relPath), "utf8");
     return new Set(
-      text
-        .split(/\r?\n/)
-        .map((line) => /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\S/.exec(line)?.[1])
-        .filter((name): name is string => name !== undefined),
+      [...dotenvValues(text)].filter(([, value]) => value.trim() !== "").map(([name]) => name),
     );
   } catch {
     return new Set();
