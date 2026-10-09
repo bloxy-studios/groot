@@ -8,7 +8,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { VerificationContract } from "../contracts/common.ts";
-import { envContractViolations, ignoredByRepository, missingRequiredEnv } from "../env.ts";
+import {
+  envContractViolations,
+  ignoredByRepository,
+  missingRequiredEnv,
+  trackedByRepository,
+} from "../env.ts";
 import { hashFile } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { portCollisions } from "../ports.ts";
@@ -83,18 +88,41 @@ async function envCheck({ root, blueprint }: CheckInput): Promise<CheckOutcome> 
   if (unsound.length > 0) {
     return { status: "fail", summary: unsound.join("; "), method: STATIC("structural.env") };
   }
+  // A tracked file is never "ignored" whatever .gitignore says, so it gets
+  // its own diagnosis: adding the ignore line again would change nothing.
   const exposed: string[] = [];
+  const tracked = new Map<string, string[]>();
   for (const contract of blueprint.environment.filter((entry) => entry.sensitivity === "secret")) {
-    if ((await ignoredByRepository(root, contract.storage)) === false)
-      exposed.push(`${contract.name} → ${contract.storage}`);
+    if ((await ignoredByRepository(root, contract.storage)) !== false) continue;
+    const entry = `${contract.name} → ${contract.storage}`;
+    if ((await trackedByRepository(root, contract.storage)) === true) {
+      tracked.set(contract.storage, [...(tracked.get(contract.storage) ?? []), entry]);
+    } else exposed.push(entry);
   }
-  if (exposed.length > 0) {
+  if (exposed.length > 0 || tracked.size > 0) {
+    const committed = [...tracked.values()].flat();
     return {
       status: "fail",
-      summary: `secret storage is not ignored by the repository's .gitignore: ${exposed.join(", ")}`,
+      summary: [
+        ...(committed.length > 0
+          ? [`secret storage is tracked by git (committed): ${committed.join(", ")}`]
+          : []),
+        ...(exposed.length > 0
+          ? [`secret storage is not ignored by the repository's .gitignore: ${exposed.join(", ")}`]
+          : []),
+      ].join("; "),
       method: STATIC("structural.env"),
-      nextStep:
-        "Add the storage file to the repository's .gitignore before putting secrets in it (machine-local excludes — .git/info/exclude, core.excludesFile — don't travel with a clone).",
+      nextStep: [
+        ...[...tracked.keys()].map(
+          (path) =>
+            `Stop tracking ${path} (git rm --cached ${path}), make sure the repository's .gitignore lists it, and rotate the secrets it held — they stay in the repository's history.`,
+        ),
+        ...(exposed.length > 0
+          ? [
+              "Add the storage file to the repository's .gitignore before putting secrets in it (machine-local excludes — .git/info/exclude, core.excludesFile — don't travel with a clone).",
+            ]
+          : []),
+      ].join(" "),
     };
   }
   const missing = missingRequiredEnv(root, blueprint.environment);

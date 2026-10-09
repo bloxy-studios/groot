@@ -9,6 +9,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { Policy } from "../contracts/blueprint.ts";
 import { GrootV2Error } from "../errors.ts";
 import { hashTree } from "../fs/hash.ts";
 import {
@@ -226,6 +227,78 @@ describe("rollback: dependencies, trees, secrets", () => {
     expect(run.events.some((event) => event.type === "rollback.compensate")).toBe(true);
     expect(snapshot(root)).toEqual(before);
   }, 120_000);
+
+  test("the compensating install is held to the policy: refused with nothing changed, then approved per run", async () => {
+    // Arrange — a policy that allows the dependency edit but no install, process, or network.
+    const restrictive: Policy = {
+      allow: ["fs.create", "fs.edit", "fs.delete", "fs.move", "deps.change"],
+      external: "deny",
+    };
+    const root = scratchProject({ "package.json": '{\n  "name": "demo",\n  "private": true\n}\n' });
+    const before = snapshot(root);
+    const plan = await buildPlan(root, async (b) => {
+      await addDeps(b, [{ package: "left-pad", to: "1.3.0", dev: false }]);
+    });
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan,
+      root,
+      policy: restrictive,
+      command: "apply",
+    });
+    const appliedTree = snapshot(root);
+    const journalLength = journalRecords(root, applied.operationId).length;
+    const refusedRun = testContext(root);
+    const approvedRun = testContext(root);
+
+    // Act
+    const preview = await previewRollback(refusedRun.ctx, root, applied.operationId);
+    const error = await expectGrootError(
+      rollbackOperation(refusedRun.ctx, root, applied.operationId, { policy: restrictive }),
+    );
+    const afterRefusal = snapshot(root);
+    const journalAfterRefusal = journalRecords(root, applied.operationId).length;
+    const result = await rollbackOperation(approvedRun.ctx, root, applied.operationId, {
+      policy: restrictive,
+      approvals: ["command", "install", "network"],
+    });
+
+    // Assert
+    expect(preview.limits.join("\n")).toContain("command, install, network");
+    expect(error.id).toBe("GROOT_E_POLICY_DENIED");
+    expect(error.details).toMatchObject({
+      denied: ["command", "install", "network"],
+      operationId: applied.operationId,
+    });
+    expect(error.hint).toContain(
+      `groot rollback ${applied.operationId} --allow command,install,network`,
+    );
+    expect(refusedRun.events.some((event) => event.type === "rollback.compensate")).toBe(false);
+    expect(afterRefusal).toEqual(appliedTree);
+    expect(journalAfterRefusal).toBe(journalLength);
+    expect(result.status).toBe("rolled-back");
+    expect(approvedRun.events.some((event) => event.type === "rollback.compensate")).toBe(true);
+    expect(snapshot(root)).toEqual(before);
+  }, 120_000);
+
+  test("a rollback without a compensating install never loads the policy", async () => {
+    // Arrange — an unreadable groot.json, which loading the policy would refuse (fail closed).
+    const root = scratchProject({ ...MULTI_STEP_FILES, "groot.json": "{ not json\n" });
+    const before = snapshot(root);
+    const plan = await fileOnlyPlan(root);
+    const applied = await applyPlan(testContext(root).ctx, {
+      plan,
+      root,
+      policy: permissive,
+      command: "apply",
+    });
+
+    // Act
+    const result = await rollbackOperation(testContext(root).ctx, root, applied.operationId);
+
+    // Assert
+    expect(result.status).toBe("rolled-back");
+    expect(snapshot(root)).toEqual(before);
+  });
 
   test("a generated tree patched by later steps is removed as a whole", async () => {
     // Arrange

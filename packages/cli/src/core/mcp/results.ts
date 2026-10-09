@@ -57,35 +57,60 @@ const NEXT_BY_ERROR: Partial<Record<ErrorId, string>> = {
 };
 
 /**
- * The follow-up for an error. A denied `external` class is never something
- * the agent can approve (operation_apply refuses allow=external), so it gets
- * a person-at-a-terminal step instead of the generic "approve and retry".
+ * How a call refused by the policy is retried: the same tool with this run's
+ * approvals (`allow`) — null when the tool takes none — or the terminal
+ * command a person runs instead (`--allow <classes>` is appended).
  */
-function nextStepFor(info: ErrorInfo): string | undefined {
+export interface RetryWith {
+  /** e.g. "operation_resume with operationId=op_…". */
+  readonly tool: string | null;
+  /** e.g. "groot resume op_…". */
+  readonly command: string;
+}
+
+/**
+ * The follow-up for a policy denial. A denied `external` class is never
+ * something the agent can approve (the tools refuse allow=external), so it
+ * gets a person-at-a-terminal step naming every denied class; so does a tool
+ * that takes no approvals. Otherwise the refused tool is called again.
+ */
+function policyNextStep(info: ErrorInfo, retry: RetryWith | undefined): string | undefined {
   const details = (info.details ?? {}) as {
     denied?: unknown;
     planId?: unknown;
     operationId?: unknown;
   };
-  if (
-    info.id === "GROOT_E_POLICY_DENIED" &&
-    Array.isArray(details.denied) &&
-    details.denied.includes("external")
-  ) {
-    const command =
-      typeof details.planId === "string"
-        ? `groot apply ${details.planId} --allow external`
-        : typeof details.operationId === "string"
-          ? `groot resume ${details.operationId} --allow external`
-          : "groot apply <planId> --allow external";
-    return `External effects need a person's approval: ask the user to review the change and run \`${command}\` in a terminal, then call operation_status to follow the operation.`;
+  const denied = Array.isArray(details.denied) ? details.denied.map(String) : [];
+  if (denied.length === 0) return undefined;
+  const command =
+    retry?.command ??
+    (typeof details.planId === "string"
+      ? `groot apply ${details.planId}`
+      : typeof details.operationId === "string"
+        ? `groot resume ${details.operationId}`
+        : "groot apply <planId>");
+  const run = `${command} --allow ${denied.join(",")}`;
+  if (denied.includes("external")) {
+    return `External effects need a person's approval: ask the user to review the change and run \`${run}\` in a terminal, then call operation_status to follow the operation.`;
+  }
+  if (retry === undefined) return undefined;
+  if (retry.tool === null) {
+    return `This tool takes no approvals: ask the user to approve ${denied.join(", ")} by running \`${run}\` in a terminal, then call operation_status to follow the operation.`;
+  }
+  return `Ask the user to approve the denied action classes (${denied.join(", ")}), then call ${retry.tool} and allow=${JSON.stringify(denied)}.`;
+}
+
+/** The follow-up for an error; `retry` names the refused call for a policy denial. */
+function nextStepFor(info: ErrorInfo, retry: RetryWith | undefined): string | undefined {
+  if (info.id === "GROOT_E_POLICY_DENIED") {
+    return policyNextStep(info, retry) ?? NEXT_BY_ERROR[info.id];
   }
   return NEXT_BY_ERROR[info.id];
 }
 
-export function fail(error: unknown): ToolResult {
+export function fail(error: unknown, retry?: RetryWith): ToolResult {
   const info: ErrorInfo = toErrorInfo(error);
-  const next = nextStepFor(info);
+  const next = nextStepFor(info, retry);
   const text = `${info.id}: ${info.message}${info.hint ? ` — ${info.hint}` : ""}${next ? ` Next: ${next}` : ""}`;
   // Like the CLI envelope: a blocked (exit 7) error always lists what resolves it.
   const blocked = blockedDecisions(error, info);

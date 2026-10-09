@@ -3,13 +3,18 @@
  * `groot context sync [--dry-run] [--skip-conflicts]` plans and applies the
  * managed instruction projection (docs/v2-cli-spec.md#groot-context).
  * `sync` is a positional action (not a citty subcommand) so the parent never
- * runs twice and `--task` values are never mistaken for subcommands.
+ * runs twice and `--task` values are never mistaken for subcommands. Sync
+ * takes no approvals: under a policy that refuses its classes, the saved plan
+ * is returned blocked, resolved by `groot apply <planId> --allow <class>`.
  */
 import { defineCommand } from "citty";
 import pc from "picocolors";
-import { GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
+import { GLOBAL_ARGS, runV2Command, stringFlag } from "../cli/run.ts";
 import { createApi } from "../core/api.ts";
+import type { OperationResult } from "../core/contracts/operation.ts";
 import { GrootV2Error } from "../core/errors.ts";
+import { loadProjectPolicy } from "../core/executor/index.ts";
+import { policyBlocked } from "./apply.ts";
 
 export const context = defineCommand({
   meta: {
@@ -44,6 +49,7 @@ export const context = defineCommand({
             hint: 'Use `groot context --task "…"` or `groot context sync`.',
           });
         }
+        const task = stringFlag(args.task, "task") ?? null;
         if (action === "sync") {
           const synced = await api.planContextSync(ctx, root, args["skip-conflicts"]);
           const conflicts = synced.changes.filter((change) => change.action === "conflict");
@@ -69,23 +75,38 @@ export const context = defineCommand({
                       ),
                     );
                 }
-                if (synced.plan.actions.length === 0)
-                  console.log(pc.green("Agent context is already in sync."));
-                else
+                if (synced.plan.actions.length > 0)
                   console.log(
                     `\n${pc.cyan("Apply with:")} groot context sync   ${pc.dim(`(or groot apply ${synced.plan.planId})`)}`,
                   );
+                else if (conflicts.length > 0)
+                  console.log(
+                    pc.yellow(
+                      `Agent context is in sync except ${conflicts.length} skipped conflict(s).`,
+                    ),
+                  );
+                else console.log(pc.green("Agent context is already in sync."));
               },
             };
           }
-          const applied = await api.apply(ctx, root, synced.plan, []);
+          let applied: OperationResult;
+          try {
+            applied = await api.apply(ctx, root, synced.plan, []);
+          } catch (error) {
+            if (error instanceof GrootV2Error && error.id === "GROOT_E_POLICY_DENIED") {
+              const { planId } = synced.plan;
+              const policy = await loadProjectPolicy(root);
+              return {
+                ...policyBlocked(error, `groot apply ${planId}`, { planId }, policy),
+                warnings: synced.warnings,
+              };
+            }
+            throw error;
+          }
           return {
             ok: true,
             data: { plan: synced.plan, changes: synced.changes, applied },
-            warnings: [
-              ...synced.warnings,
-              ...conflicts.map((change) => `skipped ${change.path}: ${change.reason}`),
-            ],
+            warnings: synced.warnings,
             refs: { planId: synced.plan.planId, operationId: applied.operationId },
             human: () => {
               for (const change of synced.changes)
@@ -94,7 +115,7 @@ export const context = defineCommand({
             },
           };
         }
-        const result = await api.context(ctx, root, args.task ?? null);
+        const result = await api.context(ctx, root, task);
         return {
           ok: true,
           data: result,

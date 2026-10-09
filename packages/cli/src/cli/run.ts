@@ -61,19 +61,52 @@ export interface CommandResult {
   readonly human?: () => unknown;
 }
 
+function missingValue(flag: string): GrootV2Error {
+  return new GrootV2Error("GROOT_E_USAGE", `--${flag} needs a value.`, {
+    hint: `Pass it as --${flag} <value>, or leave the flag out.`,
+  });
+}
+
 /**
  * Every value of a repeatable string flag (`--recipe a --recipe b`,
  * `--recipe=b`): citty keeps only the last occurrence, so they are collected
- * from the raw args.
+ * from the raw args. A flag without a value is a usage error.
  */
 export function repeatedFlag(rawArgs: readonly string[], flag: string): string[] {
   const values: string[] = [];
   for (let index = 0; index < rawArgs.length; index++) {
     const arg = rawArgs[index] as string;
-    if (arg === `--${flag}` && index + 1 < rawArgs.length) values.push(rawArgs[++index] as string);
-    else if (arg.startsWith(`--${flag}=`)) values.push(arg.slice(flag.length + 3));
+    let value: string | undefined;
+    if (arg === `--${flag}`) value = rawArgs[++index];
+    else if (arg.startsWith(`--${flag}=`)) value = arg.slice(flag.length + 3);
+    else continue;
+    if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+      throw missingValue(flag);
+    }
+    values.push(value);
   }
   return values;
+}
+
+/**
+ * A string flag's value, or undefined when it was not given. citty reads a
+ * flag given without a value (`--target` last on the line, `--target=`) as
+ * "", which would otherwise pass for "not given" or for an empty id.
+ */
+export function stringFlag(value: unknown, flag: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.trim() !== "") return value;
+  throw missingValue(flag);
+}
+
+/**
+ * A positional the command needs, checked in the command body: v2 commands
+ * declare positionals `required: false`, because citty rejects a missing
+ * required one before runV2Command can answer with a usage envelope.
+ */
+export function requiredPositional(value: unknown, message: string, usage: string): string {
+  if (typeof value === "string" && value.trim() !== "") return value;
+  throw new GrootV2Error("GROOT_E_USAGE", message, { hint: `Usage: ${usage}` });
 }
 
 /** Shared citty arg definitions for the v2 machine contract. */

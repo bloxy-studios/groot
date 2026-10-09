@@ -264,6 +264,55 @@ describe("groot apply / status (process-level)", () => {
   );
 
   test(
+    "rollback holds its compensating install to the policy: blocked per class (exit 7), --allow resolves it",
+    async () => {
+      // Arrange — the policy allows the dependency edit, but no install, process, or network.
+      const original = '{\n  "name": "demo",\n  "private": true\n}\n';
+      const root = scratchProject({ "package.json": original });
+      writeFileSync(
+        join(root, "groot.json"),
+        `${JSON.stringify(blueprintFixture({ policy: { allow: ["fs.edit", "deps.change"], external: "deny" } }), null, 2)}\n`,
+      );
+      const planFile = writePlanFile(
+        await buildPlan(root, async (b) => {
+          await addDeps(b, [{ package: "left-pad", to: "1.3.0", dev: false }]);
+        }),
+      );
+      const applied = await runCli(root, ["apply", planFile, "--json"]);
+      const operationId = String(envelopeOf(applied).refs.operationId);
+      const appliedPackage = readFileSync(join(root, "package.json"), "utf8");
+
+      // Act
+      const denied = await runCli(root, ["rollback", operationId, "--json"]);
+      const packageAfterDenial = readFileSync(join(root, "package.json"), "utf8");
+      const allowed = await runCli(root, [
+        "rollback",
+        operationId,
+        "--allow",
+        "command,install,network",
+        "--json",
+      ]);
+
+      // Assert
+      expect(applied.exitCode).toBe(0);
+      expect(denied.exitCode).toBe(7);
+      const envelope = envelopeOf(denied);
+      expect(envelope.error?.id).toBe("GROOT_E_POLICY_DENIED");
+      expect(envelope.refs.operationId).toBe(operationId);
+      expect(envelope.blocked.map((decision) => decision.resolveWith)).toEqual([
+        `groot rollback ${operationId} --allow command`,
+        `groot rollback ${operationId} --allow install`,
+        `groot rollback ${operationId} --allow network`,
+      ]);
+      expect(packageAfterDenial).toBe(appliedPackage);
+      expect(allowed.exitCode).toBe(0);
+      expect(envelopeOf(allowed).data.status).toBe("rolled-back");
+      expect(readFileSync(join(root, "package.json"), "utf8")).toBe(original);
+    },
+    PROCESS_TIMEOUT,
+  );
+
+  test(
     "two concurrent applies on one project: one wins, the other exits 8 (locked)",
     async () => {
       // Arrange

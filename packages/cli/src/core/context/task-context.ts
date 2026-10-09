@@ -260,12 +260,14 @@ export function buildTaskContext(input: TaskContextInput): TaskContext {
     at: record.finishedAt,
   }));
 
+  // Structured facts only: a check's summary, reason, and next step can quote
+  // command output (a failing build that printed a secret), and task prompts
+  // carry these gaps to the runner's model. The evidence id leads to the
+  // details (stored redacted) — `groot evidence <id>`, or evidence_get.
   const gaps: string[] = [];
   for (const record of latest.values()) {
     if (record.status === "fail" || record.status === "blocked") {
-      gaps.push(
-        `${record.check} is ${record.status}: ${record.reason ?? record.summary}${record.nextStep ? ` — next: ${record.nextStep}` : ""}`,
-      );
+      gaps.push(`${record.check} is ${record.status} (evidence ${record.id})`);
     }
   }
   if (blueprint !== null) {

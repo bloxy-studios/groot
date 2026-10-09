@@ -9,8 +9,8 @@
 import { defineCommand } from "citty";
 import pc from "picocolors";
 import { renderVerification } from "../cli/render.ts";
-import { type CommandResult, GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
-import { createApi } from "../core/api.ts";
+import { type CommandResult, GLOBAL_ARGS, runV2Command, stringFlag } from "../cli/run.ts";
+import { createApi, verifyProject } from "../core/api.ts";
 import { VerificationProfile } from "../core/contracts/common.ts";
 import type { BlockedDecision } from "../core/contracts/envelope.ts";
 import type { Evidence, VerificationReport } from "../core/contracts/evidence.ts";
@@ -89,17 +89,19 @@ export const verify = defineCommand({
       type: "string",
       description: "Only this capability's checks (plus project structure)",
     },
+    unit: {
+      type: "string",
+      description: "Only this app's checks — its path, e.g. apps/api (plus project-wide checks)",
+    },
     ...GLOBAL_ARGS,
   },
   async run({ args }) {
     await runV2Command("verify", { json: args.json, events: args.events }, async (ctx) => {
-      const api = createApi();
-      const root = api.projectRoot(ctx.cwd);
-      const report = await api.verify(ctx, root, {
-        profiles: parseProfiles(args.profile),
-        capability: args.capability ?? null,
-      });
-      return verifyResult(report);
+      const profiles = parseProfiles(stringFlag(args.profile, "profile"));
+      const capability = stringFlag(args.capability, "capability") ?? null;
+      const unit = stringFlag(args.unit, "unit") ?? null;
+      const root = createApi().projectRoot(ctx.cwd);
+      return verifyResult(await verifyProject(ctx, root, { profiles, capability, unit }));
     });
   },
 });

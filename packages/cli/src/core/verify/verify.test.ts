@@ -88,6 +88,67 @@ describe("verification engine", () => {
     }
   });
 
+  test("a failing build that prints secrets stores evidence without them (env credentials and secret contracts)", async () => {
+    // Arrange — the build echoes a credential from its environment and the
+    // value of a secret contract read from its storage file, then fails.
+    // Neither value has a shape the pattern redactor recognizes.
+    const envMarker = `envmark${crypto.randomUUID().replaceAll("-", "")}`;
+    const fileMarker = `filemark${crypto.randomUUID().replaceAll("-", "")}`;
+    const root = project();
+    writeFileSync(join(root, "apps/api/.env.local"), `SIGNING_SALT=${fileMarker}\n`);
+    writeFileSync(
+      join(root, "apps/api/package.json"),
+      JSON.stringify({
+        name: "api",
+        scripts: {
+          build:
+            'echo "upstream refused key $PAYMENTS_API_KEY, salt $(cut -d= -f2 .env.local)"; exit 1',
+        },
+      }),
+    );
+    const blueprint = blueprintFixture({
+      apps: [appFixture({ id: "api", path: "apps/api" })],
+      environment: [
+        {
+          name: "SIGNING_SALT",
+          consumer: "apps/api",
+          scope: "server",
+          sensitivity: "secret",
+          required: true,
+          description: "salts signatures",
+          storage: "apps/api/.env.local",
+          example: "",
+          generate: "random-secret",
+          declaredBy: "test",
+        },
+      ],
+    });
+
+    // Act
+    const report = await runVerification(
+      createContext({ cwd: tmpdir(), env: { ...process.env, PAYMENTS_API_KEY: envMarker } }),
+      {
+        root,
+        blueprint,
+        observation: null,
+        lock: null,
+        profiles: ["build"],
+        extra: defaultContracts(blueprint),
+      },
+    );
+    const build = report.evidence.find((entry) => entry.check === "build.script.api");
+    const stored = readFileSync(join(root, ".groot/evidence", String(build?.id), "evidence.json"));
+    const log = readFileSync(join(root, ".groot/evidence", String(build?.id), "build.log"));
+
+    // Assert
+    expect(build?.status).toBe("fail");
+    expect(build?.summary).toContain("upstream refused key [REDACTED], salt [REDACTED]");
+    for (const text of [JSON.stringify(report), stored.toString(), log.toString()]) {
+      expect(text).not.toContain(envMarker);
+      expect(text).not.toContain(fileMarker);
+    }
+  }, 60_000);
+
   test("secret storage must be ignored by the repository itself, not a machine-local exclude", async () => {
     // Arrange — a git repository whose secret file is ignored only through
     // .git/info/exclude, which a clone does not carry.
@@ -131,6 +192,52 @@ describe("verification engine", () => {
     writeFileSync(join(root, ".gitignore"), "apps/api/.env.local\n");
     expect((await structuralEnv())?.status).toBe("pass");
   }, 30_000);
+
+  test("a committed secret file fails as tracked — untrack and rotate — even when .gitignore lists it", async () => {
+    // Arrange — the env file was committed before .gitignore listed it.
+    const root = project();
+    const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd: root });
+    git(["init", "-q"]);
+    writeFileSync(join(root, "apps/api/.env.local"), "SESSION_SECRET=set\n");
+    git(["add", "apps/api/.env.local"]);
+    git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "env"]);
+    writeFileSync(join(root, ".gitignore"), "apps/api/.env.local\n");
+    const blueprint = blueprintFixture({
+      environment: [
+        {
+          name: "SESSION_SECRET",
+          consumer: "apps/api",
+          scope: "server",
+          sensitivity: "secret",
+          required: true,
+          description: "signs sessions",
+          storage: "apps/api/.env.local",
+          example: "",
+          generate: "random-secret",
+          declaredBy: "test",
+        },
+      ],
+    });
+
+    // Act
+    const report = await runVerification(ctx(), {
+      root,
+      blueprint,
+      observation: null,
+      lock: null,
+      profiles: ["structural"],
+      extra: defaultContracts(blueprint),
+    });
+    const env = report.evidence.find((entry) => entry.check === "structural.env");
+
+    // Assert
+    expect(env?.status).toBe("fail");
+    expect(env?.summary).toContain("tracked by git");
+    expect(env?.summary).toContain("SESSION_SECRET → apps/api/.env.local");
+    expect(env?.summary).not.toContain("not ignored");
+    expect(env?.nextStep).toContain("git rm --cached apps/api/.env.local");
+    expect(env?.nextStep).toContain("rotate");
+  }, 60_000);
 
   test("a missing required secret is blocked with the exact next step, never a pass", async () => {
     const root = project();

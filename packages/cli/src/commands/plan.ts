@@ -8,9 +8,9 @@ import { resolve } from "node:path";
 import { defineCommand } from "citty";
 import pc from "picocolors";
 import { renderPlan } from "../cli/render.ts";
-import { GLOBAL_ARGS, repeatedFlag, runV2Command } from "../cli/run.ts";
+import { GLOBAL_ARGS, repeatedFlag, runV2Command, stringFlag } from "../cli/run.ts";
 import { createApi } from "../core/api.ts";
-import { getRecipe } from "../core/capabilities/registry.ts";
+import { recipeDescriptors } from "../core/capabilities/registry.ts";
 import { GrootV2Error } from "../core/errors.ts";
 import { writeFileAtomic } from "../core/fs/atomic.ts";
 import { prettyJson } from "../core/json.ts";
@@ -22,27 +22,48 @@ function applyHint(planId: string, steps: number): string {
     : `${pc.cyan("Apply with:")} groot apply ${planId}`;
 }
 
+/** GROOT_E_UNKNOWN_CAPABILITY for recipe ids this build doesn't have, listing the ones it has. */
+function unknownRecipes(
+  ids: readonly string[],
+  recipes: ReadonlyMap<string, string>,
+): GrootV2Error {
+  const alternatives = [...recipes.keys()].sort();
+  const refusals = ids.map((id) => ({
+    code: "unknown-recipe" as const,
+    message: `Unknown recipe "${id}".`,
+    alternatives,
+  }));
+  return new GrootV2Error(
+    "GROOT_E_UNKNOWN_CAPABILITY",
+    refusals.map((refusal) => refusal.message).join(" "),
+    { hint: `Recipes in this build: ${alternatives.join(" · ")}.`, details: { refusals } },
+  );
+}
+
 /**
  * Solver requests: every named capability, plus each `--recipe` (repeatable)
- * attached to the capability that recipe supplies — added first when it is a
- * dependency nobody named, so a blocked "choose with --recipe <id>" decision
- * can always be followed by appending that flag. An unknown recipe id stays
- * on the first capability, where the solver refuses it with alternatives.
+ * attached to the capability that recipe supplies (`recipes`: recipe id →
+ * capability) — added first when it is a dependency nobody named, so a
+ * blocked "choose with --recipe <id>" decision can always be followed by
+ * appending that flag. A recipe id this build doesn't have is refused as
+ * unknown wherever it appears, before it could be mistaken for a second
+ * recipe of some capability.
  */
 export function capabilityRequests(
   names: readonly string[],
   recipeIds: readonly string[],
   target: string | null,
-  capabilityOf: (recipeId: string) => string | undefined,
+  recipes: ReadonlyMap<string, string>,
 ): CapabilityRequestInput[] {
+  const unknown = [...new Set(recipeIds.filter((id) => !recipes.has(id)))];
+  if (unknown.length > 0) throw unknownRecipes(unknown, recipes);
   const requests: CapabilityRequestInput[] = names.map((capability) => ({
     capability,
     target,
     recipe: null,
   }));
   for (const recipe of recipeIds) {
-    const capability = capabilityOf(recipe) ?? requests[0]?.capability;
-    if (capability === undefined) continue;
+    const capability = recipes.get(recipe) as string;
     const index = requests.findIndex((request) => request.capability === capability);
     if (index === -1) {
       requests.unshift({ capability, target, recipe });
@@ -76,9 +97,10 @@ const add = defineCommand({
   },
   args: {
     capability: {
+      // Checked in the body: a missing one is a usage envelope, not citty's usage text.
       type: "positional",
-      required: true,
-      description: "Capability id(s): auth, data, …",
+      required: false,
+      description: "Capability id(s): auth, data, … (at least one)",
     },
     target: { type: "string", description: "App id or path when several apps fit" },
     recipe: {
@@ -96,22 +118,24 @@ const add = defineCommand({
   },
   async run({ args, rawArgs }) {
     await runV2Command("plan add", { json: args.json, events: args.events }, async (ctx) => {
-      const names = capabilityNames((args._ as string[] | undefined) ?? [args.capability]);
+      const names = capabilityNames((args._ as string[] | undefined) ?? [args.capability ?? ""]);
       if (names.length === 0) {
         throw new GrootV2Error("GROOT_E_USAGE", "Name at least one capability to plan.", {
           hint: "Example: groot plan add auth --target api",
         });
       }
+      const target = stringFlag(args.target, "target") ?? null;
+      const out = stringFlag(args.out, "out");
       const api = createApi();
       const requests = capabilityRequests(
         names,
         repeatedFlag(rawArgs, "recipe"),
-        args.target ?? null,
-        (id) => getRecipe(id)?.descriptor.capability,
+        target,
+        new Map(recipeDescriptors().map((recipe) => [recipe.id, recipe.capability])),
       );
       const root = api.projectRoot(ctx.cwd);
       const plan = await api.planAdd(ctx, root, requests, { experimental: args.experimental });
-      if (args.out !== undefined) writeFileAtomic(resolve(ctx.cwd, args.out), prettyJson(plan));
+      if (out !== undefined) writeFileAtomic(resolve(ctx.cwd, out), prettyJson(plan));
       return {
         ok: true,
         data: plan,
@@ -167,5 +191,16 @@ const contextSync = defineCommand({
 
 export const plan = defineCommand({
   meta: { name: "plan", description: "Resolve a change into a concrete, previewable plan" },
+  args: { ...GLOBAL_ARGS },
   subCommands: { add, "context-sync": contextSync },
+  // citty runs this when no subcommand is named (instead of failing with usage
+  // text on stdout) — and after one that returns, which a v2 one never does.
+  async run({ args }) {
+    if (args._.length > 0) return;
+    await runV2Command("plan", { json: args.json, events: args.events }, async () => {
+      throw new GrootV2Error("GROOT_E_USAGE", "Name what to plan: add or context-sync.", {
+        hint: "Usage: groot plan add <capability>... | groot plan context-sync",
+      });
+    });
+  },
 });

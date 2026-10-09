@@ -15,7 +15,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineCommand } from "citty";
 import pc from "picocolors";
-import { type CommandResult, GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
+import { type CommandResult, GLOBAL_ARGS, requiredPositional, runV2Command } from "../cli/run.ts";
 import type { Policy } from "../core/contracts/blueprint.ts";
 import { ActionClass } from "../core/contracts/common.ts";
 import type { BlockedDecision, ErrorInfo } from "../core/contracts/envelope.ts";
@@ -101,24 +101,48 @@ export function shellQuote(value: string): string {
   return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** What a policy denial stopped: applying or resuming a plan, or a rollback's compensating install. */
+export type Refused = "apply" | "resume" | "rollback";
+
+const REFUSED_WORDING: Record<Refused, { needs: string; allow: string; nothing: string }> = {
+  apply: { needs: "The plan needs", allow: "Applies the plan", nothing: "applied" },
+  resume: { needs: "The plan needs", allow: "Continues the operation", nothing: "resumed" },
+  rollback: {
+    needs: "Rolling back re-syncs node_modules with bun install --no-save, so it needs",
+    allow: "Rolls the operation back",
+    nothing: "rolled back",
+  },
+};
+
 /** `rerunBase` is the command that was refused ("groot apply plan.json"); --allow is appended. */
-function policyDecision(cls: string, rerunBase: string, policy: Policy): BlockedDecision {
+function policyDecision(
+  cls: string,
+  rerunBase: string,
+  policy: Policy,
+  refused: Refused,
+): BlockedDecision {
   const rerun = `${rerunBase} --allow ${cls}`;
   const external = cls === "external";
+  const wording = REFUSED_WORDING[refused];
   return {
     id: `policy.${cls}`,
     kind: "policy",
     question: external
       ? "The plan changes provider accounts (external effects). Approve them for this run?"
-      : `The plan needs "${cls}" actions, which the project policy does not allow. Approve them for this run?`,
+      : `${wording.needs} "${cls}" actions, which the project policy does not allow. Approve them for this run?`,
     options: [
       {
         id: "allow",
         label: `Allow ${cls} for this run`,
-        effect: "Applies the plan; groot.json's policy stays as it is.",
+        effect: `${wording.allow}; groot.json's policy stays as it is.`,
         recommended: false,
       },
-      { id: "keep", label: "Keep the policy", effect: "Nothing is applied.", recommended: true },
+      {
+        id: "keep",
+        label: "Keep the policy",
+        effect: `Nothing is ${wording.nothing}.`,
+        recommended: true,
+      },
     ],
     resolveWith:
       external && policy.external === "deny"
@@ -130,25 +154,27 @@ function policyDecision(cls: string, rerunBase: string, policy: Policy): Blocked
 /**
  * A GROOT_E_POLICY_DENIED as blocked decisions (exit 7), one per denied class.
  * `rerunBase` is the refused command line; `subject` identifies what was
- * refused (`planId` or `operationId`) in data and refs.
+ * refused (`planId` or `operationId`) in data and refs; `refused` words the
+ * decisions (default: applying a plan, or resuming an operation).
  */
 export function policyBlocked(
   error: GrootV2Error,
   rerunBase: string,
   subject: { readonly planId: string } | { readonly operationId: string },
   policy: PolicySource,
+  refused: Refused = "planId" in subject ? "apply" : "resume",
 ): CommandResult & { readonly error: ErrorInfo } {
   const denied = ((error.details?.denied ?? []) as unknown[]).map(String);
   return {
     ok: false,
     data: { ...subject, denied, policySource: policy.source },
-    blocked: denied.map((cls) => policyDecision(cls, rerunBase, policy.policy)),
+    blocked: denied.map((cls) => policyDecision(cls, rerunBase, policy.policy, refused)),
     refs: subject,
     exitCode: EXIT_V2.BLOCKED,
     error: error.toInfo(),
     human: () =>
       console.log(
-        `${pc.yellow("●")} Nothing ${"planId" in subject ? "applied" : "resumed"} — the ${policy.source} policy does not allow: ${denied.join(", ")}.`,
+        `${pc.yellow("●")} Nothing ${REFUSED_WORDING[refused].nothing} — the ${policy.source} policy does not allow: ${denied.join(", ")}.`,
       ),
   };
 }
@@ -161,8 +187,8 @@ export const apply = defineCommand({
   args: {
     plan: {
       type: "positional",
-      required: true,
-      description: "Plan JSON file, or the id of a plan saved under .groot/plans/",
+      required: false,
+      description: "Plan JSON file, or the id of a plan saved under .groot/plans/ (required)",
     },
     allow: {
       type: "string",
@@ -172,8 +198,13 @@ export const apply = defineCommand({
   },
   async run({ args, rawArgs }) {
     await runV2Command("apply", { json: args.json, events: args.events }, async (ctx) => {
+      const ref = requiredPositional(
+        args.plan,
+        "Name the plan to apply: a plan file or the id of a saved plan.",
+        "groot apply <plan-file | planId> [--allow <class>...]",
+      );
       const approvals = parseAllowFlags(rawArgs);
-      const plan = await resolvePlan(ctx.cwd, args.plan);
+      const plan = await resolvePlan(ctx.cwd, ref);
       const root = projectRootFor(ctx.cwd, plan);
       const policy = await loadProjectPolicy(root);
       try {
@@ -192,7 +223,7 @@ export const apply = defineCommand({
         };
       } catch (error) {
         if (error instanceof GrootV2Error && error.id === "GROOT_E_POLICY_DENIED") {
-          const rerun = `groot apply ${shellQuote(args.plan)}`;
+          const rerun = `groot apply ${shellQuote(ref)}`;
           return policyBlocked(error, rerun, { planId: plan.planId }, policy);
         }
         throw error;

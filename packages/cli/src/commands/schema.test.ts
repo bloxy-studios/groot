@@ -6,9 +6,26 @@
 import { describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SubCommandsDef } from "citty";
 import { ResultEnvelope } from "../core/contracts/envelope.ts";
+import { plan } from "./plan.ts";
+import { V2_COMMANDS } from "./schema.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
+
+describe("V2_COMMANDS", () => {
+  test("the plan summary names exactly the plan subcommands this build has", async () => {
+    // Arrange
+    const subcommands = Object.keys(await (plan.subCommands as SubCommandsDef));
+    const summary = V2_COMMANDS.find((command) => command.name === "plan")?.summary ?? "";
+
+    // Act
+    const named = ["init", "add", "context-sync"].filter((word) => summary.includes(word));
+
+    // Assert
+    expect(named).toEqual(subcommands);
+  });
+});
 
 async function runCli(
   args: string[],

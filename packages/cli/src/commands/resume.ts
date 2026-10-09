@@ -11,16 +11,18 @@
  * returned as blocked decisions naming the exact re-run.
  */
 import { defineCommand } from "citty";
-import { type CommandResult, GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
+import {
+  type CommandResult,
+  GLOBAL_ARGS,
+  requiredPositional,
+  runV2Command,
+  stringFlag,
+} from "../cli/run.ts";
 import type { ErrorInfo } from "../core/contracts/envelope.ts";
 import { EXIT_V2, GrootV2Error } from "../core/errors.ts";
 import { loadProjectPolicy, resumeOperation } from "../core/executor/index.ts";
 import { parseAllowFlags, policyBlocked, shellQuote } from "./apply.ts";
 import { renderOperationResult, requireProjectRoot } from "./status.ts";
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value !== "" ? value : undefined;
-}
 
 function stepDecision(
   error: GrootV2Error,
@@ -71,8 +73,8 @@ export const resume = defineCommand({
   args: {
     operation: {
       type: "positional",
-      required: true,
-      description: "Operation id (see groot status)",
+      required: false,
+      description: "Operation id, see groot status (required)",
     },
     "retry-step": {
       type: "string",
@@ -90,8 +92,13 @@ export const resume = defineCommand({
   },
   async run({ args, rawArgs }) {
     await runV2Command("resume", { json: args.json, events: args.events }, async (ctx) => {
-      const retryStep = optionalString(args["retry-step"]);
-      const skipStep = optionalString(args["skip-step"]);
+      const operationId = requiredPositional(
+        args.operation,
+        "Name the operation to resume.",
+        "groot resume <operationId> [--retry-step <id> | --skip-step <id>] (groot status lists them)",
+      );
+      const retryStep = stringFlag(args["retry-step"], "retry-step");
+      const skipStep = stringFlag(args["skip-step"], "skip-step");
       if (retryStep !== undefined && skipStep !== undefined) {
         throw new GrootV2Error(
           "GROOT_E_USAGE",
@@ -102,7 +109,7 @@ export const resume = defineCommand({
       const root = requireProjectRoot(ctx.cwd);
       const policy = await loadProjectPolicy(root);
       try {
-        const result = await resumeOperation(ctx, root, args.operation, {
+        const result = await resumeOperation(ctx, root, operationId, {
           retryStep,
           skipStep,
           policy: policy.policy,
@@ -122,8 +129,8 @@ export const resume = defineCommand({
               : skipStep !== undefined
                 ? ` --skip-step ${shellQuote(skipStep)}`
                 : "";
-          const rerun = `groot resume ${shellQuote(args.operation)}${step}`;
-          return policyBlocked(error, rerun, { operationId: args.operation }, policy);
+          const rerun = `groot resume ${shellQuote(operationId)}${step}`;
+          return policyBlocked(error, rerun, { operationId }, policy);
         }
         const stepId = error instanceof GrootV2Error ? error.details?.stepId : undefined;
         if (
@@ -131,7 +138,7 @@ export const resume = defineCommand({
           error.details?.gate === "interrupted-step" &&
           typeof stepId === "string"
         ) {
-          return stepDecision(error, args.operation, stepId);
+          return stepDecision(error, operationId, stepId);
         }
         throw error;
       }

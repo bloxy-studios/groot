@@ -13,7 +13,7 @@ import { GrootV2Error } from "../errors.ts";
 import { createContext } from "../runtime.ts";
 import type { ToolDeps } from "./deps.ts";
 import { clampWait, type Job } from "./jobs.ts";
-import { fail, ok, type ToolResult } from "./results.ts";
+import { fail, ok, type RetryWith, type ToolResult } from "./results.ts";
 
 const Root = z
   .string()
@@ -46,7 +46,12 @@ function compactState(state: OperationState): Record<string, unknown> {
   };
 }
 
-/** The executor journals operation.started first — find the operation for a plan. */
+/**
+ * The executor journals operation.started first — find the operation this
+ * job started: the plan's operation that started no earlier than the job. A
+ * plan rolled back and applied again gets a new operation; the old one must
+ * never be reported, polled, or cancelled in its place.
+ */
 async function linkOperation(
   deps: ToolDeps,
   root: string,
@@ -56,7 +61,7 @@ async function linkOperation(
   const deadline = Date.now() + LINK_TIMEOUT_MS;
   while (job.operationId === null && Date.now() < deadline && !job.done) {
     const match = (await deps.api.listOperations(root).catch(() => [])).find(
-      (state) => state.planId === planId,
+      (state) => state.planId === planId && Date.parse(state.startedAt) >= job.startedAt,
     );
     if (match !== undefined) {
       job.operationId = match.operationId;
@@ -64,6 +69,27 @@ async function linkOperation(
     }
     await Bun.sleep(100);
   }
+}
+
+/**
+ * A refused resume is retried as the same resume, step decision included —
+ * applying the plan again would conflict with the operation it started.
+ */
+function resumeRetry(
+  operationId: string,
+  retryStep: string | undefined,
+  skipStep: string | undefined,
+): RetryWith {
+  const step =
+    retryStep !== undefined
+      ? { tool: ` and retryStep=${retryStep}`, flag: ` --retry-step ${retryStep}` }
+      : skipStep !== undefined
+        ? { tool: ` and skipStep=${skipStep}`, flag: ` --skip-step ${skipStep}` }
+        : { tool: "", flag: "" };
+  return {
+    tool: `operation_resume with operationId=${operationId}${step.tool}`,
+    command: `groot resume ${operationId}${step.flag}`,
+  };
 }
 
 /** The same refusal for a resumed operation, pointing at `groot resume`. */
@@ -120,10 +146,11 @@ async function settleOrPoll(
   waitMs: number,
   signal: AbortSignal,
   label: string,
+  retry: RetryWith,
 ): Promise<ToolResult> {
   const settled = await deps.jobs.wait(job, waitMs, signal);
   if (settled) {
-    if (job.error !== undefined) return fail(job.error);
+    if (job.error !== undefined) return fail(job.error, retry);
     return resultSummary(job.result as OperationResult);
   }
   return ok({
@@ -170,6 +197,10 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
       },
     },
     async ({ root, planId, allow, waitMs }, ctx) => {
+      const retry: RetryWith = {
+        tool: `operation_apply with planId=${planId}`,
+        command: `groot apply ${planId}`,
+      };
       try {
         const projectRoot = rootOf(root);
         const plan = await deps.api.getPlan(projectRoot, planId);
@@ -184,9 +215,10 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
           clampWait(waitMs),
           ctx.mcpReq.signal,
           `Plan ${plan.planId}`,
+          retry,
         );
       } catch (error) {
-        return fail(error);
+        return fail(error, retry);
       }
     },
   );
@@ -325,6 +357,7 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
       },
     },
     async ({ root, operationId, retryStep, skipStep, allow, waitMs }, ctx) => {
+      const retry = resumeRetry(operationId, retryStep, skipStep);
       try {
         const projectRoot = rootOf(root);
         if (allow?.includes("external")) throw externalResumeRefused(operationId);
@@ -342,9 +375,10 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
           clampWait(waitMs),
           ctx.mcpReq.signal,
           `Operation ${operationId}`,
+          retry,
         );
       } catch (error) {
-        return fail(error);
+        return fail(error, retry);
       }
     },
   );
@@ -354,7 +388,7 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
     {
       title: "Roll back an operation",
       description:
-        "Preview (default) or execute recovery of an operation in reverse order. Files are restored or removed only if unchanged since groot wrote them; any later human edit makes the rollback refuse and change nothing. Irreversible effects are listed.",
+        "Preview (default) or execute recovery of an operation in reverse order. Files are restored or removed only if unchanged since groot wrote them; any later human edit makes the rollback refuse and change nothing. Irreversible effects are listed. Undoing a dependency change re-syncs node_modules with `bun install --no-save`, held to the project policy: classes it refuses are approved by the user with `groot rollback <operationId> --allow <class>` in a terminal.",
       inputSchema: z.strictObject({
         root: Root,
         operationId: z.string(),
@@ -373,6 +407,9 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
       },
     },
     async ({ root, operationId, execute, waitMs }, ctx) => {
+      // The compensating install is held to the policy; this tool takes no
+      // approvals, so a refused class is approved by a person in a terminal.
+      const retry: RetryWith = { tool: null, command: `groot rollback ${operationId}` };
       try {
         const projectRoot = rootOf(root);
         if (execute !== true) {
@@ -403,9 +440,10 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
           clampWait(waitMs),
           ctx.mcpReq.signal,
           `Rollback of ${operationId}`,
+          retry,
         );
       } catch (error) {
-        return fail(error);
+        return fail(error, retry);
       }
     },
   );

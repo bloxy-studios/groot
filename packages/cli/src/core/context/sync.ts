@@ -312,6 +312,14 @@ export async function planContextSync(input: ContextSyncInput): Promise<ContextS
       sha256: sha256Of(content),
     });
   }
+  // A skipped (conflicting) file keeps its record: Groot still owns what it
+  // wrote, so verify keeps reporting the hand edit and a later sync can tell
+  // "edited by hand" from "never written by groot".
+  const skipped = new Set(session.conflicts.map((change) => change.path));
+  for (const entry of input.lock.context) {
+    if (skipped.has(entry.path) && !session.touched.has(entry.path)) artifacts.push(entry);
+  }
+  artifacts.sort((a, b) => a.path.localeCompare(b.path));
   // Record ownership in the lock unless nothing would change.
   const unchanged =
     JSON.stringify(artifacts) ===
