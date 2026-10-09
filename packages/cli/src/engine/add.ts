@@ -10,6 +10,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ADAPTERS } from "../adapters/index.ts";
 import type { BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { allocatePort, claimedPorts } from "../core/ports.ts";
+import { BUN_DEFAULT_PORT } from "../core/recipes/layout.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { growScaffold } from "./generate.ts";
 import type { LoadedManifest } from "./manifest.ts";
@@ -168,12 +169,26 @@ export async function resolveAddScaffold(
 }
 
 /**
+ * The port an app that declares none serves on: its framework's default. For
+ * frameworks groot leaves on their dev CLI's default that is the matrix port
+ * (an adopted `next dev` serves on 3000). Elysia/Hono/Fastify's matrix port is
+ * groot's own, written into the servers it generates; a server groot did not
+ * write is taken to serve on Bun's default — as the recipes assume.
+ */
+function impliedPort(framework: string): number | null {
+  const choice = frameworkChoice(framework);
+  if (choice === undefined || choice.meta.port === null) return null;
+  return ADAPTERS[choice.meta.id].portAssignment === "source" ? BUN_DEFAULT_PORT : choice.meta.port;
+}
+
+/**
  * The new scaffold's dev port (docs/architecture.md#port-allocation). The
  * framework default wins when nobody claims it. On a collision, a v2
  * workspace allocates the next free port — counting every port its
- * scaffolds and blueprint apps (adopted ones included) declare — when the
- * adapter can apply it; v1 workspaces and template-coupled ports keep the
- * default with a warning, as v1 always did.
+ * scaffolds and blueprint apps (adopted ones included) declare, and the
+ * implied default of an app that declares none — when the adapter can apply
+ * it; v1 workspaces and template-coupled ports keep the default with a
+ * warning, as v1 always did.
  */
 function assignDevPort(
   manifest: Manifest,
@@ -190,6 +205,11 @@ function assignDevPort(
   }
   for (const [port, owner] of claimedPorts(blueprint, null)) {
     if (!claimed.has(port)) claimed.set(port, owner);
+  }
+  for (const app of blueprint?.apps ?? []) {
+    if (app.port !== null || app.framework === null) continue;
+    const implied = impliedPort(app.framework);
+    if (implied !== null && !claimed.has(implied)) claimed.set(implied, app.path);
   }
   const owner = claimed.get(meta.port);
   if (owner === undefined) return { port: meta.port, warnings: [], notes: [] };

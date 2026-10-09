@@ -10,6 +10,8 @@ import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { apiPortSource } from "../adapters/elysia.ts";
 import { ADAPTERS } from "../adapters/index.ts";
+import { writeFileAtomic } from "../core/fs/atomic.ts";
+import { resolveInProject } from "../core/fs/paths.ts";
 import { backendEnvLines } from "./env-names.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { stitchLock } from "./locks.ts";
@@ -127,21 +129,46 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
   return notes;
 }
 
+/** Dev CLIs whose `-p` short flag is also the port flag (docs/scaffold-flows.md#dev-port-flags). */
+const SHORT_PORT_FLAG: ReadonlySet<FrameworkId> = new Set(["next", "nuxt"]);
+
+/** The port flag in a dev script (`--port <n>` / `--port=<n>`, and `-p` where documented); group 1 is the port. */
+function devPortFlag(framework: FrameworkId): RegExp {
+  const short = SHORT_PORT_FLAG.has(framework) ? String.raw`|(?<=^|\s)-p` : "";
+  return new RegExp(String.raw`(?:--port${short})(?:=|\s+)(\d+)(?!\d)`);
+}
+
+/** A stitch write target inside the workspace — a path or link leading out of it is a stitch failure. */
+function stitchTarget(plan: Plan, relPath: string): string {
+  try {
+    return resolveInProject(plan.targetDir, relPath);
+  } catch (error) {
+    throw new GrootError(
+      `Stitch failed: ${error instanceof Error ? error.message : String(error)}`,
+      EXIT.STITCH,
+      error instanceof GrootError ? error.hint : undefined,
+    );
+  }
+}
+
 /**
- * Apply allocated dev ports (docs/architecture.md#port-allocation): a web
- * scaffold whose port differs from its framework's default — `groot add`
- * moved it off a claimed port in a v2 workspace — gets `--port <n>` in its
- * `dev` script (replacing a template's own `--port`). Scaffolds on their
- * default port are left byte-identical, so init output is unchanged. Source-
- * assigned ports (Elysia/Hono/Fastify) are written by their own steps.
+ * Apply allocated dev ports (docs/architecture.md#port-allocation): in a v2
+ * workspace, a web scaffold whose port differs from its framework's default —
+ * `groot add` moved it off a claimed port — gets `--port <n>` in its `dev`
+ * script, replacing the script's own port flag unless that already names the
+ * port. Scaffolds on their default port are left byte-identical, so init
+ * output is unchanged; v1 workspaces keep the v1 rule (warn, never rewrite).
+ * Source-assigned ports (Elysia/Hono/Fastify) are written by their own steps.
+ * A scaffold path or link leading out of the workspace is never written through.
  */
 export async function stitchDevPorts(plan: Plan): Promise<string[]> {
+  if ((plan.manifestVersion ?? 2) !== 2) return [];
   const notes: string[] = [];
   for (const scaffold of plan.scaffolds) {
     if (scaffold.port === null) continue;
     if (ADAPTERS[scaffold.framework].portAssignment !== "dev-script") continue;
     if (scaffold.port === findChoice(scaffold.slot, scaffold.framework)?.port) continue;
-    const path = join(plan.targetDir, scaffold.path, "package.json");
+    const path = stitchTarget(plan, `${scaffold.path}/package.json`);
     if (!existsSync(path)) continue;
     const pkg = await readJson(path);
     const scripts = (pkg.scripts ?? {}) as Record<string, string>;
@@ -152,13 +179,15 @@ export async function stitchDevPorts(plan: Plan): Promise<string[]> {
       );
       continue;
     }
-    const flag = /--port(?:=|\s+)\d+(?!\d)/;
-    const desired = flag.test(dev)
-      ? dev.replace(flag, `--port ${scaffold.port}`)
-      : `${dev} --port ${scaffold.port}`;
-    if (desired === dev) continue; // already applied
-    pkg.scripts = { ...scripts, dev: desired };
-    await writeJson(path, pkg);
+    const flag = devPortFlag(scaffold.framework);
+    const current = flag.exec(dev);
+    if (current !== null && Number(current[1]) === scaffold.port) continue; // already applied
+    const desired =
+      current === null
+        ? `${dev} --port ${scaffold.port}`
+        : dev.replace(flag, `--port ${scaffold.port}`);
+    const next = { ...pkg, scripts: { ...scripts, dev: desired } };
+    writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
     notes.push(`${scaffold.path}/package.json → dev script serves on :${scaffold.port}`);
   }
   return notes;
