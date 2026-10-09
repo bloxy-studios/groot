@@ -15,9 +15,7 @@
 
 The user asked to cut verification to finish within their limit. State on `wip/v2-integration`: every unit, review waves 1–2 (A–G), the docs consolidation, and the coordinator follow-ups are merged. Coordinator review 2 found 6 confirmed + 21 unverified issues; wave 3 (run `wf_22e4278d-104`) is fixing them in two worktrees: H `.claude/worktrees/wf_22e4278d-104-1` (engine locks, ports, stitch containment, v1 exit codes) and I `.claude/worktrees/wf_22e4278d-104-2` (MCP operation linking, context-sync ownership, verification secrets, rollback policy, --json usage envelopes, verify --unit, recipe/next-step fixes).
 
-1. When H and I have committed: stop the workflow (skip its verifiers), merge both branches, resolve any conflict, `bun run lint && bun run typecheck`.
-2. One full suite (`cd packages/cli && bun test`); fix real breakage only (5 s process-test timeouts under machine load are known noise — re-run that file alone).
-3. `bun run build`; smoke the binary: `dist/groot --version`, `dist/groot init demo --dry-run --yes --json`, `dist/groot schema --json`.
+1–3. ~~Merge wave 3 (verifiers skipped), final full suite, compiled-binary smoke~~ — done: 1102 pass · 0 fail at `9097955`.
 4. Fast-forward `refactor/groot-v2-core` to `wip/v2-integration`; push with `-u`; open a draft PR (body draft: /tmp/groot-pr/body-draft.md — fill evidence and limitations).
 5. Report as NOT re-run on the final revision: Gate C / MCP / recipe E2E (last green: Gate C 5/5 at `d69e71b`, recipe certification 3/3 on G's branch), a real Claude Code run with the hardened containment flags, the Bun 1.3.14 parity suite.
 
@@ -65,6 +63,8 @@ Open upstream drift (issue #81 + new): `@tanstack/cli` 0.69→0.71.1, `create-ex
 | `efd8569` | real single-app E2E: `GROOT_E2E=1 bun test single.e2e` (create-hono 0.19.5) | ✅ planted, stitched, installed, committed, doctor healthy, serves 200 |
 | `f16b6c9` | MCP contract tests (official client, both eras + raw harness) | ✅ 6 pass |
 | `f16b6c9` | Bun 1.3.14 frozen install with MCP deps | ✅ lockfile stays v1 |
+| `9097955` | **final full suite** (`cd packages/cli && bun test`, Bun 1.4.0, quiet machine) after every review wave, the docs consolidation, and the follow-ups | ✅ **1102 pass · 15 skip (gated E2E) · 0 fail** (664 s); lint, typecheck, schema drift clean |
+| `9097955` | compiled binary (`bun run build`, 74 MB): `--version`, `init --dry-run --json` (monorepo + `--topology single`), `schema --json` (15 commands, 24 contracts), malformed `apply --json` | ✅ v2 blueprints; usage envelope with exit 2 |
 | `8759df4` | real E2E `GROOT_E2E=1 bun test v2-flow.e2e -t "allocates a free dev port"` (create-next-app + create-hono, then `groot add next --path apps/admin`) | ✅ allocated 3002 (3000 web, 3001 api), dev script `--port 3002`, doctor healthy, `next dev` served HTTP 200 on :3002 (116 s) |
 | runners unit `d132b00` | real Claude Code 2.1.293 task: create → run (opus, 3 turns, ~48 s, est. $0.27) → review → approve → integrate (fresh acceptance on the merge) | ✅ one real run; Codex 0.116.0 discovery **blocked** (config-incompatible: `~/.codex/config.toml:2:26 unknown variant `ultra``) |
 | recipes unit `e89d49f` | recipe certification `GROOT_RECIPE_E2E=1` (real create-hono 0.19.5, real installs, all four profiles) | ✅ 3/3 |
