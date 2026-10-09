@@ -6,7 +6,7 @@
  * env value may ever appear in one.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectObservation } from "../contracts/project.ts";
 import { createContext } from "../runtime.ts";
@@ -197,9 +197,43 @@ describe("registration and blueprint contradictions", () => {
         version: 1,
         error: null,
       });
-      expect(observation.contradictions.map((entry) => entry.explanation)).toEqual([
-        "groot.json records scaffold 1 (elysia) at apps/api, but apps/api/package.json declares none of elysia",
-        "groot.json records scaffold 2 (expo) at apps/mobile, but apps/mobile/package.json is missing",
+      expect(observation.contradictions).toEqual([
+        {
+          topic: "blueprint",
+          explanation:
+            "groot.json records scaffold 1 (elysia) at apps/api, but apps/api/package.json declares none of elysia",
+          sources: ["groot.json", "apps/api/package.json"],
+        },
+        {
+          topic: "blueprint",
+          explanation:
+            "groot.json records scaffold 2 (expo) at apps/mobile, but apps/mobile is missing",
+          sources: ["groot.json", "apps/mobile"],
+        },
+      ]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a recorded scaffold whose directory exists without a package.json names the missing package.json",
+    async () => {
+      // Arrange
+      const root = v1Workspace();
+      rmSync(join(root, "packages/backend/package.json"));
+      writeFileSync(join(root, "packages/backend/README.md"), "# backend\n");
+
+      // Act
+      const observation = await observe(root);
+
+      // Assert
+      expect(observation.contradictions).toEqual([
+        {
+          topic: "blueprint",
+          explanation:
+            "groot.json records scaffold 2 (convex) at packages/backend, but packages/backend/package.json is missing",
+          sources: ["groot.json", "packages/backend/package.json"],
+        },
       ]);
     },
     TIMEOUT,

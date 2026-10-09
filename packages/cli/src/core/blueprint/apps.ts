@@ -1,16 +1,17 @@
 /**
  * Building blocks shared by migration (v1 → v2) and adoption: stable app ids,
- * content-derived decision ids, the per-app structural verification
- * contracts (with the gaps they are known to fail on), and the final
- * contract check every generated blueprint passes.
+ * content-derived decision ids, the structural verification contracts a
+ * registration records (with the gaps they are known to fail on), and the
+ * final contract check every generated blueprint passes.
  *
  * Decision ids are derived from the decision's content instead of random
  * bytes so that the same inputs always produce byte-identical documents —
  * a migration re-planned against an unchanged project previews exactly the
  * same groot.json.
  */
-import { type BlueprintApp, BlueprintV2 } from "../contracts/blueprint.ts";
+import { BlueprintV2 } from "../contracts/blueprint.ts";
 import type { VerificationContract } from "../contracts/common.ts";
+import type { ProjectObservation } from "../contracts/project.ts";
 import { GrootV2Error } from "../errors.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { joinRel } from "../fs/paths.ts";
@@ -18,6 +19,7 @@ import { canonicalJson } from "../json.ts";
 import { portCollisions } from "../ports.ts";
 import { defaultContracts } from "../verify/checkers.ts";
 import { zodIssues } from "./document.ts";
+import { missingRecordedPaths } from "./presence.ts";
 
 /** Lowercase, dash-separated id material ("My API!" → "my-api"); "" when nothing usable remains. */
 export function slugify(text: string): string {
@@ -51,26 +53,42 @@ export function decisionId(seed: unknown): string {
 
 /**
  * Structural checks a blueprint recorded from the project as it is will fail
- * as soon as it is written, keyed by contract id, with the reason: an app
- * without an observed package name fails structural.package.<id>, and apps
- * recorded with the same dev port fail structural.blueprint. Pure — derived
- * from the blueprint alone.
+ * as soon as it is written, keyed by contract id, with the reason — the
+ * conditions the checks themselves test. structural.blueprint fails for an
+ * app whose directory is missing and for apps recorded with the same dev
+ * port; structural.package.<id> fails for an app whose directory or
+ * package.json is missing, or that has no package name. Pure: missing paths
+ * come from the observation's contradictions (see presence.ts), everything
+ * else from the blueprint alone (without an observation, nothing counts as
+ * missing).
  */
-export function knownStructuralGaps(blueprint: BlueprintV2): Map<string, string> {
+export function knownStructuralGaps(
+  blueprint: BlueprintV2,
+  observation?: ProjectObservation,
+): Map<string, string> {
+  const missing = observation === undefined ? new Set<string>() : missingRecordedPaths(observation);
   const gaps = new Map<string, string>();
-  const collisions = [...portCollisions(blueprint)].map(
-    ([port, paths]) => `dev port ${port} is declared by ${paths.join(" and ")}`,
-  );
-  if (collisions.length > 0) gaps.set("structural.blueprint", collisions.join("; "));
+  const blueprintProblems: string[] = [];
   for (const app of blueprint.apps) {
-    if (app.packageName !== null) continue;
-    gaps.set(
-      `structural.package.${app.id}`,
-      `no package name was observed in ${joinRel(app.path, "package.json")}`,
-    );
+    const manifest = joinRel(app.path, "package.json");
+    const packageCheck = `structural.package.${app.id}`;
+    if (missing.has(app.path)) {
+      blueprintProblems.push(`${app.id}: ${app.path} is missing`);
+      gaps.set(packageCheck, `${app.path} is missing`);
+    } else if (missing.has(manifest)) {
+      gaps.set(packageCheck, `${manifest} is missing`);
+    } else if (app.packageName === null) {
+      gaps.set(packageCheck, `no package name was observed in ${manifest}`);
+    }
   }
+  for (const [port, paths] of portCollisions(blueprint)) {
+    blueprintProblems.push(`dev port ${port} is declared by ${paths.join(" and ")}`);
+  }
+  if (blueprintProblems.length > 0) gaps.set("structural.blueprint", blueprintProblems.join("; "));
   return gaps;
 }
+
+const KNOWN_GAP = " — known gap when recorded: ";
 
 /** `contract`, its description noting the gap it was known to fail on when recorded. */
 export function withKnownGap(
@@ -79,23 +97,34 @@ export function withKnownGap(
 ): VerificationContract {
   return gap === undefined
     ? contract
-    : { ...contract, description: `${contract.description} — known gap when recorded: ${gap}` };
+    : { ...contract, description: `${contract.description}${KNOWN_GAP}${gap}` };
+}
+
+/** The gap `contract`'s description notes (see withKnownGap), or null when it notes none. */
+export function knownGapOf(contract: VerificationContract): string | null {
+  const at = contract.description.indexOf(KNOWN_GAP);
+  return at === -1 ? null : contract.description.slice(at + KNOWN_GAP.length);
 }
 
 /**
- * Per-app structural contracts, taken from the verification engine's own
- * defaults so ids match (the engine dedupes by id, the blueprint's entry
- * first) — and descriptions too, except that a check already known to fail
- * says so, so `groot verify` reports it as announced.
+ * The structural contracts a registration blueprint records: every app's
+ * structural.package check, and structural.blueprint when it is already known
+ * to fail. Taken from the verification engine's own defaults so ids match
+ * (the engine dedupes by id, the blueprint's entry first) — and descriptions
+ * too, except that a check known to fail says so: after apply, `groot verify`
+ * reads the description from groot.json and reports the failure as announced.
  */
-export function structuralPackageContracts(
-  draft: BlueprintV2,
-  apps: readonly BlueprintApp[],
+export function recordedStructuralContracts(
+  blueprint: BlueprintV2,
+  observation: ProjectObservation,
 ): VerificationContract[] {
-  const blueprint = { ...draft, apps: [...apps] };
-  const gaps = knownStructuralGaps(blueprint);
+  const gaps = knownStructuralGaps(blueprint, observation);
   return defaultContracts(blueprint)
-    .filter((contract) => contract.checker === "structural.package")
+    .filter(
+      (contract) =>
+        contract.checker === "structural.package" ||
+        (contract.checker === "structural.blueprint" && gaps.has(contract.id)),
+    )
     .map((contract) => withKnownGap(contract, gaps.get(contract.id)));
 }
 

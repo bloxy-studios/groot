@@ -24,8 +24,8 @@ import {
   assertBlueprint,
   decisionId,
   packageBaseName,
+  recordedStructuralContracts,
   slugify,
-  structuralPackageContracts,
 } from "./apps.ts";
 
 export const ADOPTION_TOPIC = "adoption.layout";
@@ -151,7 +151,7 @@ export function blueprintFromObservation(
     policy: { ...DEFAULT_POLICY, allow: [...DEFAULT_POLICY.allow] },
   };
   return assertBlueprint(
-    { ...draft, verification: structuralPackageContracts(draft, apps) },
+    { ...draft, verification: recordedStructuralContracts(draft, observation) },
     "groot adopt",
   );
 }

@@ -16,7 +16,7 @@
  * reasons and next step.
  */
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
-import { knownStructuralGaps, withKnownGap } from "../blueprint/apps.ts";
+import { knownGapOf, knownStructuralGaps, withKnownGap } from "../blueprint/apps.ts";
 import { emptyLock } from "../blueprint/lock.ts";
 import { MANIFEST_FILE, readManifest } from "../blueprint/manifest.ts";
 import { serializeBlueprint, serializeLock } from "../blueprint/serialize.ts";
@@ -123,21 +123,25 @@ export function registrationAssumptions(
 
 /**
  * Structural checks that prove the registration (blueprint, env, ownership,
- * each app's package). A check already known to fail right after apply — a
- * package without a name, apps recorded with the same dev port — is declared
- * with the gap noted on it and stated as an assumption, so `groot verify`
- * reports nothing the plan did not announce.
+ * each app's package), declared as the blueprint records them. A check
+ * already known to fail right after apply — an app whose directory or
+ * package.json is missing, a package without a name, apps recorded with the
+ * same dev port — carries its gap in the groot.json being written (the
+ * blueprint builders note it from the observation), and every noted gap is
+ * also stated as an assumption: the plan, groot.json, and `groot verify` after
+ * apply name the same known failures.
  */
 export function registrationVerification(builder: PlanBuilder, blueprint: BlueprintV2): void {
-  const gaps = knownStructuralGaps(blueprint);
+  const gaps = knownStructuralGaps(blueprint); // for a structural check the blueprint does not record
   const recorded = new Map(blueprint.verification.map((contract) => [contract.id, contract]));
   for (const contract of defaultContracts(blueprint)) {
     if (contract.profile !== "structural") continue;
-    builder.verify(recorded.get(contract.id) ?? withKnownGap(contract, gaps.get(contract.id)));
-  }
-  for (const [id, gap] of gaps) {
+    const declared = recorded.get(contract.id) ?? withKnownGap(contract, gaps.get(contract.id));
+    builder.verify(declared);
+    const gap = knownGapOf(declared);
+    if (gap === null) continue;
     builder.assume(
-      `Known gap: ${id} will fail right after apply — ${gap}. Registration records the project as it is and changes nothing to fix it.`,
+      `Known gap: ${contract.id} will fail right after apply — ${gap}. Registration records the project as it is and changes nothing to fix it.`,
     );
   }
 }

@@ -4,7 +4,7 @@
  * uncommitted work, states every inference, and refuses precisely.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
 import { emptyLock } from "../blueprint/lock.ts";
@@ -320,8 +320,14 @@ describe("planAdopt — ports", () => {
   );
 });
 
-/** Apply the plan's two writes by hand, then run the structural checks `groot verify` runs. */
-async function structuralFailuresAfterApply(root: string, plan: OperationPlan): Promise<string[]> {
+/**
+ * Apply the plan's two writes by hand, then run the structural checks
+ * `groot verify` runs: the summary of each failing check, by check id.
+ */
+async function failuresAfterApply(
+  root: string,
+  plan: OperationPlan,
+): Promise<Record<string, string>> {
   for (const action of writes(plan)) writeFileSync(join(root, action.path), action.content);
   const blueprint = BlueprintV2.parse(JSON.parse(readFileSync(join(root, "groot.json"), "utf8")));
   const lock = GrootLock.parse(JSON.parse(readFileSync(join(root, "groot.lock.json"), "utf8")));
@@ -333,19 +339,34 @@ async function structuralFailuresAfterApply(root: string, plan: OperationPlan): 
     profiles: ["structural"],
     extra: defaultContracts(blueprint),
   });
-  return report.evidence
-    .filter((entry) => entry.status === "fail")
-    .map((entry) => entry.check)
-    .sort();
+  return Object.fromEntries(
+    report.evidence
+      .filter((entry) => entry.status === "fail")
+      .map((entry) => [entry.check, entry.summary]),
+  );
 }
 
-/** Checks the plan announces as known gaps: noted on the check and stated as an assumption. */
+async function structuralFailuresAfterApply(root: string, plan: OperationPlan): Promise<string[]> {
+  return Object.keys(await failuresAfterApply(root, plan)).sort();
+}
+
+/**
+ * Checks the plan announces as known gaps: noted on the check, stated as an
+ * assumption, and recorded with the same note in the groot.json it writes —
+ * which is where `groot verify` reads the description from after apply.
+ */
 function announcedGaps(plan: OperationPlan): string[] {
   const noted = plan.verification
     .filter((contract) => contract.description.includes("known gap"))
     .map((contract) => contract.id)
     .sort();
-  for (const id of noted) expect(plan.assumptions.join("\n")).toContain(`Known gap: ${id} `);
+  const recorded = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}")).verification;
+  for (const id of noted) {
+    expect(plan.assumptions.join("\n")).toContain(`Known gap: ${id} `);
+    expect(recorded.find((contract) => contract.id === id)).toEqual(
+      plan.verification.find((contract) => contract.id === id),
+    );
+  }
   return noted;
 }
 
@@ -399,19 +420,46 @@ describe("planAdopt — structural checks it already knows will fail", () => {
       const assumptions = plan.assumptions.join("\n");
       expect(assumptions).toContain("dev port 3000 is declared by apps/admin and apps/web");
       expect(assumptions).toContain("no package name was observed in apps/admin/package.json");
-      const recorded = blueprint.verification.find(
-        (contract) => contract.id === "structural.package.admin",
-      );
-      expect(recorded?.description).toContain("known gap");
-      expect(recorded).toEqual(
-        plan.verification.find((contract) => contract.id === "structural.package.admin"),
+      for (const id of ["structural.blueprint", "structural.package.admin"]) {
+        const recorded = blueprint.verification.find((contract) => contract.id === id);
+        expect(recorded?.description).toContain("known gap when recorded");
+        expect(recorded).toEqual(plan.verification.find((contract) => contract.id === id));
+      }
+      expect(
+        blueprint.verification.find((contract) => contract.id === "structural.blueprint")
+          ?.description,
+      ).toBe(
+        "groot.json is valid and its apps exist — known gap when recorded: dev port 3000 is declared by apps/admin and apps/web",
       );
     },
     TIMEOUT,
   );
 
   test(
-    "migration shares the helpers: a scaffold missing on disk is stated, not silently recorded",
+    "a project with no known gap records no structural.blueprint entry — the default applies",
+    async () => {
+      // Arrange
+      const root = bunMonorepo();
+
+      // Act
+      const plan = await planAdopt(createContext({ cwd: root }), ".", { now: NOW });
+      const blueprint = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}"));
+
+      // Assert
+      expect(blueprint.verification.map((contract) => contract.id)).toEqual([
+        "structural.package.api",
+        "structural.package.web",
+        "structural.package.ui",
+      ]);
+      expect(plan.verification.find((c) => c.id === "structural.blueprint")?.description).toBe(
+        "groot.json is valid and its apps exist",
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "migration: a scaffold whose directory is missing — every check that fails is announced, with its reason",
     async () => {
       // Arrange
       const root = v1Workspace({
@@ -430,13 +478,49 @@ describe("planAdopt — structural checks it already knows will fail", () => {
 
       // Act
       const plan = await planMigrate(createContext({ cwd: root }), ".", { now: NOW });
+      const failures = await failuresAfterApply(root, plan);
 
       // Assert
+      expect(announcedGaps(plan)).toEqual(["structural.blueprint", "structural.package.mobile"]);
+      expect(Object.keys(failures).sort()).toEqual([
+        "structural.blueprint",
+        "structural.package.mobile",
+      ]);
+      expect(failures["structural.blueprint"]).toBe("mobile: apps/mobile is missing");
       const assumptions = plan.assumptions.join("\n");
       expect(assumptions).toContain(
-        "groot.json records scaffold 3 (expo) at apps/mobile, but apps/mobile/package.json is missing",
+        "groot.json records scaffold 3 (expo) at apps/mobile, but apps/mobile is missing",
       );
-      expect(announcedGaps(plan)).toEqual(["structural.package.mobile"]);
+      expect(assumptions).toContain(
+        "Known gap: structural.blueprint will fail right after apply — mobile: apps/mobile is missing.",
+      );
+      expect(assumptions).toContain(
+        "Known gap: structural.package.mobile will fail right after apply — apps/mobile is missing.",
+      );
+      expect(assumptions).not.toContain("no package name was observed in apps/mobile");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "migration: a scaffold directory without its package.json — announced with that reason",
+    async () => {
+      // Arrange
+      const root = v1Workspace();
+      rmSync(join(root, "packages/backend/package.json"));
+
+      // Act
+      const plan = await planMigrate(createContext({ cwd: root }), ".", { now: NOW });
+      const failures = await failuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual(["structural.package.backend"]);
+      expect(failures).toEqual({
+        "structural.package.backend": "packages/backend/package.json is missing or unparseable",
+      });
+      expect(plan.assumptions.join("\n")).toContain(
+        "Known gap: structural.package.backend will fail right after apply — packages/backend/package.json is missing.",
+      );
     },
     TIMEOUT,
   );

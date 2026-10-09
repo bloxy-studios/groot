@@ -28,6 +28,7 @@ import {
   serializeBlueprint,
   serializeLock,
 } from "./index.ts";
+import { missingRecordedApp } from "./presence.ts";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 
@@ -346,6 +347,50 @@ describe("migrateV1ToV2", () => {
       "structural.package.web",
       "structural.package.api",
       "structural.package.backend",
+    ]);
+  });
+
+  test("checks discovery already knows will fail are recorded with their gap — and only those", () => {
+    // Arrange: apps/api is missing; packages/backend has no package.json; apps/web's
+    // package.json exists but declares another framework (not a structural failure).
+    const reported = {
+      ...observationFixture([
+        unitFixture({ path: "apps/web", packageName: "web", entry: fixtureFact(null) }),
+      ]),
+      contradictions: [
+        missingRecordedApp("scaffold 1 (hono)", "apps/api", "apps/api"),
+        missingRecordedApp(
+          "scaffold 2 (convex)",
+          "packages/backend",
+          "packages/backend/package.json",
+        ),
+        {
+          topic: "blueprint",
+          explanation:
+            "groot.json records scaffold 0 (next) at apps/web, but apps/web/package.json declares none of next",
+          sources: ["groot.json", "apps/web/package.json"],
+        },
+      ],
+    };
+
+    // Act
+    const doc = migrateV1ToV2(v1(), reported, NOW);
+
+    // Assert
+    expect(doc.verification.map((contract) => [contract.id, contract.description])).toEqual([
+      [
+        "structural.blueprint",
+        "groot.json is valid and its apps exist — known gap when recorded: api: apps/api is missing",
+      ],
+      ["structural.package.web", "apps/web is a named package"],
+      [
+        "structural.package.api",
+        "apps/api is a named package — known gap when recorded: apps/api is missing",
+      ],
+      [
+        "structural.package.backend",
+        "packages/backend is a named package — known gap when recorded: packages/backend/package.json is missing",
+      ],
     ]);
   });
 

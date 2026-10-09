@@ -8,10 +8,13 @@
  * working on exactly the projects that need help.
  *
  * Contradictions between desired state (groot.json) and the disk are
- * reported, never reconciled: a recorded scaffold/app whose package.json is
- * missing, or whose framework dependency is absent.
+ * reported, never reconciled: a recorded scaffold/app whose directory or
+ * package.json is missing (in the shape core/blueprint/presence.ts defines,
+ * which registration plans read back), or whose framework dependency is
+ * absent.
  */
 import { type ManifestRead, readManifest } from "../blueprint/manifest.ts";
+import { missingRecordedApp } from "../blueprint/presence.ts";
 import { UnitPath } from "../contracts/common.ts";
 import type { ProjectUnit, Registration } from "../contracts/project.ts";
 import { GrootV2Error } from "../errors.ts";
@@ -129,11 +132,9 @@ export async function manifestContradictions(
     const packageJson = joinProjectPath(parsed.data, "package.json");
     const deps = await declaredDependencies(fs, parsed.data, units);
     if (deps === null) {
-      contradictions.push({
-        topic: "blueprint",
-        explanation: `groot.json records ${entry.what} at ${parsed.data}, but ${packageJson} is missing`,
-        sources: [MANIFEST_PATH, packageJson],
-      });
+      // Name what is missing: the whole directory, or only its package.json.
+      const missing = (await fs.kind(parsed.data)) === null ? parsed.data : packageJson;
+      contradictions.push(missingRecordedApp(entry.what, parsed.data, missing));
       continue;
     }
     const packages = entry.framework === null ? undefined : FRAMEWORK_PACKAGES[entry.framework];
