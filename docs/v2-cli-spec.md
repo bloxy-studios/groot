@@ -46,13 +46,21 @@ All commands accept `--json` and `--events`. Paths in documents are project-rela
 
 Read-only discovery. Reads manifests and configuration statically — never runs project scripts or imports project code; may run toolchain `--version` probes and read-only git commands. Git runs with every `GIT_*` environment variable removed except `GIT_CEILING_DIRECTORIES`, with `core.fsmonitor` and all hooks disabled (`core.hooksPath=/dev/null`), without writing the index (`GIT_OPTIONAL_LOCKS=0`, `diff.autoRefreshIndex=false`), and with `--no-ext-diff --no-textconv`; only clean/smudge/process filter drivers configured in the repository's own `.git/config` can still run during `git status`/`git diff` — clone an untrusted repository (for example an extracted archive containing `.git`) with `git clone --no-local` instead of inspecting it in place. Data: [`project.schema.json`](../schemas/v2/project.schema.json) — units, topology, package manager, toolchains, agent files (with managed-region state), capability observations, git state (staged/unstaged/untracked), registration (`unregistered | v1 | v2 | invalid | unsupported-version`), writable support level (`certified | inspect-only | unsupported`) with reasons and a next step, unknowns, and contradictions. Every inferred value carries source, method, confidence, observation time, and the source fingerprint. Env variable **names** only. Exit 0 for any readable directory.
 
+Discovery details:
+
+- Every git probe is bounded: it runs as its own process group, which is killed after 30 s (a filter driver that hangs cannot hang `inspect`); the affected git facts are then reported unknown.
+- Env variable names come from assignment lines read with Bun's own .env grammar; text inside a value (quoted multi-line values, armored blocks such as an unquoted PEM, base64 padding) is never reported as a name.
+- A unit's ports are app-first: ports declared by the dev/start/serve scripts (and the scripts they `bun run`) or by the entry source belong to the app; ports a tool's script declares (database studio, storybook, email previews) are low-confidence and never recorded as the app's port.
+- Registration `invalid` covers a `groot.json` that is invalid JSON, fails the contract, is unreadable, loops, leaves the project, or is a dangling symlink; `registration.error` gives the reason and one next step. Only a path with nothing at it is `unregistered`.
+- The worktree fingerprint counts untracked symlinks by their link text (never followed), FIFOs, sockets, and devices by kind (never opened), and untracked files over 2 MiB by size and mtime.
+
 ### `groot adopt [dir] [--dry-run]`
 
-Registers an existing certified (Bun/TypeScript) project: writes `groot.json` (v2 blueprint derived from discovery) and `groot.lock.json` — nothing else. Existing layout, scripts, configuration, human instruction files, and dirty or staged changes are preserved; rearranging the repository is never part of adoption. `--dry-run` prints and saves the plan (apply it later with `groot apply <planId>`). Refusals: inspect-only/unsupported projects → `GROOT_E_UNSUPPORTED_PROJECT` (exit 2) with the actionable next step; already registered → `GROOT_E_CONFLICT`; a v1 workspace → `GROOT_E_MIGRATION_REQUIRED`.
+Registers an existing certified (Bun/TypeScript) project: writes `groot.json` (v2 blueprint derived from discovery) and `groot.lock.json` — nothing else. Existing layout, scripts, configuration, human instruction files, and dirty or staged changes are preserved; rearranging the repository is never part of adoption. `--dry-run` prints and saves the plan (apply it later with `groot apply <planId>`). Structural checks the plan already knows will fail right after apply (a package without a name, apps sharing a dev port, a recorded app whose directory is missing) are announced as `Known gap: …` assumptions and noted on the check in `groot.json`, so `groot verify` reports them as announced. Refusals: inspect-only/unsupported projects → `GROOT_E_UNSUPPORTED_PROJECT` (exit 2) with the actionable next step; already registered → `GROOT_E_CONFLICT`; a v1 workspace → `GROOT_E_MIGRATION_REQUIRED`.
 
 ### `groot migrate [dir] [--dry-run]`
 
-Explicit, deterministic `groot.json` v1 → v2 migration (byte-identical output for the same input), plus `groot.lock.json`. Previewable; the plan is stale if `groot.json` changes after planning; rollback restores the v1 file. Unsupported versions are rejected with `GROOT_E_UNSUPPORTED_SCHEMA`.
+Explicit, deterministic `groot.json` v1 → v2 migration (byte-identical output for the same input), plus `groot.lock.json`. Previewable; the plan is stale if `groot.json` changes after planning; rollback restores the v1 file. An invalid or unreadable `groot.json` is refused with `GROOT_E_INVALID_DOCUMENT` and unsupported versions with `GROOT_E_UNSUPPORTED_SCHEMA` (exit 2, one next step); a project without a v1 `groot.json` is a `GROOT_E_USAGE` refusal naming its state.
 
 ### `groot plan add <capability>... [--target <app>] [--recipe <id>] [--experimental] [--out <file>]`
 
@@ -67,6 +75,8 @@ Built-in recipes — `data.drizzle-sqlite` (Drizzle on `bun:sqlite`) and `auth.b
 - The entry's directory may use letters, digits, spaces, and `. _ - @ +`; any other character is refused at planning (`GROOT_E_INCOMPATIBLE`).
 
 `groot plan context-sync` produces the plan for managed instruction synchronization with the same contract. (`groot plan init` — creation as a journaled, resumable plan — is planned; see [v2-ledger.md](./v2-ledger.md). `groot init` remains the one-step creation command.)
+
+Planning refuses a write or edit target that is a symbolic link (`GROOT_E_CONFLICT` naming the path): Groot never writes through a link.
 
 ### `groot apply <plan-file | planId> [--allow <class>...]`
 

@@ -68,6 +68,8 @@ Writer coordination: `.groot/lock.json` is created together with its holder reco
 
 Process supervision: every child runs detached in its own process group; timeouts, cancellation, and completion sweep the whole group (SIGTERM → grace → SIGKILL) because Bun's `kill()`/`timeout`/`AbortSignal` reach only the direct child. Captured output is size-capped (whole lines dropped from the head; a lone `\r` also ends a line) and secret-redacted once over the whole capture after exit — never per pipe chunk — and live output callbacks receive redacted complete lines. Evidence records are redacted in full (summary, details, reasons, next steps), not only their artifacts. Git probes run with every `GIT_*` variable removed except `GIT_CEILING_DIRECTORIES`, `core.fsmonitor` and all hooks disabled (`core.hooksPath=/dev/null`), the index never written (`GIT_OPTIONAL_LOCKS=0`, `diff.autoRefreshIndex=false`), and `--no-ext-diff --no-textconv`; only clean/smudge/process filter drivers configured in a repository's own `.git/config` can still run during `git status`/`git diff`, so an untrusted `.git` (for example from an extracted archive) should be cloned with `git clone --no-local` before Groot inspects it.
 
+CLI startup: v2 commands load on demand and bootstrap the core (recipes, checkers) only when one runs, so v1 commands and `bun create groot <dir>` never load the v2 core.
+
 ## Compatibility path (v1 → v2)
 
 | Surface | v2 behavior |
