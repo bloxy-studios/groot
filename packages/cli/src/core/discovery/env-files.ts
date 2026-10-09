@@ -14,11 +14,13 @@
  * Lines inside a value are never mistaken for assignments: a quoted value
  * spanning lines is skipped through its closing quote (whatever its key looks
  * like), an armored block (`-----BEGIN …` through `-----END …`, e.g. a PEM key
- * pasted without quotes) is skipped whole, and a line whose "value" starts
- * with another `=` (a base64 padding tail such as `kQ29uZg==`) is not an
- * assignment. Where Bun would read more — the lines after a quote that never
- * closes, a key that is not an identifier — groot reports fewer names: it may
- * miss a name, never report a value.
+ * pasted without quotes) is skipped whole, and a base64 padding tail is not
+ * an assignment: a line whose "value" starts with another `=` (`kQ29uZg==`),
+ * or an empty assignment whose key is encoded data — letters of both cases
+ * and digits, no underscore (`k3Yz8N4f=`). Where Bun would read more — the
+ * lines after a quote that never closes, a key that is not an identifier or
+ * looks encoded — groot reports fewer names: it may miss a name, never report
+ * a value.
  */
 import { hasPublicPrefix } from "../env.ts";
 import type { ProjectFs } from "./fs.ts";
@@ -44,6 +46,12 @@ const COLON_SPACE = /^[ \t\v\f]/;
 const LINE_BREAK = /(\r\n|\r|\n)/;
 /** The only keys reported as variable names. */
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/**
+ * A key that is encoded data, not a name a human wrote: letters of both cases
+ * and digits, no underscore — the last line of an unquoted base64 value with
+ * one `=` of padding reads as `<that line>=`, an empty assignment.
+ */
+const ENCODED_KEY = /^(?=[A-Za-z\d]*[a-z])(?=[A-Za-z\d]*[A-Z])(?=[A-Za-z\d]*\d)[A-Za-z\d]{8,}$/;
 const ARMOR_BEGIN = "-----BEGIN ";
 const ARMOR_END = "-----END ";
 const MAX_ENV_BYTES = 256 * 1024;
@@ -52,7 +60,10 @@ interface Assignment {
   readonly name: string;
   /** The value text on this line, leading blanks removed ("" when the value is on the next line). */
   readonly value: string;
-  /** A base64 padding tail (`xyz==`) reads as `xyz` = `=`: no assignment a human wrote. */
+  /**
+   * A base64 padding tail — `xyz==` reads as `xyz` = `=`, and `x3Yz=` as an
+   * empty `x3Yz` whose key is encoded data: no assignment a human wrote.
+   */
   readonly paddingTail: boolean;
   /** `KEY:` ended by `\n` or a lone `\r`: Bun's loader reads the whole next line as the value. */
   readonly valueOnNextLine: boolean;
@@ -66,7 +77,8 @@ function assignment(line: string, lineBreak: string): Assignment | null {
   const rest = match[3] as string;
   if (match[2] === "=") {
     const value = rest.replace(/^[ \t]+/, "");
-    return { name, value, paddingTail: value.startsWith("="), valueOnNextLine: false };
+    const paddingTail = value.startsWith("=") || (value === "" && ENCODED_KEY.test(name));
+    return { name, value, paddingTail, valueOnNextLine: false };
   }
   if (rest === "") {
     // The line break is the colon's whitespace: after \r\n the value is empty (the \n ends it).

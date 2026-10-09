@@ -307,6 +307,37 @@ describe("dotenv names", () => {
     expect(envNames(text)).toEqual(["BLOB", "AFTER"]);
   });
 
+  test("a single-`=` base64 padding tail is not a name; ordinary empty assignments still are", () => {
+    // Arrange: `<base64>=` reads as an empty assignment (Bun defines it), but a key with
+    // letters of both cases and digits and no underscore is encoded data, not a name.
+    const text = [
+      "SIGNING_KEY=MIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAq7BFUpkGp3XQjHxm",
+      "k3Yz8N4fQ2v1Rk5h9wq7aVxk3dLkmZ0yQcK9pWQIDAQABAkBYsecretTail=",
+      "Zm9vYmFy0x9=",
+      "EMPTY=",
+      "API_V2=",
+      "lower_case=",
+      "nodeEnv=",
+      "LEGACY2=",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act
+    const names = envNames(text);
+
+    // Assert
+    expect(names).toEqual([
+      "SIGNING_KEY",
+      "EMPTY",
+      "API_V2",
+      "lower_case",
+      "nodeEnv",
+      "LEGACY2",
+      "AFTER",
+    ]);
+    expect(names.join("\n")).not.toMatch(/secret|Zm9v/);
+  });
+
   test("a quoted value spanning lines is skipped whole, whatever its key looks like", () => {
     // Arrange: dotenv accepts keys with dashes and dots; groot reports only identifiers.
     const text = [
