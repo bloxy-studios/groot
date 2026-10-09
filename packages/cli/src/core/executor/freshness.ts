@@ -8,24 +8,41 @@
  * The same expectation check runs again right before each step (apply and
  * resume), because humans don't take Groot's lock: an edit made while an
  * operation runs — or while it sits interrupted — is caught at the step that
- * would have overwritten it.
+ * would have overwritten it. A `produced` expectation passes only against the
+ * result its producer journaled (a file hash, or `tree:<dir>` for generated
+ * directories) — a missing result is a finding.
+ *
+ * Checking is read-only apart from toolchain version probes, and those run
+ * only allowlisted tools found on PATH outside the project; a plan cannot
+ * make the check execute a path or name of its choosing.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, isAbsolute, relative } from "node:path";
 import type { Sha256 } from "../contracts/common.ts";
 import type { OperationPlan, PathExpectation, Precondition } from "../contracts/plan.ts";
+import { PROBES } from "../discovery/toolchains.ts";
 import { GrootV2Error } from "../errors.ts";
 import { hashFile } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
+import { canonicalJson } from "../json.ts";
 import { runProcess } from "../process.ts";
 import { STATE_DIR_NAME } from "../state.ts";
+import { isWithin, ownExpectation, packageJsonPath } from "./action-paths.ts";
 import { currentHash, pathKind } from "./fsops.ts";
 import type { StaleFinding } from "./types.ts";
 
 /** Wall-time cap for `<tool> --version` probes. */
 const VERSION_PROBE_TIMEOUT_MS = 15_000;
 
-/** Looks up the after-hash a completed earlier step journaled for a path (undefined = unknown). */
-export type ProducedHash = (byStep: string, path: string) => Sha256 | null | undefined;
+/** What a completed step journaled for a path: its file key, or `tree:<path>` for a directory. */
+export interface ProducedResult {
+  readonly key: string;
+  readonly hash: Sha256 | null;
+}
+
+/** Looks up a completed earlier step's recorded result for a path (undefined = none recorded). */
+export type ProducedHash = (byStep: string, path: string) => ProducedResult | undefined;
 
 const describe = (hash: Sha256 | null): string => hash ?? "absent";
 
@@ -36,13 +53,21 @@ async function checkPath(
   produced: ProducedHash,
 ): Promise<StaleFinding | null> {
   if (expect.state === "produced") {
-    const expected = produced(expect.byStep, path);
-    if (expected === undefined) return null;
-    const actual = await currentHash(root, path);
-    if (actual === expected) return null;
+    // No recorded result means nothing vouches for the path: never a pass.
+    const recorded = produced(expect.byStep, path);
+    if (recorded === undefined) {
+      return {
+        path,
+        expected: `the result of step ${expect.byStep}`,
+        actual: "no result recorded",
+        reason: `step ${expect.byStep} has not recorded a result for it`,
+      };
+    }
+    const actual = await currentHash(root, recorded.key);
+    if (actual === recorded.hash) return null;
     return {
       path,
-      expected: describe(expected),
+      expected: describe(recorded.hash),
       actual: describe(actual),
       reason: `changed after step ${expect.byStep} produced it`,
     };
@@ -130,16 +155,53 @@ function atLeast(a: readonly number[], b: readonly number[]): boolean {
   return true;
 }
 
-async function toolVersion(root: string, id: string): Promise<string | null> {
-  if (id === "bun") return Bun.version;
-  const executable = Bun.which(id);
-  if (executable === null) return null;
+/** PATH with only absolute entries — a relative entry would resolve against the cwd. */
+function absolutePath(): string {
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter((entry) => isAbsolute(entry))
+    .join(delimiter);
+}
+
+function insideProject(root: string, executable: string): boolean {
+  try {
+    const rel = relative(realpathSync(root), realpathSync(executable));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  } catch {
+    return true; // cannot tell where it really is: never run it
+  }
+}
+
+/**
+ * The version banner of a toolchain, or why it was not probed. A plan names
+ * the tool, so only the vetted probes discovery uses (core/discovery/
+ * toolchains.ts) run: bun is the running runtime, anything else is found on
+ * PATH — never inside the project — and asked for its version from a neutral
+ * directory. Paths and unknown names are reported, never executed.
+ */
+async function toolVersion(
+  root: string,
+  id: string,
+): Promise<{ output: string } | { why: string }> {
+  if (id === "bun") return { output: Bun.version };
+  const probe = Object.hasOwn(PROBES, id) ? PROBES[id] : undefined;
+  if (probe === undefined) return { why: "not a toolchain groot can probe (it was not run)" };
+  const [name, ...args] = probe.argv;
+  if (probe.darwinOnly === true && process.platform !== "darwin") {
+    return { why: `${name} exists only on macOS` };
+  }
+  const executable = name === undefined ? null : Bun.which(name, { PATH: absolutePath() });
+  if (executable === null) return { why: "not found on PATH" };
+  if (insideProject(root, executable)) {
+    return { why: `${executable} is inside the project (it was not run)` };
+  }
   const result = await runProcess({
-    argv: [executable, "--version"],
-    cwd: root,
+    argv: [executable, ...args],
+    cwd: tmpdir(),
+    env: { ...process.env, GOTOOLCHAIN: "local" },
     timeoutMs: VERSION_PROBE_TIMEOUT_MS,
   });
-  return `${result.stdout}\n${result.stderr}`.trim();
+  return { output: `${result.stdout}\n${result.stderr}`.trim() };
 }
 
 async function checkToolchain(
@@ -149,10 +211,9 @@ async function checkToolchain(
   const path = `toolchain:${pre.id}`;
   const expected =
     pre.minVersion === null ? `${pre.id} installed` : `${pre.id} >= ${pre.minVersion}`;
-  const output = await toolVersion(root, pre.id);
-  if (output === null) {
-    return { path, expected, actual: "not found on PATH", reason: pre.reason };
-  }
+  const probed = await toolVersion(root, pre.id);
+  if ("why" in probed) return { path, expected, actual: probed.why, reason: pre.reason };
+  const { output } = probed;
   if (pre.minVersion === null) return null;
   const minimum = parseVersion(pre.minVersion);
   const actual = parseVersion(output);
@@ -204,8 +265,9 @@ async function checkPrecondition(
 
 const NOTHING_PRODUCED: ProducedHash = () => undefined;
 
+/** Identity of a precondition; path checks include the expectation, so a disagreeing one is kept. */
 function preconditionKey(pre: Precondition): string {
-  if (pre.type === "path") return `path:${pre.path}`;
+  if (pre.type === "path") return `path:${pre.path}:${canonicalJson(pre.expect)}`;
   if (pre.type === "fresh-dir") return `fresh:${pre.path}`;
   return pre.type === "toolchain" ? `toolchain:${pre.id}` : "manifest";
 }
@@ -217,7 +279,7 @@ function touchedPaths(action: OperationPlan["actions"][number]): string[] {
     case "generator.run":
       return [action.produces];
     case "deps.add":
-      return [action.unit === "." ? "package.json" : `${action.unit}/package.json`];
+      return [packageJsonPath(action.unit)];
     case "command.run":
     case "internal":
       return action.touches;
@@ -229,10 +291,11 @@ function touchedPaths(action: OperationPlan["actions"][number]): string[] {
 }
 
 /**
- * Preconditions the actions imply but planners don't always record: a
- * generator's destination must be fresh, a move's target absent. Checking
- * them with the declared ones keeps "a stale plan writes nothing" true for
- * these paths too, instead of failing halfway through the operation.
+ * Preconditions the actions imply but a plan may not record: each step's own
+ * expectation of a path no earlier step changes, a generator's destination
+ * fresh, a move's target absent. Checking them with the declared ones keeps
+ * "a stale plan writes nothing" true even for a plan whose preconditions
+ * under-declare (or contradict) its actions, instead of failing halfway.
  */
 export function impliedPreconditions(plan: OperationPlan): Precondition[] {
   const known = new Set(plan.preconditions.map(preconditionKey));
@@ -243,13 +306,18 @@ export function impliedPreconditions(plan: OperationPlan): Precondition[] {
     known.add(preconditionKey(pre));
     implied.push(pre);
   };
-  const touchedUnder = (dir: string): boolean =>
-    dir === "." ? touched.length > 0 : touched.some((p) => p === dir || p.startsWith(`${dir}/`));
+  // An earlier step changed the path itself, or a tree containing it.
+  const changedEarlier = (path: string): boolean => touched.some((p) => isWithin(path, p));
+  const touchedUnder = (dir: string): boolean => touched.some((p) => isWithin(p, dir));
   for (const action of plan.actions) {
+    const own = ownExpectation(action);
+    if (own !== null && own.expect.state !== "produced" && !changedEarlier(own.path)) {
+      add({ type: "path", path: own.path, expect: own.expect, dirty: false });
+    }
     if (action.type === "generator.run" && !touchedUnder(action.produces)) {
       add({ type: "fresh-dir", path: action.produces });
     }
-    if (action.type === "file.move" && !touched.includes(action.to)) {
+    if (action.type === "file.move" && !changedEarlier(action.to)) {
       add({ type: "path", path: action.to, expect: { state: "absent" }, dirty: false });
     }
     touched.push(...touchedPaths(action));

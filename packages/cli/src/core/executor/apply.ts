@@ -28,7 +28,7 @@ import { internalHandler } from "./handlers.ts";
 import { validatePlanDocument } from "./plans.ts";
 import { assertPolicy } from "./policy.ts";
 import { canonicalRoot } from "./project.ts";
-import { checkpoint, createExecution, emit, runRemaining } from "./runner.ts";
+import { checkpoint, createExecution, emit, runRemaining, secretBookFor } from "./runner.ts";
 import { abortReason } from "./step-context.ts";
 import { externalBlocked } from "./steps-process.ts";
 import { createOperationDir, findByFingerprint } from "./store.ts";
@@ -145,7 +145,9 @@ export async function applyPlan(ctx: CoreContext, request: ApplyRequest): Promis
     if (settled !== null) return settled;
     await assertFresh(root, plan);
 
-    const ex = createExecution(ctx, root, plan, createOperationDir(root, operationId, plan));
+    const secrets = secretBookFor(root, plan);
+    const paths = createOperationDir(root, operationId, plan, secrets);
+    const ex = createExecution(ctx, root, plan, paths, "write", secrets);
     ex.journal.append({
       type: "operation.started",
       operationId,

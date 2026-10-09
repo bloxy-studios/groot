@@ -1,12 +1,13 @@
 /**
  * Process-level tests for `groot apply/status/rollback` (piped stdio, the
  * CI/agent environment): JSON envelopes, policy denials as blocked decisions
- * with --allow collected from raw args, saved-plan ids, writer-lock
- * contention between two real processes, rollback conflicts (exit 6), and
- * that a generated secret never appears in output or under .groot/.
+ * with --allow collected from raw args, policy loading that fails closed on
+ * an invalid groot.json, resume re-checking the policy, saved-plan ids,
+ * writer-lock contention between two real processes, rollback conflicts
+ * (exit 6), and that a generated secret never appears in output or under .groot/.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeArgv } from "../cli-compat.ts";
 import { savePlan } from "../core/executor/index.ts";
@@ -19,6 +20,7 @@ import {
   MULTI_STEP_FILES,
   multiStepPlan,
   operationIds,
+  removeScratchDirs,
   runCli,
   scratchProject,
   snapshot,
@@ -28,7 +30,11 @@ import {
 import { blueprintFixture } from "../core/test-fixtures.ts";
 import { parseAllowFlags } from "./apply.ts";
 
+afterAll(removeScratchDirs);
+
 const PROCESS_TIMEOUT = 120_000;
+
+const FILES_ONLY = { allow: ["fs.create" as const, "fs.edit" as const], external: "deny" as const };
 
 describe("--allow parsing (citty keeps only the last repeated value)", () => {
   test("collects repeated flags, = forms, and comma lists, de-duplicated", () => {
@@ -187,6 +193,72 @@ describe("groot apply / status (process-level)", () => {
 
       // Assert
       expect(run.exitCode).toBe(0);
+    },
+    PROCESS_TIMEOUT,
+  );
+
+  test(
+    "an invalid groot.json fails closed: nothing is applied under a default policy",
+    async () => {
+      // Arrange — a restrictive policy next to one unrelated invalid field.
+      const root = scratchProject({ "package.json": '{\n  "name": "demo"\n}\n' });
+      const blueprint = blueprintFixture({ policy: FILES_ONLY });
+      writeFileSync(
+        join(root, "groot.json"),
+        `${JSON.stringify({ ...blueprint, project: { ...blueprint.project, packageManager: "pnpm" } }, null, 2)}\n`,
+      );
+      const planFile = writePlanFile(
+        await buildPlan(root, async (b) => {
+          addCommand(b, "echo ran > ran.txt");
+        }),
+      );
+
+      // Act
+      const run = await runCli(root, ["apply", planFile, "--json"]);
+
+      // Assert
+      expect(run.exitCode).toBe(2);
+      expect(envelopeOf(run).error?.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(existsSync(join(root, "ran.txt"))).toBe(false);
+      expect(operationIds(root)).toEqual([]);
+    },
+    PROCESS_TIMEOUT,
+  );
+
+  test(
+    "resume re-checks the policy: approvals don't carry over, --allow on resume resolves it",
+    async () => {
+      // Arrange — apply (approved) crashes right after the command step's intent.
+      const root = scratchProject();
+      writeFileSync(
+        join(root, "groot.json"),
+        `${JSON.stringify(blueprintFixture({ policy: FILES_ONLY }), null, 2)}\n`,
+      );
+      const planFile = writePlanFile(
+        await buildPlan(root, async (b) => {
+          await b.writeFile({ path: "a.txt", content: "a\n", description: "create a.txt" });
+          addCommand(b, "echo ran > ran.txt", { idempotent: true });
+        }),
+      );
+      const crashed = await runCli(root, ["apply", planFile, "--allow", "command"], {
+        GROOT_INTERNAL_CRASH_AT: "s02:after-intent",
+      });
+      const operationId = String(operationIds(root)[0]);
+
+      // Act
+      const denied = await runCli(root, ["resume", operationId, "--json"]);
+      const allowed = await runCli(root, ["resume", operationId, "--allow", "command", "--json"]);
+
+      // Assert
+      expect(crashed.signalCode).toBe("SIGKILL");
+      expect(denied.exitCode).toBe(7);
+      const envelope = envelopeOf(denied);
+      expect(envelope.error?.id).toBe("GROOT_E_POLICY_DENIED");
+      expect(envelope.blocked.map((decision) => decision.resolveWith)).toEqual([
+        `groot resume ${operationId} --allow command`,
+      ]);
+      expect(allowed.exitCode).toBe(0);
+      expect(readFileSync(join(root, "ran.txt"), "utf8")).toBe("ran\n");
     },
     PROCESS_TIMEOUT,
   );

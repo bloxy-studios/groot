@@ -9,7 +9,10 @@
  * happens in between (crash, SIGINT, failure) leaves a journal from which
  * resume can tell exactly which step was in flight. Failures are recorded
  * (step.failed + operation.failed, or operation.interrupted) before they
- * propagate, so the on-disk state always explains how the run ended.
+ * propagate, so the on-disk state always explains how the run ended. Before
+ * its intent, each step's paths are checked at their real location — none
+ * may resolve into `.groot/` or `.git/` (reserved.ts) — and a recursive
+ * delete may not hold one either.
  */
 import { schemaUrl } from "../contracts/common.ts";
 import {
@@ -21,17 +24,46 @@ import type { OperationPlan, PlannedAction } from "../contracts/plan.ts";
 import { GrootV2Error, toErrorInfo } from "../errors.ts";
 import type { CoreContext, EventInput } from "../runtime.ts";
 import { crashPoint } from "./crash.ts";
-import { staleError } from "./freshness.ts";
-import { backupKeys, currentHash, hashKeys, parseKey } from "./fsops.ts";
-import { Journal, type OperationPaths, progressOf, type Replay } from "./journal.ts";
-import { SecretBook, secretRefs } from "./secrets.ts";
+import { type ProducedResult, staleError } from "./freshness.ts";
+import {
+  absentAncestors,
+  backupKeys,
+  currentHash,
+  hashKeys,
+  parseKey,
+  treeKey,
+  writeStepRecord,
+} from "./fsops.ts";
+import {
+  type DoneRecord,
+  Journal,
+  type OperationPaths,
+  progressOf,
+  type Replay,
+} from "./journal.ts";
+import { assertNotReserved } from "./reserved.ts";
+import { knownSecretRefs, SecretBook } from "./secrets.ts";
 import { abortReason, type StepContext, type StepEffect } from "./step-context.ts";
-import { runEffect, stepFindings, trackedKeys } from "./steps.ts";
+import { assertStepSafe, runEffect, stepFindings, trackedKeys } from "./steps.ts";
 import { stepStates, writeState } from "./store.ts";
 
 export interface Execution {
   readonly sc: StepContext;
   readonly journal: Journal;
+}
+
+/** A completed step's result for a path: the file key, or the tree a generator journaled. */
+function recordedResult(done: DoneRecord | null, path: string): ProducedResult | undefined {
+  if (done === null) return undefined;
+  for (const key of [path, treeKey(path)]) {
+    if (Object.hasOwn(done.after, key)) return { key, hash: done.after[key] ?? null };
+  }
+  return undefined;
+}
+
+/** The secret values an operation of `plan` must keep out of `.groot/` (secrets.ts). */
+export function secretBookFor(root: string, plan: OperationPlan): SecretBook {
+  return new SecretBook(root, knownSecretRefs(root, plan));
 }
 
 /**
@@ -45,6 +77,7 @@ export function createExecution(
   plan: OperationPlan,
   paths: OperationPaths,
   mode: "write" | "read" = "write",
+  secrets: SecretBook = secretBookFor(root, plan),
 ): Execution {
   const journal = mode === "write" ? Journal.open(paths.journal) : Journal.view(paths.journal);
   const sc: StepContext = {
@@ -53,11 +86,8 @@ export function createExecution(
     plan,
     operationId: paths.id,
     paths,
-    secrets: new SecretBook(root, secretRefs(plan)),
-    produced: (byStep, path) => {
-      const done = progressOf(journal.replay(), byStep).done;
-      return done === null ? undefined : done.after[path];
-    },
+    secrets,
+    produced: (byStep, path) => recordedResult(progressOf(journal.replay(), byStep).done, path),
   };
   return { sc, journal };
 }
@@ -123,11 +153,16 @@ function boundaryInterrupt(ex: Execution, nextStep: string): GrootV2Error {
   );
 }
 
-/** Journal the intent (before-hashes + backups) of a step about to run. */
+/**
+ * Journal the intent (before-hashes + backups) of a step about to run; the
+ * directories its paths still lack are recorded with the backups first.
+ */
 export async function recordIntent(ex: Execution, action: PlannedAction): Promise<PathHashes> {
   const keys = trackedKeys(ex.sc.root, action);
   const before = await hashKeys(ex.sc.root, keys);
   const backups = backupKeys(ex.sc.root, ex.sc.paths, action.id, keys, ex.sc.secrets);
+  const absent = absentAncestors(ex.sc.root, keys);
+  if (absent.length > 0) writeStepRecord(ex.sc.paths, action.id, "dirs", absent);
   ex.journal.append({ type: "step.intent", stepId: action.id, before, backups });
   checkpoint(ex);
   return before;
@@ -136,6 +171,8 @@ export async function recordIntent(ex: Execution, action: PlannedAction): Promis
 /** One step through the full checkpoint protocol. */
 export async function executeStep(ex: Execution, action: PlannedAction): Promise<void> {
   if (ex.sc.ctx.signal.aborted) throw boundaryInterrupt(ex, action.id);
+  assertNotReserved(ex.sc.root, action);
+  assertStepSafe(ex.sc, action);
   const findings = await stepFindings(ex.sc, action);
   if (findings.length > 0) {
     throw staleError(findings, {
@@ -165,9 +202,15 @@ function enrich(error: unknown, operationId: string, stepId: string | null): Gro
       ? `Completed steps are kept; continue with \`groot resume ${operationId}\`.`
       : (info.hint ??
         `Fix the cause, then \`groot resume ${operationId}\` — or undo completed steps with \`groot rollback ${operationId}\`.`);
+  // A step refused before its intent (stale, reserved path) is named by the error itself.
+  const named = info.details?.stepId;
   return new GrootV2Error(info.id, info.message, {
     hint,
-    details: { ...(info.details ?? {}), operationId, stepId },
+    details: {
+      ...(info.details ?? {}),
+      operationId,
+      stepId: stepId ?? (typeof named === "string" ? named : null),
+    },
   });
 }
 

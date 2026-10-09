@@ -10,8 +10,9 @@ import type { PathHashes } from "../contracts/operation.ts";
 import type { PlannedAction } from "../contracts/plan.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
+import { packageJsonPath } from "./action-paths.ts";
 import { checkExpectation, checkFreshDir } from "./freshness.ts";
-import { backupBytes, pathKind, treeKey } from "./fsops.ts";
+import { backupBytes, pathKind, refusedRemoval, reservedWithin, treeKey } from "./fsops.ts";
 import { internalHandler } from "./handlers.ts";
 import type { IntentRecord } from "./journal.ts";
 import type { StepContext, StepEffect } from "./step-context.ts";
@@ -22,11 +23,11 @@ import {
   editStep,
   mergeDependencies,
   moveStep,
-  packageJsonPath,
   secretStep,
   writeStep,
 } from "./steps-files.ts";
-import { commandStep, externalBlocked, generatorStep, internalStep } from "./steps-process.ts";
+import { generatorStep } from "./steps-generator.ts";
+import { commandStep, externalBlocked, internalStep } from "./steps-process.ts";
 import type { StaleFinding } from "./types.ts";
 
 /** Keys hashed (and backed up when present) around a step. */
@@ -82,6 +83,18 @@ export async function stepFindings(
       break;
   }
   return findings.filter((finding): finding is StaleFinding => finding !== null);
+}
+
+/**
+ * Refusals checked before a step's intent (nothing journaled or backed up):
+ * a recursive delete never takes a `.git` or `.groot` with it. Tree hashes
+ * ignore those names, so the produced check cannot see a repository a human
+ * made inside a generated tree.
+ */
+export function assertStepSafe(sc: StepContext, action: PlannedAction): void {
+  if (action.type !== "file.delete" || !action.recursive) return;
+  const reserved = reservedWithin(sc.root, action.path);
+  if (reserved.length > 0) throw refusedRemoval(action.path, reserved, action.id);
 }
 
 /** Perform a step's effect. */

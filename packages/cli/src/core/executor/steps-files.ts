@@ -21,6 +21,7 @@ import { writeFileAtomic } from "../fs/atomic.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { resolveInProject } from "../fs/paths.ts";
 import { addEnvEntries, applyEdit, TransformConflict } from "../transforms/index.ts";
+import { packageJsonPath } from "./action-paths.ts";
 import { ensureParentDirs, fileMode, pathKind, removePath, treeKey } from "./fsops.ts";
 import { hasEnvAssignment } from "./secrets.ts";
 import type { StepContext, StepEffect } from "./step-context.ts";
@@ -70,10 +71,6 @@ export function applyEditOrConflict(
     }
     throw error;
   }
-}
-
-export function packageJsonPath(unit: string): string {
-  return unit === "." ? "package.json" : `${unit}/package.json`;
 }
 
 /**

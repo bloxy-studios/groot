@@ -2,7 +2,8 @@
  * Test-only helpers for executor and apply/resume/rollback CLI tests (never
  * imported by runtime code): scratch projects, plans built with the real
  * PlanBuilder, contract-validated journal/state readers, and tree snapshots
- * for byte-identical comparisons.
+ * for byte-identical comparisons. Scratch directories are tracked so each
+ * test file can remove them with `afterAll(removeScratchDirs)`.
  */
 import {
   chmodSync,
@@ -10,6 +11,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -25,15 +27,44 @@ import {
   OperationState as OperationStateSchema,
 } from "../contracts/operation.ts";
 import type { OperationPlan, PlanIntent } from "../contracts/plan.ts";
+import { sha256Of } from "../fs/hash.ts";
+import { canonicalJson } from "../json.ts";
 import { PlanBuilder } from "../planner/builder.ts";
 import { type CoreContext, collectingSink, createContext } from "../runtime.ts";
 import { statePaths } from "../state.ts";
 
 export const CONTEXT_INTENT: PlanIntent = { type: "context-sync" };
 
+const scratchDirs = new Set<string>();
+
+/** A fresh directory under the OS temp dir, removed again by removeScratchDirs. */
+export function scratchDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  scratchDirs.add(dir);
+  return dir;
+}
+
+/** Remove every scratch directory created so far (register with `afterAll`). */
+export function removeScratchDirs(): void {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
+  scratchDirs.clear();
+}
+
+/** A hand-edited plan with its fingerprint recomputed, so only the integrity rules can catch it. */
+export function refingerprint(plan: OperationPlan): OperationPlan {
+  const fingerprint = sha256Of(
+    canonicalJson({
+      intent: plan.intent,
+      actions: plan.actions,
+      preconditions: plan.preconditions,
+    }),
+  );
+  return { ...plan, fingerprint };
+}
+
 /** A scratch project with the given files (paths → content). */
 export function scratchProject(files: Record<string, string> = {}, prefix = "groot-exec-"): string {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  const root = scratchDir(prefix);
   for (const [path, content] of Object.entries(files)) {
     const abs = join(root, path);
     mkdirSync(dirname(abs), { recursive: true });
@@ -129,6 +160,19 @@ export function journalRecords(root: string, operationId: string): JournalRecord
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JournalRecordSchema.parse(JSON.parse(line)));
+}
+
+/** Keep the journal up to (and including) `stepId`'s intent — as if the process died right after the effect. */
+export function crashAfterEffect(root: string, operationId: string, stepId: string): void {
+  const path = join(operationDir(root, operationId), "journal.jsonl");
+  const lines = readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  const cut = lines.findIndex((line) => {
+    const record = JSON.parse(line) as { type: string; stepId?: string };
+    return record.type === "step.intent" && record.stepId === stepId;
+  });
+  writeFileSync(path, `${lines.slice(0, cut + 1).join("\n")}\n`);
 }
 
 export function stateFile(root: string, operationId: string): OperationState {
@@ -242,7 +286,7 @@ export function runCli(
 
 /** Write a plan to a file OUTSIDE the project (so it never shows up in tree comparisons). */
 export function writePlanFile(plan: OperationPlan): string {
-  const dir = mkdtempSync(join(tmpdir(), "groot-plan-"));
+  const dir = scratchDir("groot-plan-");
   const file = join(dir, "plan.json");
   writeFileSync(file, `${JSON.stringify(plan, null, 2)}\n`);
   return file;
@@ -334,6 +378,34 @@ export function addCommand(
     classes: ["command"],
     reversible: true,
     compensation: "restore touched files from backup",
+  });
+}
+
+export interface GeneratorOptions {
+  readonly script: string;
+  readonly produces: string;
+  readonly mode: "staged" | "in-place";
+  readonly cwd?: string;
+  readonly scrubGit?: boolean;
+}
+
+/** A fake generator: `sh -c script` run in its cwd (or the stage) producing `produces`. */
+export function addGenerator(builder: PlanBuilder, options: GeneratorOptions): string {
+  return builder.add({
+    type: "generator.run",
+    generator: { package: "fake-generator", range: "1", version: "1.0.0", integrity: null },
+    argv: ["sh", "-c", options.script],
+    cwd: options.cwd ?? ".",
+    mode: options.mode,
+    produces: options.produces,
+    stdin: null,
+    timeoutMs: 60_000,
+    scrubGit: options.scrubGit ?? true,
+    predictable: false,
+    description: `generate ${options.produces}`,
+    classes: ["generator"],
+    reversible: true,
+    compensation: `delete ${options.produces}`,
   });
 }
 

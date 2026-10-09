@@ -3,7 +3,7 @@
  * idempotent re-apply, narrow stale-plan detection, policy, plan-document
  * validation, failure recording, and boundary interruption.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OperationPlan } from "../contracts/plan.ts";
@@ -31,11 +31,14 @@ import {
   operationDir,
   operationIds,
   permissive,
+  removeScratchDirs,
   scratchProject,
   snapshot,
   stateFile,
   testContext,
 } from "./test-support.ts";
+
+afterAll(removeScratchDirs);
 
 async function expectGrootError(promise: Promise<unknown>): Promise<GrootV2Error> {
   try {
