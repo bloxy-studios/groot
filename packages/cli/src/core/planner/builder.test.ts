@@ -7,6 +7,8 @@
  * content at all.
  */
 import { describe, expect, test } from "bun:test";
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
 import type { FileEditAction, OperationPlan } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 import { addDeps, addSecret, buildPlan, scratchProject } from "../executor/test-support.ts";
@@ -245,5 +247,40 @@ describe("PlanBuilder: secret-bearing edits carry no content", () => {
     expect(error).toBeInstanceOf(GrootV2Error);
     expect((error as GrootV2Error).id).toBe("GROOT_E_CONFLICT");
     expect((error as GrootV2Error).message).not.toContain(DB_PASSWORD);
+  });
+});
+
+describe("PlanBuilder: symlinked targets", () => {
+  // The executor classifies a link by lstat, so a plan computed through one
+  // could never apply (every attempt would be a stale plan). Refuse up front.
+  const conflictOn = async (
+    plan: (builder: PlanBuilder) => Promise<unknown>,
+    setup: (root: string) => void,
+  ): Promise<unknown> => {
+    const root = scratchProject({ "real.txt": "real\n" });
+    setup(root);
+    return buildPlan(root, async (builder) => {
+      await plan(builder);
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+  };
+
+  test("a write through a dangling link is a planning-time conflict, not a stale-plan loop", async () => {
+    const error = await conflictOn(
+      (builder) => builder.writeFile({ path: "notes.txt", content: "x\n", description: "write" }),
+      (root) => symlinkSync(join(root, "missing.txt"), join(root, "notes.txt")),
+    );
+    expect(error).toBeInstanceOf(GrootV2Error);
+    expect(error).toMatchObject({ id: "GROOT_E_CONFLICT", details: { path: "notes.txt" } });
+  });
+
+  test("an edit through a link to an existing file is refused too", async () => {
+    const error = await conflictOn(
+      (builder) => appendLine(builder, "linked.txt", "more"),
+      (root) => symlinkSync(join(root, "real.txt"), join(root, "linked.txt")),
+    );
+    expect(error).toMatchObject({ id: "GROOT_E_CONFLICT", details: { path: "linked.txt" } });
   });
 });

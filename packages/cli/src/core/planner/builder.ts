@@ -6,6 +6,7 @@
  * secret-bearing dotenv edits), collects dependency changes and required
  * action classes, and fingerprints the result.
  */
+import { lstatSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { RecoveryInfo, SolverResult } from "../contracts/capability.ts";
 import type {
@@ -87,7 +88,20 @@ export class PlanBuilder {
   async expectationFor(path: string): Promise<PathExpectation> {
     const producer = this.produced.get(path);
     if (producer !== undefined) return { state: "produced", byStep: producer };
-    const hash = await hashFile(resolveInProject(this.init.root, path));
+    const abs = resolveInProject(this.init.root, path);
+    // The executor checks targets with lstat, so a plan computed through a
+    // link could never apply; Groot never writes through one either.
+    if (lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new GrootV2Error(
+        "GROOT_E_CONFLICT",
+        `${path} is a symbolic link; Groot never writes through one.`,
+        {
+          hint: `Replace ${path} with a regular file (or remove the link), then plan again.`,
+          details: { path, conflict: "symlink" },
+        },
+      );
+    }
+    const hash = await hashFile(abs);
     return hash === null ? { state: "absent" } : { state: "sha256", sha256: hash };
   }
 
