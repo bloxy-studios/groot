@@ -1,11 +1,18 @@
 /**
  * Git operations for tasks: canonical repository roots, task/integration
- * worktrees, Groot's own commits, merges, and cleanliness checks. Every call
+ * worktrees, Groot's own commits, merges, cleanliness checks, and ref
+ * snapshots (what an attempt moved). Every call
  * is an argv array (never a shell), bounded by a timeout, and configured to
  * never prompt or open an editor. Groot commits with the user's identity
- * when one is configured, otherwise as `groot <groot@localhost>`; task
- * commits skip repository hooks (`--no-verify`) because they are bookkeeping
- * on a task branch — acceptance checks and review are the gates.
+ * when one is configured, otherwise as `groot <groot@localhost>`.
+ *
+ * Groot's own git never runs repository hooks (`core.hooksPath=/dev/null`)
+ * or an fsmonitor command: code Groot has not reviewed (the agent's, under
+ * the pre-review checks) can write the shared git directory, and a hook or
+ * fsmonitor planted there must not run inside Groot's next git command with
+ * Groot's environment. Task commits are bookkeeping on a task branch —
+ * acceptance checks and review are the gates — and they never stage new
+ * files under `node_modules` (dependency installs Groot runs in worktrees).
  */
 import { existsSync, realpathSync, rmSync } from "node:fs";
 import { GrootV2Error } from "../errors.ts";
@@ -14,6 +21,15 @@ import { runProcess, type SpawnResult, tail } from "../process.ts";
 export type Env = Readonly<Record<string, string | undefined>>;
 
 const GIT_TIMEOUT_MS = 120_000;
+/** Prepended to every git command Groot runs (see the module comment). */
+export const GIT_SAFETY_ARGS: readonly string[] = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+];
+/** New files under any node_modules directory are never committed by Groot. */
+const NOT_NODE_MODULES = ":(exclude,glob)**/node_modules/**";
 
 export function gitEnv(base: Env): Record<string, string | undefined> {
   return {
@@ -27,7 +43,7 @@ export function gitEnv(base: Env): Record<string, string | undefined> {
 
 export function gitRun(cwd: string, args: readonly string[], env: Env): Promise<SpawnResult> {
   return runProcess({
-    argv: ["git", ...args],
+    argv: ["git", ...GIT_SAFETY_ARGS, ...args],
     cwd,
     env: gitEnv(env),
     timeoutMs: GIT_TIMEOUT_MS,
@@ -64,7 +80,7 @@ export async function gitReadRaw(
   env: Env,
   what: string,
 ): Promise<string> {
-  const proc = Bun.spawn(["git", ...args], {
+  const proc = Bun.spawn(["git", ...GIT_SAFETY_ARGS, ...args], {
     cwd,
     env: gitEnv(env),
     stdin: "ignore",
@@ -140,6 +156,87 @@ export async function statusEntries(cwd: string, env: Env): Promise<string[]> {
   return result.stdout.split("\n").filter((line) => line.trim() !== "");
 }
 
+/** Common git directories already located (cwd + the env that can redirect it → path). */
+const commonDirs = new Map<string, string>();
+
+/** Absolute path of the repository's common git directory (shared by every worktree). */
+export async function gitCommonDir(cwd: string, env: Env): Promise<string> {
+  const key = [cwd, env.GIT_DIR ?? "", env.GIT_COMMON_DIR ?? ""].join("\0");
+  const known = commonDirs.get(key);
+  if (known !== undefined && existsSync(known)) return known;
+  const out = await gitOut(
+    cwd,
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    env,
+    "Locating the git directory",
+  );
+  const path = realpathSync(out.trim());
+  commonDirs.set(key, path);
+  return path;
+}
+
+/** Is `path` (relative to `cwd`) git-ignored there? */
+export async function isIgnored(cwd: string, path: string, env: Env): Promise<boolean> {
+  return (await gitRun(cwd, ["check-ignore", "-q", path], env)).exitCode === 0;
+}
+
+/** Name → value of every ref, plus each checkout's HEAD (symbolic target or commit). */
+export type RefSnapshot = ReadonlyMap<string, string>;
+
+async function headOf(cwd: string, env: Env): Promise<string> {
+  const symbolic = await gitRun(cwd, ["symbolic-ref", "-q", "HEAD"], env);
+  if (symbolic.exitCode === 0) return `ref: ${symbolic.stdout.trim()}`;
+  return (await revParse(cwd, "HEAD", env)) ?? "(none)";
+}
+
+/**
+ * Every ref in the repository and the HEADs of the main checkout and the
+ * task worktree — compared before and after an attempt. Read raw (exact
+ * names; this never leaves memory unredacted).
+ */
+export async function refSnapshot(root: string, worktree: string, env: Env): Promise<RefSnapshot> {
+  const [refs, head, worktreeHead] = await Promise.all([
+    gitReadRaw(
+      root,
+      ["for-each-ref", "--format=%(refname) %(objectname)"],
+      env,
+      "Listing the repository's refs",
+    ),
+    headOf(root, env),
+    headOf(worktree, env),
+  ]);
+  const snapshot = new Map<string, string>();
+  for (const line of refs.split("\n")) {
+    const [name, object] = line.split(" ");
+    if (name !== undefined && name !== "" && object !== undefined) snapshot.set(name, object);
+  }
+  snapshot.set("HEAD", head);
+  snapshot.set("HEAD (task worktree)", worktreeHead);
+  return snapshot;
+}
+
+/** A ref's value in a snapshot, as shown in a change list. */
+function shortRef(value: string | undefined): string {
+  if (value === undefined) return "(none)";
+  return value.startsWith("ref: ") ? value.slice(5) : value.slice(0, 12);
+}
+
+/**
+ * Refs that differ between two snapshots (added, removed, or moved), as
+ * "name a → b" — except those `mayMove` accepts (it sees the full values).
+ */
+export function refChanges(
+  before: RefSnapshot,
+  after: RefSnapshot,
+  mayMove: (name: string, from: string | undefined, to: string | undefined) => boolean,
+): string[] {
+  const names = [...new Set([...before.keys(), ...after.keys()])].sort();
+  return names
+    .filter((name) => before.get(name) !== after.get(name))
+    .filter((name) => !mayMove(name, before.get(name), after.get(name)))
+    .map((name) => `${name} ${shortRef(before.get(name))} → ${shortRef(after.get(name))}`);
+}
+
 /** Identity flags for Groot's commits: the user's when configured, else groot's. */
 async function identityArgs(cwd: string, env: Env): Promise<string[]> {
   const [name, email] = await Promise.all([
@@ -154,13 +251,19 @@ async function identityArgs(cwd: string, env: Env): Promise<string[]> {
   return configured ? [] : ["-c", "user.name=groot", "-c", "user.email=groot@localhost"];
 }
 
-/** Stage everything in a worktree and commit it; no-op when nothing changed. */
+/**
+ * Stage every change in a worktree — except new files under node_modules
+ * directories (installs a `/node_modules/` pattern does not ignore, e.g. a
+ * workspace package's own node_modules) — and commit it; no-op when nothing
+ * changed. Changes to files already tracked are always staged.
+ */
 export async function commitAll(
   cwd: string,
   message: string,
   env: Env,
 ): Promise<{ committed: boolean; head: string }> {
-  await gitOut(cwd, ["add", "-A"], env, "Staging the task's changes");
+  await gitOut(cwd, ["add", "-A", "--", ".", NOT_NODE_MODULES], env, "Staging the task's changes");
+  await gitOut(cwd, ["add", "-u"], env, "Staging the task's changes");
   const staged = await gitRun(cwd, ["diff", "--cached", "--quiet"], env);
   if (staged.exitCode === 0) {
     return { committed: false, head: (await revParse(cwd, "HEAD", env)) ?? "" };

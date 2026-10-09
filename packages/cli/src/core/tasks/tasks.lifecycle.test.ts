@@ -4,19 +4,23 @@
  * review → review (files, ownership, secrets, acceptance) → approve →
  * integrate (fresh worktree, merge, fresh checks, fast-forward only when the
  * main checkout is clean) → completed. Also: requested changes resume the
- * same session; ownership violations are reported.
+ * same session; ownership violations are reported; integrating one task does
+ * not block another whose agent is mid-run.
  */
-import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Evidence } from "../contracts/evidence.ts";
 import { Review, Task } from "../contracts/task.ts";
+import { appFixture, blueprintFixture } from "../test-fixtures.ts";
 import { readEvidence } from "../verify/store.ts";
 import { createTask, integrateTask, readTask, reviewTask, runTask } from "./index.ts";
-import { FIXED_MATH, tempProject } from "./testing/temp-project.ts";
+import { FIXED_MATH, removeTempProjects, tempProject } from "./testing/temp-project.ts";
 
 const TIMEOUT = 180_000;
 const GRACE = { interruptMs: 2000, terminateMs: 2000 };
+
+afterAll(removeTempProjects);
 
 describe("task lifecycle (simulated runner, real git)", () => {
   test(
@@ -169,6 +173,101 @@ describe("task lifecycle (simulated runner, real git)", () => {
       // Assert
       expect(done.status).toBe("completed");
       expect(readFileSync(join(project.root, "src/math.ts"), "utf8")).toBe(FIXED_MATH);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "integrating one task while another task's agent works does not block that task (groot's own move)",
+    async () => {
+      // Arrange — B's agent works until the test says so; A is fixed meanwhile.
+      const project = await tempProject();
+      const go = join(project.fakes.dir, "go-b");
+      project.fakes.scenario({
+        steps: [
+          { mode: "success", edits: { "src/other.ts": "export const x = 1;\n" }, waitForFile: go },
+          { mode: "success", edits: { "src/math.ts": FIXED_MATH } },
+        ],
+      });
+      const ctx = project.context();
+      const b = await createTask(ctx, project.root, {
+        objective: "add other",
+        ownership: ["src/other.ts"],
+      });
+      const a = await createTask(ctx, project.root, {
+        objective: "fix add",
+        ownership: ["src/math.ts"],
+        accept: ["bun test"],
+      });
+      const runningB = runTask(ctx, project.root, b.id, { grace: GRACE });
+      while (project.fakes.records().length === 0) await Bun.sleep(50);
+
+      // Act — A runs, is approved, and fast-forwards main while B's agent is mid-run.
+      await runTask(ctx, project.root, a.id, { grace: GRACE });
+      await reviewTask(ctx, project.root, a.id, { approve: true });
+      const integratedA = await integrateTask(ctx, project.root, a.id);
+      writeFileSync(go, "");
+      const doneB = await runningB;
+
+      // Assert
+      expect(integratedA.status).toBe("completed");
+      expect(doneB.status).toBe("awaiting-review");
+      expect(doneB.statusReason).not.toContain("refs/heads/main");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a structural/build check that could not run (blocked) gates integration like a failure",
+    async () => {
+      // Arrange — a registered project with a check that needs a tool this machine lacks.
+      const project = await tempProject();
+      const needsTool = {
+        id: "structural.needs-tool",
+        profile: "structural" as const,
+        description: "needs a toolchain this machine lacks",
+        checker: "structural.blueprint",
+        capability: null,
+        unit: null,
+        needs: {
+          network: false,
+          processes: false,
+          credentials: [],
+          toolchains: ["groot-missing-toolchain"],
+        },
+      };
+      project.write(
+        "groot.json",
+        JSON.stringify(
+          blueprintFixture({
+            apps: [appFixture({ id: "demo", path: "." })],
+            verification: [needsTool],
+          }),
+        ),
+      );
+      await project.git("add", "-A");
+      await project.git("commit", "-q", "-m", "register");
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const ctx = project.context();
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        accept: ["bun test"],
+      });
+      await runTask(ctx, project.root, task.id, { grace: GRACE });
+      await reviewTask(ctx, project.root, task.id, { approve: true });
+      const before = (await project.git("rev-parse", "main")).trim();
+
+      // Act
+      const blocked = await integrateTask(ctx, project.root, task.id);
+
+      // Assert
+      expect(blocked.status).toBe("blocked");
+      expect(blocked.integration).toMatchObject({ status: "failed", commit: null });
+      expect(blocked.statusReason).toContain("structural.needs-tool");
+      expect(blocked.statusReason).not.toContain("passed");
+      expect((await project.git("rev-parse", "main")).trim()).toBe(before);
     },
     TIMEOUT,
   );

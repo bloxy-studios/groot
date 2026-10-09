@@ -45,7 +45,15 @@ export async function discoverRunners(
 
 export { CLAUDE_INTERFACE } from "./claude.ts";
 export { CODEX_INTERFACE } from "./codex.ts";
-export { runnerEnv, SCRUBBED_ENV, SCRUBBED_ENV_PREFIXES } from "./env.ts";
+export { logShowsSession } from "./common.ts";
+export {
+  credentialFreeEnv,
+  knownSecretsFromEnv,
+  runnerEnv,
+  SCRUBBED_ENV,
+  SCRUBBED_ENV_PREFIXES,
+} from "./env.ts";
+export { inspectRunnerGroup, type RunnerGroupRecord, stopRunnerGroup } from "./groups.ts";
 export { resolveExecutable } from "./resolve.ts";
 export type {
   AttemptStatus,

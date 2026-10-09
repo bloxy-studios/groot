@@ -6,22 +6,31 @@
  * finish the turn and write a result) → SIGTERM after the interrupt grace →
  * SIGKILL after the terminate grace. After exit the group is swept, so
  * nothing the agent started outlives the attempt, and the sweep is reported.
+ * While it runs, the group is tracked (groups.ts) so that Groot exiting —
+ * normally, on an uncaught error, SIGHUP, or an unhandled SIGTERM — takes it
+ * along.
  *
- * stdout is consumed line by line (JSONL); every line is redacted before it
- * reaches the attempt log. stdin carries the prompt and is then closed.
+ * stdout is consumed line by line (JSONL); every line is redacted with the
+ * run's known secrets before it reaches the attempt log or the parser.
+ * stdin carries the prompt and is then closed.
  */
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { nowIso } from "../ids.ts";
 import { killTree } from "../process.ts";
 import { redact } from "../redact.ts";
+import { sweepGroup, trackGroup, untrackGroup } from "./groups.ts";
 import type { CancelGrace } from "./types.ts";
+
+export { groupMembers, inspectRunnerGroup, stopRunnerGroup } from "./groups.ts";
 
 const isPosix = process.platform !== "win32";
 /** Wait this long for buffered output after exit before sweeping the group. */
 const DRAIN_MS = 1500;
 const STDERR_CAP = 64 * 1024;
 const LOG_CAP_BYTES = 50 * 1024 * 1024;
+/** setTimeout fires at once beyond 2^31-1 ms (~24.8 days): longer wall times are capped there. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** Redacted JSONL attempt log: provider lines verbatim, Groot records as `groot.*`. */
 export class AttemptLog {
@@ -40,9 +49,11 @@ export class AttemptLog {
     return redact(text, this.secrets);
   }
 
-  /** One provider output line (already a JSON document, or raw text). */
-  line(text: string): void {
-    this.append(redact(text, this.secrets));
+  /** Log one provider output line (a JSON document, or raw text); returns it redacted. */
+  line(text: string): string {
+    const clean = redact(text, this.secrets);
+    this.append(clean);
+    return clean;
   }
 
   /** A Groot-authored record. */
@@ -77,8 +88,10 @@ export interface SuperviseOptions {
   readonly signal: AbortSignal;
   readonly grace: CancelGrace;
   readonly log: AttemptLog;
-  /** Raw stdout line (the parser redacts what it keeps). */
+  /** Each stdout line, already redacted with the run's secrets (exactly as logged). */
   readonly onLine: (line: string) => void;
+  /** Called with the runner's pid (= its process-group id) right after it spawned. */
+  readonly onSpawn?: (pid: number) => void;
 }
 
 export interface SupervisedExit {
@@ -100,68 +113,12 @@ export interface Supervised {
   cancel(): Promise<void>;
 }
 
-/**
- * Runner groups alive in this process. Runners are detached, so if Groot
- * itself exits abruptly (a forced second Ctrl-C, an uncaught error) they
- * would outlive it; the exit hook kills every registered group.
- */
-const liveGroups = new Set<number>();
-let exitHookInstalled = false;
+type RunnerProcess = ReturnType<typeof Bun.spawn>;
 
-function trackGroup(pgid: number): void {
-  liveGroups.add(pgid);
-  if (exitHookInstalled) return;
-  exitHookInstalled = true;
-  process.on("exit", () => {
-    for (const group of liveGroups) killTree(group, "SIGKILL");
-  });
-}
-
-function groupAlive(pgid: number): boolean {
-  try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** Members of a process group (best effort: pgrep; 1 when only liveness is known). */
-export async function groupMembers(pgid: number): Promise<number[]> {
-  if (!isPosix || !groupAlive(pgid)) return [];
-  try {
-    const proc = Bun.spawn(["pgrep", "-g", String(pgid)], { stdout: "pipe", stderr: "ignore" });
-    const text = await new Response(proc.stdout).text();
-    await proc.exited;
-    const pids = text
-      .split("\n")
-      .map((value) => Number.parseInt(value.trim(), 10))
-      .filter((value) => Number.isInteger(value) && value > 0);
-    return pids.length > 0 ? pids : groupAlive(pgid) ? [pgid] : [];
-  } catch {
-    return groupAlive(pgid) ? [pgid] : [];
-  }
-}
-
-async function waitGroupGone(pgid: number, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (!groupAlive(pgid)) return true;
-    await Bun.sleep(50);
-  }
-  return !groupAlive(pgid);
-}
-
-/** Terminate whatever is left in the group; returns [found, leftover]. */
-async function sweepGroup(pgid: number): Promise<[number, number]> {
-  if (!isPosix || !groupAlive(pgid)) return [0, 0];
-  const found = (await groupMembers(pgid)).length;
-  killTree(pgid, "SIGTERM");
-  if (!(await waitGroupGone(pgid, 2000))) {
-    killTree(pgid, "SIGKILL");
-    await waitGroupGone(pgid, 2000);
-  }
-  return [found, (await groupMembers(pgid)).length];
+interface RunState {
+  exited: boolean;
+  timedOut: boolean;
+  cancelled: boolean;
 }
 
 /** Resolve after `ms`, or earlier when `promise` settles; never leaves a timer behind. */
@@ -218,17 +175,10 @@ function neverRan(overrides: Partial<SupervisedExit>): Supervised {
   return { done: Promise.resolve(exit), cancel: async () => {} };
 }
 
-/** Spawn and supervise a runner process (see the module comment). */
-export function supervise(options: SuperviseOptions): Supervised {
-  const { log } = options;
-  if (options.signal.aborted) {
-    log.record("not-started", { reason: "cancelled before the runner started" });
-    return neverRan({ cancelled: true });
-  }
-  const started = performance.now();
-  let proc: ReturnType<typeof Bun.spawn>;
+/** The runner process, or the spawn error message. */
+function spawnRunner(options: SuperviseOptions): RunnerProcess | string {
   try {
-    proc = Bun.spawn([...options.argv], {
+    return Bun.spawn([...options.argv], {
       cwd: options.cwd,
       env: options.env,
       stdin: new TextEncoder().encode(options.stdin),
@@ -237,98 +187,155 @@ export function supervise(options: SuperviseOptions): Supervised {
       detached: isPosix,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.record("spawn-failed", { error: message });
-    return neverRan({ spawnError: message });
+    return error instanceof Error ? error.message : String(error);
   }
-  log.record("spawn", { pid: proc.pid, argv: options.argv, cwd: options.cwd });
-  if (isPosix) trackGroup(proc.pid);
+}
 
-  let exited = false;
-  let timedOut = false;
-  let cancelled = false;
-  const exitedPromise = proc.exited.then((code) => {
-    exited = true;
-    return code;
-  });
-
+/** SIGINT → SIGTERM → SIGKILL to the group, at most once per run. */
+function escalation(
+  proc: RunnerProcess,
+  exited: Promise<number>,
+  state: RunState,
+  options: SuperviseOptions,
+): { stop(reason: string): Promise<void>; idle(): Promise<void> } {
   let stopping: Promise<void> | null = null;
+  const send = (signal: NodeJS.Signals, reason: string): void => {
+    options.log.record("signal", { signal, reason });
+    killTree(proc.pid, signal);
+  };
   const stop = (reason: string): Promise<void> => {
-    if (stopping !== null) return stopping;
-    stopping = (async () => {
-      if (exited) return;
-      log.record("signal", { signal: "SIGINT", reason });
-      killTree(proc.pid, "SIGINT");
-      if (await within(exitedPromise, options.grace.interruptMs)) return;
-      log.record("signal", { signal: "SIGTERM", reason });
-      killTree(proc.pid, "SIGTERM");
-      if (await within(exitedPromise, options.grace.terminateMs)) return;
-      log.record("signal", { signal: "SIGKILL", reason });
-      killTree(proc.pid, "SIGKILL");
-      await exitedPromise;
+    stopping ??= (async () => {
+      if (state.exited) return;
+      send("SIGINT", reason);
+      if (await within(exited, options.grace.interruptMs)) return;
+      send("SIGTERM", reason);
+      if (await within(exited, options.grace.terminateMs)) return;
+      send("SIGKILL", reason);
+      await exited;
     })();
     return stopping;
   };
+  return { stop, idle: () => stopping ?? Promise.resolve() };
+}
 
-  const wallTimer = setTimeout(() => {
-    timedOut = true;
-    void stop(`wall time of ${options.wallTimeMs} ms exceeded`);
-  }, options.wallTimeMs);
-  const onAbort = (): void => {
-    // An abort that lands after the runner already exited doesn't relabel the run.
-    if (!exited) cancelled = true;
-    void stop("cancelled");
-  };
-  options.signal.addEventListener("abort", onAbort, { once: true });
-
+/** stdout lines go (redacted) to the log and the parser; stderr is kept as a capped tail. */
+function collectOutput(
+  proc: RunnerProcess,
+  options: SuperviseOptions,
+): { readonly readers: Promise<unknown>; stderr(): string } {
   let stderr = "";
   const readers = Promise.all([
     readLines(proc.stdout as ReadableStream<Uint8Array>, (line) => {
-      log.line(line);
-      options.onLine(line);
+      options.onLine(options.log.line(line));
     }),
     readLines(proc.stderr as ReadableStream<Uint8Array>, (line) => {
       stderr = `${stderr}${line}\n`.slice(-STDERR_CAP);
-      log.record("stderr", { line });
+      options.log.record("stderr", { line });
     }),
   ]).catch(() => undefined);
+  return { readers, stderr: () => stderr };
+}
 
-  const done = (async (): Promise<SupervisedExit> => {
-    const code = await exitedPromise;
+/** After exit: drain output, sweep the group, and record the exit. */
+async function settle(
+  proc: RunnerProcess,
+  code: number,
+  state: RunState,
+  output: ReturnType<typeof collectOutput>,
+  options: SuperviseOptions,
+  durationMs: () => number,
+): Promise<SupervisedExit> {
+  await within(output.readers, DRAIN_MS);
+  const [survivors, leftover] = await sweepGroup(proc.pid);
+  if (leftover === 0) untrackGroup(proc.pid);
+  await within(output.readers, DRAIN_MS);
+  const exit: SupervisedExit = {
+    exitCode: proc.signalCode === null ? code : null,
+    signal: proc.signalCode ?? null,
+    timedOut: state.timedOut,
+    cancelled: state.cancelled,
+    spawnError: null,
+    stderrTail: options.log.scrub(output.stderr()),
+    durationMs: durationMs(),
+    survivors,
+    leftover,
+  };
+  options.log.record("exit", {
+    exitCode: exit.exitCode,
+    signal: exit.signal,
+    timedOut: exit.timedOut,
+    cancelled: exit.cancelled,
+    survivors,
+    leftover,
+    durationMs: exit.durationMs,
+  });
+  return exit;
+}
+
+/** Stop the run when the wall time runs out or the caller aborts; returns the disarm. */
+function armStops(
+  state: RunState,
+  stop: (reason: string) => Promise<void>,
+  options: SuperviseOptions,
+): () => void {
+  const wallTimer = setTimeout(
+    () => {
+      state.timedOut = true;
+      void stop(`wall time of ${options.wallTimeMs} ms exceeded`);
+    },
+    Math.min(options.wallTimeMs, MAX_TIMER_MS),
+  );
+  const onAbort = (): void => {
+    // An abort that lands after the runner already exited doesn't relabel the run.
+    if (!state.exited) state.cancelled = true;
+    void stop("cancelled");
+  };
+  options.signal.addEventListener("abort", onAbort, { once: true });
+  return () => {
     clearTimeout(wallTimer);
     options.signal.removeEventListener("abort", onAbort);
-    await stopping;
-    await within(readers, DRAIN_MS);
-    const [survivors, leftover] = await sweepGroup(proc.pid);
-    if (leftover === 0) liveGroups.delete(proc.pid);
-    await within(readers, DRAIN_MS);
-    const exit: SupervisedExit = {
-      exitCode: proc.signalCode === null ? code : null,
-      signal: proc.signalCode ?? null,
-      timedOut,
-      cancelled,
-      spawnError: null,
-      stderrTail: log.scrub(stderr),
-      durationMs: Math.round(performance.now() - started),
-      survivors,
-      leftover,
-    };
-    log.record("exit", {
-      exitCode: exit.exitCode,
-      signal: exit.signal,
-      timedOut,
-      cancelled,
-      survivors,
-      leftover,
-      durationMs: exit.durationMs,
-    });
-    return exit;
+  };
+}
+
+/** Spawn and supervise a runner process (see the module comment). */
+export function supervise(options: SuperviseOptions): Supervised {
+  const { log } = options;
+  if (options.signal.aborted) {
+    log.record("not-started", { reason: "cancelled before the runner started" });
+    return neverRan({ cancelled: true });
+  }
+  const started = performance.now();
+  const proc = spawnRunner(options);
+  if (typeof proc === "string") {
+    log.record("spawn-failed", { error: proc });
+    return neverRan({ spawnError: proc });
+  }
+  log.record("spawn", { pid: proc.pid, argv: options.argv, cwd: options.cwd });
+  trackGroup(proc.pid);
+  options.onSpawn?.(proc.pid);
+
+  const state: RunState = { exited: false, timedOut: false, cancelled: false };
+  const exited = proc.exited.then((code) => {
+    state.exited = true;
+    return code;
+  });
+  const { stop, idle } = escalation(proc, exited, state, options);
+  const disarm = armStops(state, stop, options);
+  const output = collectOutput(proc, options);
+
+  const done = (async (): Promise<SupervisedExit> => {
+    const code = await exited;
+    disarm();
+    await idle();
+    return settle(proc, code, state, output, options, () =>
+      Math.round(performance.now() - started),
+    );
   })();
 
   return {
     done,
     async cancel(): Promise<void> {
-      if (!exited) cancelled = true;
+      if (!state.exited) state.cancelled = true;
       await stop("cancelled");
       await done;
     },

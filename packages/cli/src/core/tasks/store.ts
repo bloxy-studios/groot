@@ -5,12 +5,15 @@
  *   .groot/tasks/<taskId>/prompt.md            every prompt sent, per attempt
  *   .groot/tasks/<taskId>/attempt-<n>.jsonl    redacted runner event log
  *   .groot/tasks/<taskId>/acceptance-<n>.json  per-criterion results of attempt n
- *   .groot/tasks/<taskId>/runner.json          live-run marker (pid/host) while running
+ *   .groot/tasks/<taskId>/runner.json          live-run marker while running (groot
+ *                                              pid/host; the runner's process group
+ *                                              while a runner process exists)
  *   .groot/reviews/<reviewId>.json             Review documents
  *   .groot/worktrees/<taskId>                  the task's git worktree
  *
  * Every document read here is untrusted input and is validated against its
- * contract; ids are checked before they become path segments.
+ * contract (unparseable or invalid → GROOT_E_INVALID_DOCUMENT); ids are
+ * checked before they become path segments.
  */
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
@@ -59,23 +62,39 @@ export function touch(task: Task, patch: Partial<Task>): Task {
   return { ...task, ...patch, updatedAt: nowIso() };
 }
 
+/** Parse an untrusted JSON document against its contract; invalid → GROOT_E_INVALID_DOCUMENT. */
+function parseDocument<T>(schema: z.ZodType<T>, raw: string, what: string, path: string): T {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new GrootV2Error("GROOT_E_INVALID_DOCUMENT", `${what} is not valid JSON.`, {
+      hint: `Inspect or remove ${path}.`,
+      details: { path },
+    });
+  }
+  const parsed = schema.safeParse(json);
+  if (!parsed.success) {
+    throw new GrootV2Error("GROOT_E_INVALID_DOCUMENT", `${what} is not a valid document.`, {
+      hint: `Inspect or remove ${path}.`,
+      details: { path, issues: parsed.error.issues.slice(0, 5) },
+    });
+  }
+  return parsed.data;
+}
+
 export async function readTask(root: string, id: string): Promise<Task> {
   assertTaskId(id);
+  const path = taskPaths.file(root, id);
   let raw: string;
   try {
-    raw = await readFile(taskPaths.file(root, id), "utf8");
+    raw = await readFile(path, "utf8");
   } catch {
     throw new GrootV2Error("GROOT_E_NOT_FOUND", `No task ${id} in this project.`, {
       hint: "List tasks with `groot task list`.",
     });
   }
-  const parsed = Task.safeParse(JSON.parse(raw));
-  if (!parsed.success) {
-    throw new GrootV2Error("GROOT_E_INVALID_DOCUMENT", `Task ${id} is not a valid task document.`, {
-      details: { issues: parsed.error.issues.slice(0, 5) },
-    });
-  }
-  return parsed.data;
+  return parseDocument(Task, raw, `Task ${id}`, path);
 }
 
 /** Validate and persist atomically; returns the stored document. */
@@ -127,11 +146,14 @@ export async function readReview(root: string, id: string): Promise<Review> {
   if (!ReviewId.safeParse(id).success) {
     throw new GrootV2Error("GROOT_E_NOT_FOUND", `"${id}" is not a review id.`);
   }
+  const path = taskPaths.review(root, id);
+  let raw: string;
   try {
-    return Review.parse(JSON.parse(await readFile(taskPaths.review(root, id), "utf8")));
+    raw = await readFile(path, "utf8");
   } catch {
     throw new GrootV2Error("GROOT_E_NOT_FOUND", `No review ${id} in this project.`);
   }
+  return parseDocument(Review, raw, `Review ${id}`, path);
 }
 
 // ------------------------------------------------------- acceptance results
@@ -217,30 +239,49 @@ export async function producedBySimulation(root: string, task: Task): Promise<bo
 
 // ---------------------------------------------------------- run markers
 
-const RunMarker = z.object({ pid: z.number().int(), host: z.string(), at: z.string() }).strict();
+/**
+ * runner.json while a task runs: the Groot process (pid/host) and — while a
+ * runner process exists — the runner's process group and spawn time, so a
+ * later Groot can stop a runner that a killed predecessor left behind.
+ */
+const RunMarker = z
+  .object({
+    pid: z.number().int(),
+    host: z.string(),
+    at: z.string(),
+    runner: z
+      .object({ pgid: z.number().int().positive(), startedAt: z.number().int().nonnegative() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type RunMarker = z.infer<typeof RunMarker>;
 
-export function writeMarker(root: string, id: string): void {
+/** Record this process as the task's runner (with the live runner group, when there is one). */
+export function writeMarker(root: string, id: string, runner?: RunMarker["runner"]): void {
   mkdirSync(taskPaths.dir(root, id), { recursive: true });
-  writeFileSync(
-    taskPaths.marker(root, id),
-    JSON.stringify({ pid: process.pid, host: hostname(), at: nowIso() }),
-  );
+  const marker: RunMarker = { pid: process.pid, host: hostname(), at: nowIso(), runner };
+  writeFileSync(taskPaths.marker(root, id), JSON.stringify(marker));
 }
 
 export function clearMarker(root: string, id: string): void {
   rmSync(taskPaths.marker(root, id), { force: true });
 }
 
-/**
- * Is a task recorded as `running` really running? A marker from a live
- * process (or another host, which can't be checked) counts as running; a
- * missing marker or a dead local process means the run was abandoned.
- */
-export async function isLiveRun(root: string, id: string): Promise<boolean> {
+/** The task's run marker, or null when there is none (or it is unreadable). */
+export async function readMarker(root: string, id: string): Promise<RunMarker | null> {
   try {
-    const marker = RunMarker.parse(JSON.parse(await readFile(taskPaths.marker(root, id), "utf8")));
-    return marker.host !== hostname() || isProcessAlive(marker.pid);
+    return RunMarker.parse(JSON.parse(await readFile(taskPaths.marker(root, id), "utf8")));
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Does a marker belong to a live run? A live local process (or another
+ * host, which can't be checked) counts as running; a dead local process
+ * means the run was abandoned.
+ */
+export function isLiveMarker(marker: RunMarker): boolean {
+  return marker.host !== hostname() || isProcessAlive(marker.pid);
 }

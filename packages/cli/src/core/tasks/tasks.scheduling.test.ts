@@ -5,7 +5,7 @@
  * resumes the same session with the failing check output, blocked runners
  * (config-incompatible Codex, unavailable model), and interruption + resume.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GrootEvent } from "../contracts/envelope.ts";
@@ -19,10 +19,17 @@ import {
   runTask,
 } from "./index.ts";
 import { taskPaths } from "./store.ts";
-import { BROKEN_MATH, FIXED_MATH, tempProject } from "./testing/temp-project.ts";
+import {
+  BROKEN_MATH,
+  FIXED_MATH,
+  removeTempProjects,
+  tempProject,
+} from "./testing/temp-project.ts";
 
 const TIMEOUT = 180_000;
 const GRACE = { interruptMs: 2000, terminateMs: 2000 };
+
+afterAll(removeTempProjects);
 
 /** Index of the first event matching type + task. */
 function at(log: readonly GrootEvent[], type: string, taskId: string): number {
@@ -57,9 +64,10 @@ describe("dependencies and the ready set", () => {
       expect(blocked.status).toBe("blocked");
       expect(blocked.statusReason).toContain(`waiting on ${first.id} (pending)`);
       expect(blocked.worktree).toBeNull();
-      expect(readyRun.map((task) => [task.id, task.status])).toEqual([
+      expect(readyRun.tasks.map((task) => [task.id, task.status])).toEqual([
         [first.id, "awaiting-review"],
       ]);
+      expect(readyRun.failures).toEqual([]);
 
       // Act — complete the dependency, then the dependent becomes ready
       await reviewTask(ctx, project.root, first.id, { approve: true });
@@ -67,7 +75,9 @@ describe("dependencies and the ready set", () => {
       const next = await runReadyTasks(ctx, project.root, { parallel: 2, grace: GRACE });
 
       // Assert
-      expect(next.map((task) => [task.id, task.status])).toEqual([[second.id, "awaiting-review"]]);
+      expect(next.tasks.map((task) => [task.id, task.status])).toEqual([
+        [second.id, "awaiting-review"],
+      ]);
       await expect(
         createTask(ctx, project.root, { objective: "x", dependsOn: ["task_doesnotexist0"] }),
       ).rejects.toThrow(/No task/);
@@ -104,7 +114,7 @@ describe("dependencies and the ready set", () => {
       const results = await runReadyTasks(ctx, project.root, { parallel: 3, grace: GRACE });
 
       // Assert
-      expect(results.map((task) => task.status)).toEqual([
+      expect(results.tasks.map((task) => task.status)).toEqual([
         "awaiting-review",
         "awaiting-review",
         "awaiting-review",
@@ -204,6 +214,36 @@ describe("blocked runners", () => {
       expect(blocked.worktree).toBeNull();
       expect(blocked.attempts).toEqual([]);
       expect(project.fakes.records()).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Codex running out of usage mid-run blocks the task with the cause instead of retrying",
+    async () => {
+      // Arrange
+      const project = await tempProject();
+      project.fakes.scenario({ steps: [{ mode: "usage-limit" }] });
+      const ctx = project.context();
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        runner: "codex",
+        accept: ["bun test"],
+      });
+
+      // Act
+      const blocked = await runTask(ctx, project.root, task.id, { grace: GRACE });
+
+      // Assert
+      expect(blocked.status).toBe("blocked");
+      expect(blocked.statusReason).toContain("Codex is blocked (quota)");
+      expect(blocked.attempts).toHaveLength(1);
+      expect(blocked.attempts[0]?.error).toMatchObject({
+        id: "GROOT_E_BLOCKED",
+        details: { cause: "quota" },
+      });
+      expect(blocked.evidence).toEqual([]);
+      expect(project.fakes.records()).toHaveLength(1);
     },
     TIMEOUT,
   );

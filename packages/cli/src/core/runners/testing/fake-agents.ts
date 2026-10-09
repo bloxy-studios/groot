@@ -31,6 +31,8 @@ export interface FakeRecord {
 }
 
 export interface FakeAgents {
+  /** The temp root holding everything below (remove it when done). */
+  readonly root: string;
   /** State directory (scenario.json, counters, records.jsonl). */
   readonly dir: string;
   readonly binDir: string;
@@ -40,6 +42,8 @@ export interface FakeAgents {
   env(extra?: Record<string, string>): Record<string, string>;
   /** Replace the scenario and reset per-kind invocation counters. */
   scenario(scenario: FakeScenario): void;
+  /** Forget every Claude session the fake started (like `claude purge`). */
+  forgetSessions(): void;
   records(): FakeRecord[];
   /** Pids of "hang" invocations whose processes (incl. a grandchild) are all running. */
   ready(): number[];
@@ -87,6 +91,7 @@ export function installFakeAgents(): FakeAgents {
   writeShim(claude, "claude");
   writeShim(codex, "codex");
   return {
+    root,
     dir,
     binDir,
     claude,
@@ -104,6 +109,9 @@ export function installFakeAgents(): FakeAgents {
         if (name.startsWith("count-")) rmSync(join(dir, name), { force: true });
       }
       writeFileSync(join(dir, "scenario.json"), JSON.stringify(scenario));
+    },
+    forgetSessions() {
+      rmSync(join(dir, "sessions.txt"), { force: true });
     },
     records() {
       return readJsonLines<FakeRecord>(join(dir, "records.jsonl"));

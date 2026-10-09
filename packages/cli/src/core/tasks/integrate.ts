@@ -7,20 +7,28 @@
  *    (`.groot/worktrees/integrate-<id>` on `groot/integrate/<id>`), then
  *    `git merge --no-ff groot/task/<id>`. Conflicts are aborted, cleaned up,
  *    and reported (`conflicted`).
- * 3. Re-run the task's acceptance criteria plus the structural and build
- *    profiles in that worktree (fresh evidence).
- * 4. Only when everything passes AND the main checkout is clean and on the
- *    target branch: `git merge --ff-only groot/integrate/<id>` there; the task
- *    becomes `completed`. A dirty (or switched) checkout is never touched —
- *    the integration branch is left ready and the result is `blocked`.
+ * 3. Install the worktree's dependencies, re-run the task's acceptance
+ *    criteria plus the structural and build profiles there (fresh evidence;
+ *    the change was reviewed, so the checks get the caller's environment),
+ *    under the repository guard (guard.ts): git refs, hooks, or config that
+ *    change while they run block the integration.
+ * 4. Only when every check passed — a check that could not run (`blocked`)
+ *    gates like a failure; only an unregistered project's skipped
+ *    structural/build verification does not — AND the main checkout is clean
+ *    and on the target branch: `git merge --ff-only groot/integrate/<id>`
+ *    there (journaled first, so a task running beside it is not blocked by
+ *    Groot's own move of the target); the task becomes `completed`. A dirty
+ *    (or switched) checkout is never touched — the integration branch is left
+ *    ready and the result is `blocked`.
  *
  * Worktrees are removed afterwards; branches are kept for audit.
  */
 import type { Task } from "../contracts/task.ts";
 import { GrootV2Error } from "../errors.ts";
 import { nowIso } from "../ids.ts";
+import { knownSecretsFromEnv } from "../runners/index.ts";
 import type { CoreContext } from "../runtime.ts";
-import { runAcceptance, verifyWorktree } from "./acceptance.ts";
+import { type ProfileRun, runAcceptance, verifyWorktree } from "./acceptance.ts";
 import {
   currentBranch,
   deleteBranch,
@@ -33,9 +41,11 @@ import {
   revParse,
   statusEntries,
 } from "./git-ops.ts";
+import { recordRefMove, watchRepository } from "./guard.ts";
 import { withProjectLock } from "./lock.ts";
-import { blockedAfterReview } from "./run.ts";
+import { blockedAfterReview, tamperedReason } from "./run.ts";
 import {
+  type AcceptanceRecord,
   integrationBranch,
   producedBySimulation,
   readReview,
@@ -138,94 +148,174 @@ async function checkoutObstacle(root: string, target: string, env: Env): Promise
     : `the main checkout is on ${branch ?? "a detached HEAD"}, not ${target}`;
 }
 
+interface FreshChecks {
+  readonly acceptance: readonly AcceptanceRecord[];
+  /** null when the acceptance checks were stopped (the repository changed). */
+  readonly verification: ProfileRun | null;
+  readonly evidence: string[];
+  /** Repository changes while the checks ran (empty: none). */
+  readonly tampering: readonly string[];
+}
+
+/**
+ * Dependencies, acceptance criteria, then structural + build verification in
+ * the integration worktree — under the repository guard.
+ */
+async function freshChecks(
+  ctx: CoreContext,
+  root: string,
+  task: Task,
+  worktree: string,
+): Promise<FreshChecks> {
+  const run = {
+    root,
+    cwd: worktree,
+    task,
+    simulated: await producedBySimulation(root, task),
+    reviewed: true,
+    secrets: knownSecretsFromEnv(ctx.env),
+  };
+  const watch = await watchRepository(ctx, root, worktree, task.id, "groot ran the fresh checks");
+  const acceptance = await runAcceptance(ctx, run, {
+    install: "always",
+    tampering: () => watch.check(),
+  });
+  const verification =
+    acceptance.tampering.length > 0
+      ? null
+      : await verifyWorktree(ctx, run, ["structural", "build"], "integration-verify", "skipped");
+  const tampering = [...new Set([...acceptance.tampering, ...(await watch.finish())])];
+  const evidence = [
+    ...acceptance.records.flatMap((entry) => entry.evidence),
+    ...(verification?.evidence ?? []),
+  ];
+  return { acceptance: acceptance.records, verification, evidence, tampering };
+}
+
+/** Why verification does not let the integration through (null: it passed, or is not gating). */
+function verificationProblem(verification: ProfileRun | null): string | null {
+  if (verification === null) return "verification: not run";
+  const skippedUnregistered = !verification.registered && verification.status === "skipped";
+  if (verification.status === "pass" || skippedUnregistered) return null;
+  const failures =
+    verification.failures === "" ? "" : ` (${verification.failures.split("\n").join("; ")})`;
+  return `${verification.status}: ${verification.summary}${failures}`;
+}
+
+/** What kept the fresh checks from passing (empty: everything that gates passed). */
+function checkProblems(checks: FreshChecks): string[] {
+  const problem = verificationProblem(checks.verification);
+  return [
+    ...checks.acceptance
+      .filter((entry) => entry.status !== "pass")
+      .map((entry) => `${entry.criterion}: ${entry.summary}`),
+    ...(problem === null ? [] : [problem]),
+  ];
+}
+
+/** "after fresh checks passed" — only when verification ran and passed too. */
+function passedChecks(checks: FreshChecks): string {
+  const { verification } = checks;
+  return verification === null || verification.registered
+    ? "after fresh checks passed"
+    : `after the task's acceptance checks passed (structural/build verification skipped: ${verification.summary})`;
+}
+
+async function fastForward(
+  ctx: CoreContext,
+  root: string,
+  task: Task,
+  merge: { branch: string; target: string; commit: string | null; checks: FreshChecks },
+): Promise<Task> {
+  const { branch, target, commit, checks } = merge;
+  const base = { targetBranch: target, evidence: checks.evidence };
+  const obstacle = await checkoutObstacle(root, target, ctx.env);
+  if (obstacle !== null) {
+    return record(ctx, root, task, "blocked", {
+      ...base,
+      status: "failed",
+      commit: null,
+      detail: `${obstacle} — groot never touches it. ${branch} is verified and ready at ${short(commit)}: merge it yourself, or clean up and run \`groot task integrate ${task.id}\` again`,
+    });
+  }
+  const ref = `refs/heads/${target}`;
+  const from = await revParse(root, ref, ctx.env);
+  if (from !== null && commit !== null)
+    recordRefMove(root, { ref, from, to: commit, taskId: task.id });
+  const ff = await gitRun(root, ["merge", "--ff-only", "--no-edit", branch], ctx.env);
+  if (ff.exitCode !== 0) {
+    return record(ctx, root, task, "blocked", {
+      ...base,
+      status: "failed",
+      commit: null,
+      detail: `${target} moved during integration (fast-forward refused) — run \`groot task integrate ${task.id}\` again`,
+    });
+  }
+  await removeWorktree(root, taskPaths.worktree(root, task.id), ctx.env);
+  return record(ctx, root, task, "completed", {
+    ...base,
+    status: "integrated",
+    commit,
+    detail: `fast-forwarded ${target} to ${short(commit)} ${passedChecks(checks)}`,
+  });
+}
+
+async function integrateMerged(
+  ctx: CoreContext,
+  root: string,
+  task: Task,
+  merge: { branch: string; target: string; worktree: string },
+): Promise<Task> {
+  const { branch, target, worktree } = merge;
+  const commit = await revParse(worktree, "HEAD", ctx.env);
+  const checks = await freshChecks(ctx, root, task, worktree);
+  const base = { targetBranch: target, evidence: checks.evidence, commit: null };
+  if (ctx.signal.aborted) {
+    return record(ctx, root, task, task.status, {
+      ...base,
+      status: "failed",
+      detail: `integration was interrupted before ${target} changed — run it again`,
+    });
+  }
+  if (checks.tampering.length > 0) {
+    const next = `integrate it again (nothing changed on ${target})`;
+    return record(ctx, root, task, "blocked", {
+      ...base,
+      status: "failed",
+      detail: tamperedReason(checks.tampering, "while groot ran the fresh checks", next),
+    });
+  }
+  const problems = checkProblems(checks);
+  if (problems.length > 0) {
+    return record(ctx, root, task, "blocked", {
+      ...base,
+      status: "failed",
+      detail: `fresh checks on the merged result did not all pass (${problems.join("; ")}); nothing changed on ${target}`,
+    });
+  }
+  return fastForward(ctx, root, task, { branch, target, commit, checks });
+}
+
 async function integrateLocked(ctx: CoreContext, root: string, id: string): Promise<Task> {
   const env = ctx.env;
   const task = await readTask(root, id);
   const { target, targetHead } = await requireApproved(root, task, env);
   const branch = integrationBranch(id);
   const path = taskPaths.worktree(root, `integrate-${id}`);
-  const base = { targetBranch: target };
   const worktree = await freshWorktree(root, path, branch, targetHead, env);
   try {
-    const merge = await mergeNoFf(
-      worktree,
-      taskBranch(id),
-      `groot: integrate ${task.title}\n\nTask ${id}.`,
-      env,
-    );
-    if (!merge.ok) {
-      await removeWorktree(root, path, env);
-      await deleteBranch(root, branch, env);
-      const files = merge.conflicts.length > 0 ? merge.conflicts.join(", ") : merge.detail;
-      return record(ctx, root, task, "blocked", {
-        ...base,
-        status: "conflicted",
-        commit: null,
-        evidence: [],
-        detail: `merging ${taskBranch(id)} into ${target} conflicts (${files}); nothing changed on ${target}`,
-      });
-    }
-    const mergeCommit = await revParse(worktree, "HEAD", env);
-    const run = { root, cwd: worktree, task, simulated: await producedBySimulation(root, task) };
-    const acceptance = await runAcceptance(ctx, run);
-    const verification = await verifyWorktree(
-      ctx,
-      run,
-      ["structural", "build"],
-      "integration-verify",
-      "skipped",
-    );
-    const evidence = [...acceptance.flatMap((entry) => entry.evidence), ...verification.evidence];
-    if (ctx.signal.aborted) {
-      return record(ctx, root, task, task.status, {
-        ...base,
-        status: "failed",
-        commit: null,
-        evidence,
-        detail: `integration was interrupted before ${target} changed — run it again`,
-      });
-    }
-    const failing = acceptance.filter((entry) => entry.status !== "pass");
-    if (failing.length > 0 || verification.status === "fail") {
-      const what = [
-        ...failing.map((entry) => `${entry.criterion}: ${entry.summary}`),
-        ...(verification.status === "fail" ? [verification.summary] : []),
-      ].join("; ");
-      return record(ctx, root, task, "blocked", {
-        ...base,
-        status: "failed",
-        commit: null,
-        evidence,
-        detail: `fresh checks on the merged result did not pass (${what}); nothing changed on ${target}`,
-      });
-    }
-    const obstacle = await checkoutObstacle(root, target, env);
-    if (obstacle !== null) {
-      return record(ctx, root, task, "blocked", {
-        ...base,
-        status: "failed",
-        commit: null,
-        evidence,
-        detail: `${obstacle} — groot never touches it. ${branch} is verified and ready at ${short(mergeCommit)}: merge it yourself, or clean up and run \`groot task integrate ${id}\` again`,
-      });
-    }
-    const ff = await gitRun(root, ["merge", "--ff-only", "--no-edit", branch], env);
-    if (ff.exitCode !== 0) {
-      return record(ctx, root, task, "blocked", {
-        ...base,
-        status: "failed",
-        commit: null,
-        evidence,
-        detail: `${target} moved during integration (fast-forward refused) — run \`groot task integrate ${id}\` again`,
-      });
-    }
-    await removeWorktree(root, taskPaths.worktree(root, id), env);
-    return record(ctx, root, task, "completed", {
-      ...base,
-      status: "integrated",
-      commit: mergeCommit,
-      evidence,
-      detail: `fast-forwarded ${target} to ${short(mergeCommit)} after fresh checks passed`,
+    const message = `groot: integrate ${task.title}\n\nTask ${id}.`;
+    const merge = await mergeNoFf(worktree, taskBranch(id), message, env);
+    if (merge.ok) return await integrateMerged(ctx, root, task, { branch, target, worktree });
+    await removeWorktree(root, path, env);
+    await deleteBranch(root, branch, env);
+    const files = merge.conflicts.length > 0 ? merge.conflicts.join(", ") : merge.detail;
+    return record(ctx, root, task, "blocked", {
+      targetBranch: target,
+      status: "conflicted",
+      commit: null,
+      evidence: [],
+      detail: `merging ${taskBranch(id)} into ${target} conflicts (${files}); nothing changed on ${target}`,
     });
   } finally {
     await removeWorktree(root, path, env);

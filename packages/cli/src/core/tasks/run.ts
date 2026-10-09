@@ -4,14 +4,22 @@
  * 1. Gate: dependencies must be `completed`, and the runner must be usable
  *    (installed, compatible, authenticated, config loadable) — otherwise the
  *    task is `blocked` with the exact cause and next step.
- * 2. Claim, under the project lock: refuse ownership that overlaps a RUNNING
- *    task (blocked — runs serialize), create the worktree
- *    `.groot/worktrees/<id>` on `groot/task/<id>` from the base commit, and
- *    mark the task running (with a pid marker so a crashed run is detected).
+ * 2. Claim, under the project lock: re-read the task and check it is still
+ *    runnable (another process may have run it meanwhile), refuse ownership
+ *    that overlaps a RUNNING task (blocked — runs serialize), create the
+ *    worktree `.groot/worktrees/<id>` on `groot/task/<id>` from the base
+ *    commit, and mark the task running (with a pid marker so a crashed run
+ *    is detected — recovery.ts).
  * 3. Attempts (≤ limits.maxAttempts): run the agent; Groot commits the
- *    worktree itself; Groot runs the acceptance checks (evidence). All pass →
- *    `awaiting-review`. A failing check is fed back by resuming the SAME
- *    session when possible; out of attempts → `failed`.
+ *    worktree itself; Groot runs the acceptance checks (evidence; before
+ *    review the agent's code runs without credential-like environment
+ *    variables in commands — but without an OS sandbox). The repository
+ *    guard (guard.ts) watches both windows: git refs, hooks, or config that
+ *    changed while the agent ran — or while Groot ran the agent's code in
+ *    the checks — block the task. All checks pass → `awaiting-review`. A
+ *    failing check is fed back by resuming the SAME session when possible
+ *    (plans.ts); a resume target the runner does not know is replaced by a
+ *    fresh session without spending an attempt; out of attempts → `failed`.
  *
  * Abort (SIGINT, MCP cancel) cancels the runner, records the attempt and the
  * task as `interrupted` (the session id is kept), and releases everything;
@@ -21,23 +29,23 @@
 import type { Task, TaskStatus } from "../contracts/task.ts";
 import { GrootV2Error, toErrorInfo } from "../errors.ts";
 import { nowIso } from "../ids.ts";
+import { redact } from "../redact.ts";
 import { RUNNER_LABEL } from "../runners/common.ts";
-import { assertEffort, getRunner } from "../runners/index.ts";
+import { assertEffort, getRunner, knownSecretsFromEnv } from "../runners/index.ts";
 import type { RunnerBlock, RunnerResult } from "../runners/types.ts";
 import type { CoreContext } from "../runtime.ts";
 import { runAcceptance } from "./acceptance.ts";
-import { type AttemptPlan, runAttempt } from "./attempt.ts";
+import { type AttemptOutcome, runAttempt } from "./attempt.ts";
 import { commitAll, ensureWorktree, repositoryRoot } from "./git-ops.ts";
+import { watchRepository } from "./guard.ts";
 import { withProjectLock } from "./lock.ts";
 import { ownershipOverlap } from "./ownership.ts";
-import { type ContinueReason, continuePrompt, startPrompt } from "./prompt.ts";
+import { type ContextSource, contextSource, firstPlan, freshPlan, retryPlan } from "./plans.ts";
+import { isSessionNotFound, lastSession, reconcile } from "./recovery.ts";
 import {
   type AcceptanceRecord,
   clearMarker,
-  isLiveRun,
-  latestAcceptance,
   listTasks,
-  readReview,
   readTask,
   taskBranch,
   taskPaths,
@@ -48,9 +56,13 @@ import {
 } from "./store.ts";
 import type { RunTaskOptions } from "./types.ts";
 
+export { lastSession, reconcile } from "./recovery.ts";
+
 const RUNNABLE: readonly TaskStatus[] = ["pending", "failed", "interrupted", "blocked"];
 /** Runner outcomes after which another attempt can help (others end the run). */
 const RETRYABLE: ReadonlySet<string> = new Set(["succeeded", "failed"]);
+/** Repository changes listed in a blocked reason (the rest are counted). */
+const CHANGES_SHOWN = 5;
 
 const LEVEL: Record<TaskStatus, "info" | "warn" | "error"> = {
   pending: "info",
@@ -62,17 +74,19 @@ const LEVEL: Record<TaskStatus, "info" | "warn" | "error"> = {
   failed: "error",
 };
 
+/** What one run carries across its attempts. */
+interface RunScope {
+  readonly ctx: CoreContext;
+  readonly root: string;
+  readonly options: RunTaskOptions;
+  /** Env-derived secret values, computed once per run and redacted from everything stored. */
+  readonly secrets: readonly string[];
+  readonly context: ContextSource;
+}
+
 /** Blocked after review (integration problems) — rerunning the agent won't help. */
 export function blockedAfterReview(task: Task): boolean {
   return task.status === "blocked" && task.integration !== null;
-}
-
-/** The most recent provider session the task established (resume handle). */
-export function lastSession(task: Task): string | null {
-  for (const attempt of [...task.attempts].reverse()) {
-    if (attempt.sessionId !== null) return attempt.sessionId;
-  }
-  return null;
 }
 
 /** Persist a terminal (or waiting) state; closes any attempt still marked running. */
@@ -111,31 +125,9 @@ function finishInterrupted(ctx: CoreContext, root: string, task: Task, when = ""
   return finish(ctx, root, task, "interrupted", reason);
 }
 
-/**
- * A task recorded as running whose process is gone (crash, kill -9) becomes
- * interrupted, so it can be resumed and stops blocking overlapping work.
- */
-export async function reconcile(root: string, task: Task): Promise<Task> {
-  if (task.status !== "running" || (await isLiveRun(root, task.id))) return task;
-  clearMarker(root, task.id);
-  const attempts = task.attempts.map((attempt) =>
-    attempt.status === "running"
-      ? { ...attempt, status: "interrupted" as const, finishedAt: nowIso() }
-      : attempt,
-  );
-  return writeTask(
-    root,
-    touch(task, {
-      status: "interrupted",
-      statusReason: `the groot process running it exited unexpectedly — continue with \`groot task resume ${task.id}\``,
-      attempts,
-    }),
-  );
-}
-
 function stateError(task: Task, action: string): GrootV2Error {
   const next: Partial<Record<TaskStatus, string>> = {
-    running: "It is already running.",
+    running: task.statusReason ?? "It is already running.",
     "awaiting-review": `Review it with \`groot review ${task.id}\`.`,
     completed: "It is already integrated.",
     blocked: `It is blocked after review: ${task.statusReason ?? "see groot task show"}.`,
@@ -148,6 +140,10 @@ function stateError(task: Task, action: string): GrootV2Error {
       details: { status: task.status },
     },
   );
+}
+
+function assertRunnable(task: Task, action: string): void {
+  if (!RUNNABLE.includes(task.status) || blockedAfterReview(task)) throw stateError(task, action);
 }
 
 async function dependencyBlock(root: string, task: Task): Promise<string | null> {
@@ -163,27 +159,43 @@ function describeBlock(task: Task, block: RunnerBlock): string {
   return `${RUNNER_LABEL[task.runner]} is blocked (${block.cause}): ${block.detail}. Next step: ${block.nextStep}`;
 }
 
-/** Under the project lock: overlap check, worktree, status running. */
-async function claim(ctx: CoreContext, root: string, id: string): Promise<Task> {
-  const task = await reconcile(root, await readTask(root, id));
-  if (task.status === "running") throw stateError(task, "run");
+/** Why the task cannot start at all (unmet dependencies, unusable runner), or null. */
+async function gateBlock(ctx: CoreContext, root: string, task: Task): Promise<string | null> {
+  const waiting = await dependencyBlock(root, task);
+  if (waiting !== null) return waiting;
+  const preflight = await getRunner(task.runner).preflight(ctx.env);
+  return preflight.block === null ? null : describeBlock(task, preflight.block);
+}
+
+/** A running task whose ownership overlaps this one's (runs serialize), or null. */
+async function overlappingRun(root: string, task: Task): Promise<string | null> {
   const others = await Promise.all(
     (await listTasks(root))
-      .filter((entry) => entry.id !== id)
+      .filter((entry) => entry.id !== task.id)
       .map((entry) => reconcile(root, entry)),
   );
   for (const other of others.filter((entry) => entry.status === "running")) {
     const pair = ownershipOverlap(task.ownership, other.ownership);
     if (pair !== null) {
-      return finish(
-        ctx,
-        root,
-        task,
-        "blocked",
-        `ownership overlaps running task ${other.id} (${pair[0]} ~ ${pair[1]}); run it again once that task finishes`,
-      );
+      return `ownership overlaps running task ${other.id} (${pair[0]} ~ ${pair[1]}); run it again once that task finishes`;
     }
   }
+  return null;
+}
+
+/** Under the project lock: re-validation, gate, overlap check, worktree, status running. */
+async function claim(
+  ctx: CoreContext,
+  root: string,
+  id: string,
+  action: string,
+  gate: string | null,
+): Promise<Task> {
+  // Another process may have run (or finished) the task since the caller read it.
+  const task = await reconcile(root, await readTask(root, id));
+  assertRunnable(task, action);
+  const blocked = gate ?? (await overlappingRun(root, task));
+  if (blocked !== null) return finish(ctx, root, task, "blocked", blocked);
   const path = await ensureWorktree(
     root,
     taskPaths.worktree(root, id),
@@ -207,98 +219,6 @@ async function claim(ctx: CoreContext, root: string, id: string): Promise<Task> 
     taskId: id,
   });
   return running;
-}
-
-async function projectContext(
-  ctx: CoreContext,
-  root: string,
-  task: Task,
-  options: RunTaskOptions,
-): Promise<string | null> {
-  if (options.contextProvider === undefined) return null;
-  try {
-    return await options.contextProvider(root, task);
-  } catch (error) {
-    ctx.events.emit({
-      type: "task.warning",
-      level: "warn",
-      message: `${task.id}: project context unavailable (${toErrorInfo(error).message}); continuing without it`,
-      taskId: task.id,
-    });
-    return null;
-  }
-}
-
-async function continueReason(
-  root: string,
-  task: Task,
-  priorStatus: TaskStatus,
-): Promise<ContinueReason> {
-  // A review sends a task back to `pending` with its notes; deliver them once.
-  if (priorStatus === "pending" && task.review !== null) {
-    const review = await readReview(root, task.review).catch(() => null);
-    if (review?.verdict === "changes-requested") {
-      return { kind: "changes-requested", notes: review.notes ?? "(no notes)" };
-    }
-  }
-  const last = task.attempts.at(-1);
-  const acceptance = await latestAcceptance(root, task);
-  if (last?.status !== "interrupted") {
-    const failures = (acceptance ?? []).filter((record) => record.status === "fail");
-    if (failures.length > 0) return { kind: "retry", failures };
-    if (last?.error) return { kind: "runner-failed", error: last.error.message };
-  }
-  return { kind: "resume", acceptance };
-}
-
-async function firstPlan(
-  ctx: CoreContext,
-  root: string,
-  task: Task,
-  options: RunTaskOptions,
-  priorStatus: TaskStatus,
-): Promise<AttemptPlan> {
-  const session = lastSession(task);
-  if (session !== null) {
-    return {
-      mode: "resume",
-      resumeSessionId: session,
-      prompt: continuePrompt(task, await continueReason(root, task, priorStatus)),
-    };
-  }
-  return {
-    mode: "start",
-    resumeSessionId: null,
-    prompt: startPrompt(task, await projectContext(ctx, root, task, options)),
-  };
-}
-
-function retryPlan(
-  task: Task,
-  result: RunnerResult,
-  acceptance: readonly AcceptanceRecord[],
-): AttemptPlan {
-  const failures = acceptance.filter((record) => record.status === "fail");
-  const reason: ContinueReason =
-    failures.length > 0
-      ? { kind: "retry", failures }
-      : {
-          kind: "runner-failed",
-          error: result.error?.message ?? `the runner reported ${result.status}`,
-        };
-  // Only a session THIS attempt established is known to exist.
-  if (result.sessionId !== null) {
-    return {
-      mode: "resume",
-      resumeSessionId: result.sessionId,
-      prompt: continuePrompt(task, reason),
-    };
-  }
-  return {
-    mode: "start",
-    resumeSessionId: null,
-    prompt: `${startPrompt(task, null)}\n${continuePrompt(task, reason)}`,
-  };
 }
 
 interface Verdict {
@@ -348,6 +268,41 @@ function isBlocking(result: RunnerResult): boolean {
   );
 }
 
+/** Blocked reason for repository changes the guard found (`during`: which window). */
+export function tamperedReason(
+  changes: readonly string[],
+  during: string,
+  next = "run the task again",
+): string {
+  const shown = changes.slice(0, CHANGES_SHOWN).join("; ");
+  const more = changes.length > CHANGES_SHOWN ? `; ${changes.length - CHANGES_SHOWN} more` : "";
+  return redact(
+    `git refs or the git directory's hooks/config changed outside the task's worktree ${during} (${shown}${more}) — groot cannot tell that change from yours or another tool's: inspect each (\`git reflog <ref>\` for a ref, the file itself for a hook or config), restore what should not have changed, then ${next}`,
+  );
+}
+
+/** The run ends right after the runner returned: the repository changed, an interruption, an unusable runner. */
+function afterRunner(scope: RunScope, task: Task, outcome: AttemptOutcome): Task | null {
+  const { ctx, root } = scope;
+  if (outcome.tampering.length > 0) {
+    return finish(
+      ctx,
+      root,
+      task,
+      "blocked",
+      tamperedReason(outcome.tampering, "while the agent ran"),
+    );
+  }
+  if (outcome.result.status === "interrupted" || ctx.signal.aborted) {
+    return finishInterrupted(ctx, root, task);
+  }
+  if (isBlocking(outcome.result)) {
+    const reason = outcome.result.error?.message ?? "the runner is unavailable";
+    return finish(ctx, root, task, "blocked", reason);
+  }
+  return null;
+}
+
 async function commitAttempt(ctx: CoreContext, root: string, task: Task): Promise<void> {
   const n = task.attempts.length;
   const outcome = await commitAll(
@@ -366,58 +321,69 @@ async function commitAttempt(ctx: CoreContext, root: string, task: Task): Promis
   });
 }
 
-async function attemptLoop(
-  ctx: CoreContext,
-  root: string,
-  claimed: Task,
-  options: RunTaskOptions,
-  priorStatus: TaskStatus,
-): Promise<Task> {
+interface CheckedAttempt {
+  readonly task: Task;
+  readonly acceptance: AcceptanceRecord[];
+  /** Repository changes while Groot ran the agent's code in the checks. */
+  readonly tampering: readonly string[];
+}
+
+/**
+ * Commit what the runner left, then check it — pre-review, under the
+ * repository guard (the agent's code runs unconfined) — and store the results.
+ */
+async function checkAttempt(
+  scope: RunScope,
+  task: Task,
+  result: RunnerResult,
+): Promise<CheckedAttempt> {
+  const { ctx, root } = scope;
+  await commitAttempt(ctx, root, task);
+  const cwd = task.worktree?.path ?? root;
+  const watch = await watchRepository(ctx, root, cwd, task.id, "groot ran the acceptance checks");
+  const outcome = await runAcceptance(
+    ctx,
+    { root, cwd, task, simulated: result.simulated, reviewed: false, secrets: scope.secrets },
+    { tampering: () => watch.check() },
+  );
+  const tampering = [...new Set([...outcome.tampering, ...(await watch.finish())])];
+  writeAcceptance(root, task.id, task.attempts.length, outcome.records);
+  const evidence = [...task.evidence, ...outcome.records.flatMap((record) => record.evidence)];
+  const current = writeTask(root, touch(task, { evidence }));
+  return { task: current, acceptance: outcome.records, tampering };
+}
+
+async function attemptLoop(scope: RunScope, claimed: Task, priorStatus: TaskStatus): Promise<Task> {
+  const { ctx, root } = scope;
   let task = claimed;
-  let plan = await firstPlan(ctx, root, task, options, priorStatus);
+  let plan = await firstPlan(root, task, scope.context, priorStatus);
   for (let used = 1; ; used++) {
-    const outcome = await runAttempt(ctx, root, task, plan, options);
+    const outcome = await runAttempt(ctx, root, task, plan, scope.options);
     task = outcome.task;
-    const { result } = outcome;
-    if (result.status === "interrupted" || ctx.signal.aborted)
-      return finishInterrupted(ctx, root, task);
-    if (isBlocking(result)) {
-      return finish(
-        ctx,
-        root,
-        task,
-        "blocked",
-        result.error?.message ?? "the runner is unavailable",
-      );
+    const stopped = afterRunner(scope, task, outcome);
+    if (stopped !== null) return stopped;
+    if (plan.mode === "resume" && isSessionNotFound(outcome.result)) {
+      // The runner never reached the model: a fresh session costs no attempt.
+      plan = await freshPlan(task, scope.context, plan.reason);
+      used--;
+      continue;
     }
-    await commitAttempt(ctx, root, task);
-    const acceptance = await runAcceptance(ctx, {
-      root,
-      cwd: task.worktree?.path ?? root,
-      task,
-      simulated: result.simulated,
-    });
-    writeAcceptance(root, task.id, task.attempts.length, acceptance);
-    task = writeTask(
-      root,
-      touch(task, {
-        evidence: [...task.evidence, ...acceptance.flatMap((record) => record.evidence)],
-      }),
-    );
-    if (ctx.signal.aborted)
+    const checked = await checkAttempt(scope, task, outcome.result);
+    task = checked.task;
+    if (checked.tampering.length > 0) {
+      const during = "while groot ran the acceptance checks (the agent's code)";
+      return finish(ctx, root, task, "blocked", tamperedReason(checked.tampering, during));
+    }
+    if (ctx.signal.aborted) {
       return finishInterrupted(ctx, root, task, " during the acceptance checks");
-    const verdict = judge(result, acceptance);
+    }
+    const verdict = judge(outcome.result, checked.acceptance);
     if (verdict.status !== "retry") return finish(ctx, root, task, verdict.status, verdict.reason);
     if (used >= task.limits.maxAttempts) {
-      return finish(
-        ctx,
-        root,
-        task,
-        "failed",
-        `${verdict.reason ?? "not accepted"} (attempt ${used} of ${task.limits.maxAttempts})`,
-      );
+      const reason = `${verdict.reason ?? "not accepted"} (attempt ${used} of ${task.limits.maxAttempts})`;
+      return finish(ctx, root, task, "failed", reason);
     }
-    plan = retryPlan(task, result, acceptance);
+    plan = await retryPlan(task, outcome.result, checked.acceptance, scope.context);
   }
 }
 
@@ -426,16 +392,22 @@ async function execute(
   root: string,
   task: Task,
   options: RunTaskOptions,
+  action: "run" | "resume",
 ): Promise<Task> {
-  const waiting = await dependencyBlock(root, task);
-  if (waiting !== null) return finish(ctx, root, task, "blocked", waiting);
-  const preflight = await getRunner(task.runner).preflight(ctx.env);
-  if (preflight.block !== null)
-    return finish(ctx, root, task, "blocked", describeBlock(task, preflight.block));
-  const claimed = await withProjectLock(root, "task run", () => claim(ctx, root, task.id));
+  const gate = await gateBlock(ctx, root, task);
+  const claimed = await withProjectLock(root, `task ${action}`, () =>
+    claim(ctx, root, task.id, action, gate),
+  );
   if (claimed.status !== "running") return claimed;
+  const scope: RunScope = {
+    ctx,
+    root,
+    options,
+    secrets: knownSecretsFromEnv(ctx.env),
+    context: contextSource(ctx, root, options),
+  };
   try {
-    return await attemptLoop(ctx, root, claimed, options, task.status);
+    return await attemptLoop(scope, claimed, task.status);
   } catch (error) {
     const current = await readTask(root, task.id).catch(() => claimed);
     if (ctx.signal.aborted) return finishInterrupted(ctx, root, current);
@@ -444,7 +416,7 @@ async function execute(
       root,
       current,
       "failed",
-      `groot could not finish the run: ${toErrorInfo(error).message}`,
+      `groot could not finish the run: ${redact(toErrorInfo(error).message, scope.secrets)}`,
     );
   }
 }
@@ -458,9 +430,9 @@ export async function runTask(
 ): Promise<Task> {
   const repo = await repositoryRoot(root, ctx.env);
   const task = await reconcile(repo, await readTask(repo, id));
-  if (!RUNNABLE.includes(task.status) || blockedAfterReview(task)) throw stateError(task, "run");
+  assertRunnable(task, "run");
   if (options.effort) assertEffort(task.runner, options.effort);
-  return execute(ctx, repo, task, options);
+  return execute(ctx, repo, task, options, "run");
 }
 
 /** Continue a task's runner session (after an interruption, failure, or requested changes). */
@@ -472,12 +444,12 @@ export async function resumeTask(
 ): Promise<Task> {
   const repo = await repositoryRoot(root, ctx.env);
   const task = await reconcile(repo, await readTask(repo, id));
-  if (!RUNNABLE.includes(task.status) || blockedAfterReview(task)) throw stateError(task, "resume");
+  assertRunnable(task, "resume");
   if (lastSession(task) === null) {
     throw new GrootV2Error("GROOT_E_NOT_RESUMABLE", `Task ${id} has no runner session to resume.`, {
       hint: `Start it with \`groot task run ${id}\`.`,
     });
   }
   if (options.effort) assertEffort(task.runner, options.effort);
-  return execute(ctx, repo, task, options);
+  return execute(ctx, repo, task, options, "resume");
 }

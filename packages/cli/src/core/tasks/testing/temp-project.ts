@@ -2,9 +2,10 @@
  * Test helper: a throwaway git repository holding a tiny Bun project with a
  * FAILING test (`add` subtracts), simulated runners, and a hermetic
  * environment (isolated git config, no inherited credentials). Never used by
- * production code.
+ * production code. Every project is registered for `removeTempProjects()`
+ * (call it from `afterAll`): repository, worktrees, git config, fake agents.
  */
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { GrootEvent } from "../../contracts/envelope.ts";
@@ -25,8 +26,18 @@ export interface TempProject {
   /** Run git in the repository (throws on failure); returns stdout. */
   git(...args: string[]): Promise<string>;
   write(path: string, content: string): void;
-  /** A CoreContext over the hermetic env that records events. */
-  context(signal?: AbortSignal): CoreContext & { readonly log: GrootEvent[] };
+  /** A CoreContext over the hermetic env (plus `extraEnv`) that records events. */
+  context(
+    signal?: AbortSignal,
+    extraEnv?: Record<string, string>,
+  ): CoreContext & { readonly log: GrootEvent[] };
+}
+
+const created: string[] = [];
+
+/** Remove every temp project created so far (repositories, worktrees, configs, fakes). */
+export function removeTempProjects(): void {
+  for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
 }
 
 export async function tempProject(): Promise<TempProject> {
@@ -38,6 +49,7 @@ export async function tempProject(): Promise<TempProject> {
     "[user]\n\tname = Groot Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n",
   );
   const fakes = installFakeAgents();
+  created.push(root, configDir, fakes.root);
   const env = fakes.env({ GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: "1" });
   const git = async (...args: string[]): Promise<string> => {
     const proc = Bun.spawn(["git", ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
@@ -69,9 +81,12 @@ export async function tempProject(): Promise<TempProject> {
     fakes,
     git,
     write,
-    context(signal) {
+    context(signal, extraEnv = {}) {
       const sink = collectingSink();
-      return { ...createContext({ cwd: root, env, signal, events: sink }), log: sink.events };
+      return {
+        ...createContext({ cwd: root, env: { ...env, ...extraEnv }, signal, events: sink }),
+        log: sink.events,
+      };
     },
   };
 }

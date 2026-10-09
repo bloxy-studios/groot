@@ -21,6 +21,7 @@ import {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_MAX_TURNS,
   DEFAULT_WALL_TIME_SEC,
+  MAX_TIMEOUT_SEC,
 } from "./types.ts";
 
 const TITLE_MAX = 72;
@@ -52,11 +53,18 @@ export function buildLimits(runner: RunnerId, partial: CreateTaskInput["limits"]
           : null,
     maxAttempts: partial?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
   });
+  const hint = `wall time (≤ ${MAX_TIMEOUT_SEC} s) and turns are positive integers, the budget is a positive number, attempts are 1–5.`;
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw usage(
       `Invalid task limits: ${issue?.path.join(".") ?? "limits"} ${issue?.message ?? ""}`.trim(),
-      "wall time and turns are positive integers, the budget is a positive number, attempts are 1–5.",
+      hint,
+    );
+  }
+  if (parsed.data.wallTimeSec > MAX_TIMEOUT_SEC) {
+    throw usage(
+      `Invalid task limits: wallTimeSec must be at most ${MAX_TIMEOUT_SEC} (24 hours).`,
+      hint,
     );
   }
   return parsed.data;
@@ -64,8 +72,10 @@ export function buildLimits(runner: RunnerId, partial: CreateTaskInput["limits"]
 
 export function buildAcceptance(input: CreateTaskInput): AcceptanceCriterion[] {
   const seconds = input.acceptTimeoutSec ?? DEFAULT_ACCEPT_TIMEOUT_SEC;
-  if (!Number.isInteger(seconds) || seconds <= 0) {
-    throw usage("The acceptance timeout must be a positive number of seconds.");
+  if (!Number.isInteger(seconds) || seconds <= 0 || seconds > MAX_TIMEOUT_SEC) {
+    throw usage(
+      `The acceptance timeout must be a positive number of seconds, at most ${MAX_TIMEOUT_SEC} (24 hours).`,
+    );
   }
   const timeoutMs = seconds * 1000;
   const commands = (input.accept ?? []).map((command, index): AcceptanceCriterion => {
@@ -107,13 +117,8 @@ async function checkDependencies(root: string, ids: readonly string[]): Promise<
   return dependsOn;
 }
 
-/** Create and persist a pending task (see the module comment). */
-export async function createTask(
-  ctx: CoreContext,
-  root: string,
-  input: CreateTaskInput,
-): Promise<Task> {
-  const repo = await repositoryRoot(root, ctx.env);
+/** The validated, defaulted definition of a new task (untrusted input → contract values). */
+async function taskDefinition(repo: string, input: CreateTaskInput) {
   const objective = input.objective?.trim() ?? "";
   if (objective === "")
     throw usage(
@@ -137,6 +142,40 @@ export async function createTask(
   const acceptance = buildAcceptance(input);
   const limits = buildLimits(runner, input.limits);
   const dependsOn = await checkDependencies(repo, input.dependsOn ?? []);
+  const title = titleFor(objective, input.title);
+  return { title, objective, runner, model, dependsOn, ownership, acceptance, limits };
+}
+
+/** Warnings about what the task will (not) enforce, then the creation event. */
+function announce(ctx: CoreContext, task: Task): void {
+  const warn = (message: string): void =>
+    ctx.events.emit({ type: "task.warning", level: "warn", message, taskId: task.id });
+  if (task.runner === "codex" && task.limits.maxBudgetUsd !== null) {
+    warn(
+      `Codex has no spend limit: maxBudgetUsd ${task.limits.maxBudgetUsd} is recorded but not enforced.`,
+    );
+  }
+  if (task.acceptance.length === 0) {
+    warn(
+      "No acceptance criteria: completion will rest on the runner's own success and your review.",
+    );
+  }
+  ctx.events.emit({
+    type: "task.created",
+    level: "info",
+    message: `Created ${task.id}: ${task.title}`,
+    taskId: task.id,
+  });
+}
+
+/** Create and persist a pending task (see the module comment). */
+export async function createTask(
+  ctx: CoreContext,
+  root: string,
+  input: CreateTaskInput,
+): Promise<Task> {
+  const repo = await repositoryRoot(root, ctx.env);
+  const definition = await taskDefinition(repo, input);
   const commit = await revParse(repo, "HEAD", ctx.env);
   if (commit === null) throw usage("The repository has no commits yet.");
   const now = nowIso();
@@ -145,16 +184,9 @@ export async function createTask(
     schemaVersion: 1,
     kind: "groot.task",
     id: newId("task"),
-    title: titleFor(objective, input.title),
-    objective,
+    ...definition,
     createdAt: now,
     updatedAt: now,
-    runner,
-    model,
-    dependsOn,
-    ownership,
-    acceptance,
-    limits,
     status: "pending",
     statusReason: null,
     base: { branch: await currentBranch(repo, ctx.env), commit },
@@ -164,28 +196,6 @@ export async function createTask(
     review: null,
     integration: null,
   });
-  if (runner === "codex" && limits.maxBudgetUsd !== null) {
-    ctx.events.emit({
-      type: "task.warning",
-      level: "warn",
-      message: `Codex has no spend limit: maxBudgetUsd ${limits.maxBudgetUsd} is recorded but not enforced.`,
-      taskId: task.id,
-    });
-  }
-  if (acceptance.length === 0) {
-    ctx.events.emit({
-      type: "task.warning",
-      level: "warn",
-      message:
-        "No acceptance criteria: completion will rest on the runner's own success and your review.",
-      taskId: task.id,
-    });
-  }
-  ctx.events.emit({
-    type: "task.created",
-    level: "info",
-    message: `Created ${task.id}: ${task.title}`,
-    taskId: task.id,
-  });
+  announce(ctx, task);
   return task;
 }

@@ -5,6 +5,13 @@
  * the classified result (status, exit code, usage, final message, error).
  * Runner notes (resolved executable, skipped wrapper shims, version, model,
  * swept processes) and the simulated flag are kept next to the attempt log.
+ *
+ * While the runner process exists, runner.json records its process group, so
+ * a later Groot can stop it if this one dies. The repository's git directory
+ * is passed as a protected path, and the repository guard (guard.ts) compares
+ * every ref, both HEADs, and the git directory's hooks and config before and
+ * after: what the agent must not change is reported as the attempt's
+ * tampering.
  */
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
@@ -13,9 +20,11 @@ import { nowIso } from "../ids.ts";
 import { redactValue } from "../redact.ts";
 import { RUNNER_LABEL, unavailableUsage } from "../runners/common.ts";
 import { getRunner } from "../runners/index.ts";
-import type { RunnerEvent, RunnerResult } from "../runners/types.ts";
+import type { RunnerEvent, RunnerInvocation, RunnerResult } from "../runners/types.ts";
 import type { CoreContext } from "../runtime.ts";
-import { statusEntries } from "./git-ops.ts";
+import { gitCommonDir } from "./git-ops.ts";
+import { watchRepository } from "./guard.ts";
+import type { AttemptPlan } from "./plans.ts";
 import { allowedCommands, taskRules } from "./prompt.ts";
 import {
   appendPrompt,
@@ -23,19 +32,16 @@ import {
   taskPaths,
   touch,
   writeAttemptSummary,
+  writeMarker,
   writeTask,
 } from "./store.ts";
 import type { RunTaskOptions } from "./types.ts";
 
-export interface AttemptPlan {
-  readonly mode: "start" | "resume";
-  readonly prompt: string;
-  readonly resumeSessionId: string | null;
-}
-
 export interface AttemptOutcome {
   readonly task: Task;
   readonly result: RunnerResult;
+  /** What changed in the repository during the attempt but must not have (refs, git directory). */
+  readonly tampering: readonly string[];
 }
 
 const INFO_KINDS: ReadonlySet<RunnerEvent["kind"]> = new Set(["session", "tool", "result"]);
@@ -66,37 +72,16 @@ function usageText(result: RunnerResult): string {
   return parts.length === 0 ? "" : ` · ${parts.join(" · ")}`;
 }
 
-/** Warn when the main checkout changed during the run (sandbox escape or a concurrent edit). */
-function compareMainCheckout(
-  ctx: CoreContext,
-  taskId: string,
-  before: readonly string[],
-  after: readonly string[],
-): void {
-  const changed = after.filter((entry) => !before.includes(entry));
-  if (changed.length === 0) return;
-  ctx.events.emit({
-    type: "task.warning",
-    level: "warn",
-    message: `${taskId}: the main checkout changed while the runner worked (possible sandbox escape or a concurrent edit): ${changed.slice(0, 5).join(", ")}`,
-    taskId,
-    data: { changed },
-  });
-}
-
-/** Run one attempt for a claimed (running) task with a worktree. */
-export async function runAttempt(
+/** Persist the attempt as running (with the session id it will use) before anything starts. */
+function recordStart(
   ctx: CoreContext,
   root: string,
   task: Task,
   plan: AttemptPlan,
-  options: RunTaskOptions,
-): Promise<AttemptOutcome> {
-  const worktree = task.worktree;
-  if (worktree === null) throw new Error(`task ${task.id} has no worktree`);
+  preassigned: string,
+): { task: Task; attempt: Attempt } {
   const n = task.attempts.length + 1;
-  const preassigned = randomUUID();
-  const running: Attempt = {
+  const attempt: Attempt = {
     n,
     runner: task.runner,
     sessionId:
@@ -115,8 +100,8 @@ export async function runAttempt(
     finalMessage: null,
     error: null,
   };
-  let current = writeTask(root, touch(task, { attempts: [...task.attempts, running] }));
-  appendPrompt(root, task.id, `Attempt ${n} (${plan.mode}) — ${running.startedAt}`, plan.prompt);
+  const current = writeTask(root, touch(task, { attempts: [...task.attempts, attempt] }));
+  appendPrompt(root, task.id, `Attempt ${n} (${plan.mode}) — ${attempt.startedAt}`, plan.prompt);
   ctx.events.emit({
     type: "task.attempt.started",
     level: "info",
@@ -124,13 +109,21 @@ export async function runAttempt(
     taskId: task.id,
     data: { attempt: n, mode: plan.mode },
   });
+  return { task: current, attempt };
+}
 
-  const before = await statusEntries(root, ctx.env);
-  const handle = getRunner(task.runner).start({
-    cwd: worktree.path,
-    prompt: plan.prompt,
-    sessionId: preassigned,
-    resumeSessionId: plan.resumeSessionId,
+function invocation(
+  ctx: CoreContext,
+  root: string,
+  task: Task,
+  run: { plan: AttemptPlan; preassigned: string; worktree: string; protectedPath: string },
+  options: RunTaskOptions,
+): RunnerInvocation {
+  return {
+    cwd: run.worktree,
+    prompt: run.plan.prompt,
+    sessionId: run.preassigned,
+    resumeSessionId: run.plan.resumeSessionId,
     model: task.model,
     effort: options.effort ?? null,
     limits: {
@@ -139,29 +132,36 @@ export async function runAttempt(
       wallTimeMs: task.limits.wallTimeSec * 1000,
     },
     allowedCommands: allowedCommands(task),
-    eventsLogPath: taskPaths.attemptLog(root, task.id, n),
+    protectedPaths: [run.protectedPath],
+    eventsLogPath: taskPaths.attemptLog(root, task.id, task.attempts.length + 1),
     signal: ctx.signal,
     systemPrompt: taskRules(task),
     env: ctx.env,
     grace: options.grace,
-  });
-  const forwarding = forwardEvents(ctx, task.id, handle.events);
-  const result = await handle.result;
-  await forwarding;
-  compareMainCheckout(ctx, task.id, before, await statusEntries(root, ctx.env));
+    onSpawn: (pid) => writeMarker(root, task.id, { pgid: pid, startedAt: Date.now() }),
+  };
+}
 
+/** Store the classified result on the attempt (plus its sidecar summary) and report it. */
+function recordFinish(
+  ctx: CoreContext,
+  root: string,
+  task: Task,
+  attempt: Attempt,
+  result: RunnerResult,
+): Task {
   const summary = redactValue({
     status: result.status,
     simulated: result.simulated,
     notes: [...result.notes],
   });
   appendFileSync(
-    taskPaths.attemptLog(root, task.id, n),
+    taskPaths.attemptLog(root, task.id, attempt.n),
     `${JSON.stringify({ type: "groot.result", at: nowIso(), ...summary })}\n`,
   );
-  writeAttemptSummary(root, task.id, n, summary);
+  writeAttemptSummary(root, task.id, attempt.n, summary);
   const finished: Attempt = {
-    ...running,
+    ...attempt,
     sessionId: result.sessionId,
     finishedAt: nowIso(),
     status: result.status,
@@ -170,9 +170,9 @@ export async function runAttempt(
     finalMessage: result.finalMessage,
     error: result.error,
   };
-  current = writeTask(
+  const current = writeTask(
     root,
-    touch(current, { attempts: [...current.attempts.slice(0, -1), finished] }),
+    touch(task, { attempts: [...task.attempts.slice(0, -1), finished] }),
   );
   for (const note of result.notes) {
     ctx.events.emit({
@@ -185,9 +185,35 @@ export async function runAttempt(
   ctx.events.emit({
     type: "task.attempt.finished",
     level: result.status === "succeeded" ? "info" : "warn",
-    message: `${task.id}: attempt ${n} ${result.status}${result.simulated ? " (simulated)" : ""}${usageText(result)}${result.error === null ? "" : ` — ${result.error.message}`}`,
+    message: `${task.id}: attempt ${attempt.n} ${result.status}${result.simulated ? " (simulated)" : ""}${usageText(result)}${result.error === null ? "" : ` — ${result.error.message}`}`,
     taskId: task.id,
-    data: { attempt: n, status: result.status, simulated: result.simulated },
+    data: { attempt: attempt.n, status: result.status, simulated: result.simulated },
   });
-  return { task: current, result };
+  return current;
+}
+
+/** Run one attempt for a claimed (running) task with a worktree. */
+export async function runAttempt(
+  ctx: CoreContext,
+  root: string,
+  task: Task,
+  plan: AttemptPlan,
+  options: RunTaskOptions,
+): Promise<AttemptOutcome> {
+  const worktree = task.worktree;
+  if (worktree === null) throw new Error(`task ${task.id} has no worktree`);
+  const preassigned = randomUUID();
+  const protectedPath = await gitCommonDir(root, ctx.env);
+  const run = { plan, preassigned, worktree: worktree.path, protectedPath };
+  const spec = invocation(ctx, root, task, run, options);
+  const watch = await watchRepository(ctx, root, worktree.path, task.id, "the runner worked");
+  const started = recordStart(ctx, root, task, plan, preassigned);
+
+  const handle = getRunner(task.runner).start(spec);
+  const forwarding = forwardEvents(ctx, task.id, handle.events);
+  const result = await handle.result;
+  await forwarding;
+  writeMarker(root, task.id); // the runner's group is gone (swept)
+  const current = recordFinish(ctx, root, started.task, started.attempt, result);
+  return { task: current, result, tampering: await watch.finish() };
 }

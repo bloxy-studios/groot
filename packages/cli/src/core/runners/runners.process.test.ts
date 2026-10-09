@@ -6,24 +6,82 @@
  * timeouts, cancellation with no surviving group members, SIGTERM
  * escalation, resume argv, and discovery classification.
  */
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RunnerCapabilities } from "../contracts/task.ts";
+import { killTree } from "../process.ts";
 import { discoverRunners, getRunner } from "./index.ts";
-import { groupMembers } from "./supervise.ts";
+import { groupMembers, inspectRunnerGroup, stopRunnerGroup } from "./supervise.ts";
 import { type FakeAgents, type FakeScenario, installFakeAgents } from "./testing/fake-agents.ts";
 import type { RunnerHandle, RunnerInvocation } from "./types.ts";
 
 const TIMEOUT = 90_000;
 const SESSION = "6f1e2d3c-4b5a-4987-8765-43210fedcba9";
 const TOKEN = "tok-abcdef1234567890";
+const HOST = join(import.meta.dir, "testing/runner-host.ts");
+
+const scratch: string[] = [];
+afterAll(() => {
+  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+});
+
+/** Remove the fakes' temp root after the file's tests. */
+function tracked(fakes: FakeAgents): FakeAgents {
+  scratch.push(fakes.root);
+  return fakes;
+}
 
 function setup(scenario: FakeScenario): { fakes: FakeAgents; cwd: string } {
-  const fakes = installFakeAgents();
+  const fakes = tracked(installFakeAgents());
   fakes.scenario(scenario);
-  return { fakes, cwd: mkdtempSync(join(tmpdir(), "groot-runner-cwd-")) };
+  const cwd = mkdtempSync(join(tmpdir(), "groot-runner-cwd-"));
+  scratch.push(cwd);
+  return { fakes, cwd };
+}
+
+/** True once no process of the group is left (polled; the kernel reaps asynchronously). */
+async function groupGone(pgid: number, ms = 10_000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if ((await groupMembers(pgid)).length === 0) return true;
+    await Bun.sleep(100);
+  }
+  return (await groupMembers(pgid)).length === 0;
+}
+
+interface Host {
+  readonly proc: ReturnType<typeof Bun.spawn>;
+  /** The first stdout line matching `pattern` (null when none arrives in time). */
+  line(pattern: RegExp, ms?: number): Promise<string | null>;
+}
+
+/** Start testing/runner-host.ts (one simulated Claude run in a separate host process). */
+function startHost(fakes: FakeAgents, cwd: string, extra: string[] = []): Host {
+  const proc = Bun.spawn([process.execPath, HOST, cwd, join(cwd, "attempt.jsonl"), ...extra], {
+    env: fakes.env(),
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  let text = "";
+  void (async () => {
+    for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
+      text += new TextDecoder().decode(chunk);
+    }
+  })();
+  return {
+    proc,
+    async line(pattern, ms = 30_000) {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        const found = text.split("\n").find((entry) => pattern.test(entry));
+        if (found !== undefined) return found;
+        await Bun.sleep(50);
+      }
+      return null;
+    },
+  };
 }
 
 function invocation(
@@ -127,6 +185,47 @@ describe("Claude Code adapter (simulated runner)", () => {
       expect(log).toContain('"type":"groot.spawn"');
       expect(log).toContain('"subtype":"init"');
       expect(log).not.toContain(TOKEN);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "progress event summaries never carry env-derived secrets",
+    async () => {
+      // Arrange — the agent echoes a token it found in its environment.
+      const { fakes, cwd } = setup({
+        steps: [
+          { mode: "success", edits: { [`notes-${TOKEN}.md`]: "x" }, message: `env ${TOKEN}` },
+        ],
+      });
+
+      // Act
+      const handle = getRunner("claude-code").start(invocation(fakes, cwd));
+      const summaries: string[] = [];
+      for await (const event of handle.events) summaries.push(event.summary);
+      await handle.result;
+
+      // Assert
+      expect(summaries.length).toBeGreaterThan(0);
+      expect(summaries.join("\n")).toContain("[REDACTED]");
+      expect(summaries.join("\n")).not.toContain(TOKEN);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a wall time beyond the timer range does not stop the runner at once",
+    async () => {
+      // Arrange — 2^31 ms and above overflow setTimeout (it would fire after 1 ms).
+      const { fakes, cwd } = setup({ steps: [{ mode: "success", delayMs: 300 }] });
+
+      // Act
+      const result = await getRunner("claude-code").start(
+        invocation(fakes, cwd, { limits: { maxTurns: 3, maxBudgetUsd: null, wallTimeMs: 3e9 } }),
+      ).result;
+
+      // Assert
+      expect(result.status).toBe("succeeded");
     },
     TIMEOUT,
   );
@@ -271,6 +370,98 @@ describe("Claude Code adapter (simulated runner)", () => {
   );
 });
 
+describe("runner groups never outlive their host", () => {
+  test(
+    "SIGHUP to a host that does not handle it kills the runner group, then exits 129",
+    async () => {
+      // Arrange
+      const { fakes, cwd } = setup({ steps: [{ mode: "hang", grandchild: true }] });
+      const host = startHost(fakes, cwd);
+      const runner = await fakes.waitReady();
+
+      // Act
+      const spawned = await host.line(/^spawned \d+$/);
+      host.proc.kill("SIGHUP");
+      const code = await host.proc.exited;
+
+      // Assert — the host reported the runner's pid (= its group) as it spawned.
+      expect(spawned).toBe(`spawned ${runner}`);
+      expect(code).toBe(129);
+      expect(await groupGone(runner)).toBe(true);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "SIGTERM to a host without its own handler also kills the runner group (exit 143)",
+    async () => {
+      // Arrange
+      const { fakes, cwd } = setup({ steps: [{ mode: "hang", grandchild: true }] });
+      const host = startHost(fakes, cwd);
+      const runner = await fakes.waitReady();
+
+      // Act
+      host.proc.kill("SIGTERM");
+      const code = await host.proc.exited;
+
+      // Assert
+      expect(code).toBe(143);
+      expect(await groupGone(runner)).toBe(true);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a host that handles SIGTERM itself (like the CLI) stays in charge: the run is cancelled",
+    async () => {
+      // Arrange
+      const { fakes, cwd } = setup({ steps: [{ mode: "hang" }] });
+      const host = startHost(fakes, cwd, ["--abort-on-sigterm"]);
+      const runner = await fakes.waitReady();
+
+      // Act
+      host.proc.kill("SIGTERM");
+      const code = await host.proc.exited;
+
+      // Assert
+      expect(await host.line(/^result /)).toBe("result interrupted");
+      expect(code).toBe(0);
+      expect(await groupGone(runner)).toBe(true);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a recorded runner group is recognized only by its leader's start time, and can be stopped",
+    async () => {
+      // Arrange — a live group led by `sleep`, and one whose leader already exited.
+      const leader = Bun.spawn(["sleep", "60"], { detached: true, stdout: "ignore" });
+      const record = { pgid: leader.pid, startedAt: Date.now() };
+      const orphaned = Bun.spawn(["sh", "-c", "sleep 60 & exit 0"], {
+        detached: true,
+        stdout: "ignore",
+      });
+      await orphaned.exited;
+
+      // Act
+      const ours = await inspectRunnerGroup(record);
+      const recycled = await inspectRunnerGroup({ ...record, startedAt: record.startedAt - 3.6e6 });
+      const leaderless = await inspectRunnerGroup({ pgid: orphaned.pid, startedAt: Date.now() });
+      const stopped = await stopRunnerGroup(record.pgid);
+
+      // Assert — a live leader that started at another time is a recycled pid: not ours.
+      expect(ours).toBe("runner");
+      expect(recycled).toBe("gone");
+      expect(leaderless).toBe("unverified");
+      expect(stopped).toBe(true);
+      expect(await inspectRunnerGroup(record)).toBe("gone");
+      killTree(orphaned.pid, "SIGKILL");
+      expect(await groupGone(orphaned.pid)).toBe(true);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("Codex adapter (simulated runner)", () => {
   test(
     "exec argv, tokens-only usage, non-fatal retry notices; --ignore-user-config only when help lists it",
@@ -366,11 +557,11 @@ describe("discovery (simulated executables)", () => {
     "Codex: config-incompatible / not logged in / available are told apart",
     async () => {
       // Arrange
-      const configBroken = installFakeAgents();
+      const configBroken = tracked(installFakeAgents());
       configBroken.scenario({ steps: [], auth: "config-error" });
-      const loggedOut = installFakeAgents();
+      const loggedOut = tracked(installFakeAgents());
       loggedOut.scenario({ steps: [], auth: "logged-out" });
-      const ok = installFakeAgents();
+      const ok = tracked(installFakeAgents());
       ok.scenario({ steps: [], auth: "ok" });
 
       // Act
@@ -409,11 +600,11 @@ describe("discovery (simulated executables)", () => {
     "Claude Code: logged out and too-old builds are blocked; a current build is available with truthful features",
     async () => {
       // Arrange
-      const loggedOut = installFakeAgents();
+      const loggedOut = tracked(installFakeAgents());
       loggedOut.scenario({ steps: [], auth: "logged-out" });
-      const old = installFakeAgents();
+      const old = tracked(installFakeAgents());
       old.scenario({ steps: [], help: "old" });
-      const ok = installFakeAgents();
+      const ok = tracked(installFakeAgents());
       ok.scenario({ steps: [] });
 
       // Act
@@ -444,7 +635,7 @@ describe("discovery (simulated executables)", () => {
   test(
     "discoverRunners returns one contract-valid document per runner",
     async () => {
-      const fakes = installFakeAgents();
+      const fakes = tracked(installFakeAgents());
       const all = await discoverRunners(fakes.env());
       expect(all.map((caps) => caps.runner)).toEqual(["claude-code", "codex"]);
       for (const caps of all) expect(RunnerCapabilities.safeParse(caps).success).toBe(true);

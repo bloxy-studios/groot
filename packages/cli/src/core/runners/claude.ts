@@ -2,15 +2,43 @@
  * Claude Code adapter — `claude -p --output-format stream-json --verbose`
  * with explicit containment on EVERY run (start and resume), because user
  * defaults can be hazardous (e.g. `permissions.defaultMode:
- * bypassPermissions`), and headless defaults differ by provider:
+ * bypassPermissions`), and headless defaults differ by provider. Every flag
+ * below is listed by `claude --help` (2.1.293) except `--max-turns`, which is
+ * documented in the CLI reference but hidden from that help; a build without
+ * one of the REQUIRED_FLAGS (all listed by its help) is refused at preflight.
  *
- *   --permission-mode acceptEdits     file edits inside the worktree only
- *   --permission-prompts none         anything that would prompt is denied
+ *   --permission-mode acceptEdits     file edits auto-approved in the worktree;
+ *                                     edits elsewhere would prompt…
+ *   --permission-prompts none         …and anything that would prompt is denied
  *   --strict-mcp-config               no MCP servers (none are passed)
+ *   --safe-mode                       hooks (user, project, local), installed
+ *                                     plugins, skills, and CLAUDE.md files do
+ *                                     not load; auth and permissions work
+ *                                     normally (managed-policy hooks still run)
+ *   --tools Read,…,Bash               the only built-in tools: no agents
+ *                                     (Task), workflows, cron, messaging,
+ *                                     worktrees, web fetch or search
  *   --max-turns / --max-budget-usd    bounded spend
- *   --allowedTools / --disallowedTools  read/edit tools + the acceptance
- *                                     commands; never push, web fetch, search
- *   --settings {"sandbox":…}          OS sandbox for Bash, no escape hatch
+ *   --allowedTools                    Read/Edit/Write/Glob/Grep + Bash only
+ *                                     for the task's commands and read-only git
+ *   --disallowedTools                 git commands that move refs or HEAD,
+ *                                     web fetch and search (deny wins)
+ *   --settings {"sandbox":…}          Bash runs only in the OS sandbox: the
+ *                                     run refuses to start without one
+ *                                     (failIfUnavailable), sandboxed commands
+ *                                     still need an allow rule
+ *                                     (autoAllowBashIfSandboxed false), no
+ *                                     unsandboxed escape hatch, and the
+ *                                     repository's git directory is
+ *                                     write-denied (protectedPaths)
+ *
+ * The sandbox settings are not in `--help`; they were checked against the
+ * settings schema the 2.1.293 binary embeds. Not enforced here: the sandbox
+ * covers Bash only (file tools are bounded by permissions), project and local
+ * settings files still load (an agent-written `.claude/settings.local.json`
+ * can add allow rules for later attempts — still sandboxed), and nothing
+ * stops Claude Code's own bookkeeping outside the worktree. The task layer
+ * compares git refs before and after every attempt.
  *
  * Never passed: --dangerously-*, bypassPermissions, --bare (it would break
  * subscription and keychain auth). The prompt goes to stdin; the task rules
@@ -42,16 +70,45 @@ import type {
 } from "./types.ts";
 
 export const CLAUDE_INTERFACE = "claude -p --output-format stream-json --verbose (prompt on stdin)";
+/** The whole built-in tool surface of a bounded run (`--tools`). */
+export const CLAUDE_TOOLS: readonly string[] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"];
+/** Allowed without a rule argument; Bash is allowed per command (bashRules). */
 export const CLAUDE_BASE_TOOLS: readonly string[] = ["Read", "Edit", "Write", "Glob", "Grep"];
-export const CLAUDE_DENIED_TOOLS: readonly string[] = [
-  "Bash(git push *)",
-  "Bash(git commit *)",
-  "WebFetch",
-  "WebSearch",
+/** git subcommands that change refs, HEAD, or their history (or publish them) — always denied. */
+export const GIT_REF_COMMANDS: readonly string[] = [
+  "am",
+  "bisect",
+  "branch",
+  "checkout",
+  "cherry-pick",
+  "commit",
+  "fetch",
+  "filter-branch",
+  "merge",
+  "notes",
+  "pull",
+  "push",
+  "rebase",
+  "reflog",
+  "remote",
+  "replace",
+  "reset",
+  "revert",
+  "stash",
+  "submodule",
+  "switch",
+  "symbolic-ref",
+  "tag",
+  "update-ref",
+  "worktree",
 ];
-export const CLAUDE_SANDBOX_SETTINGS = JSON.stringify({
-  sandbox: { enabled: true, allowUnsandboxedCommands: false },
-});
+const CLAUDE_SANDBOX = {
+  enabled: true,
+  failIfUnavailable: true,
+  autoAllowBashIfSandboxed: false,
+  allowUnsandboxedCommands: false,
+};
+export const CLAUDE_SANDBOX_SETTINGS = JSON.stringify({ sandbox: CLAUDE_SANDBOX });
 export const CLAUDE_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 
 /** Flags Groot's containment depends on — a Claude Code without them is refused. */
@@ -67,7 +124,33 @@ const REQUIRED_FLAGS = [
   "--disallowedTools",
   "--settings",
   "--append-system-prompt",
+  "--tools",
+  "--safe-mode",
 ];
+
+/** Required flags `claude --help` does not list (an option line or alias names each flag). */
+export function missingClaudeFlags(help: string): string[] {
+  return REQUIRED_FLAGS.filter(
+    (flag) => !new RegExp(`(?:^|[\\s,])${flag}(?![\\w-])`, "m").test(help),
+  );
+}
+
+/** Deny rules: ref-moving git commands (with and without arguments), web fetch, web search. */
+export function deniedTools(): string[] {
+  return [
+    ...bashRules(GIT_REF_COMMANDS.map((command) => `git ${command}`)),
+    "WebFetch",
+    "WebSearch",
+  ];
+}
+
+/** `--settings` JSON: the sandbox, plus write-denied protected paths when there are any. */
+export function claudeSettings(protectedPaths: readonly string[] = []): string {
+  if (protectedPaths.length === 0) return CLAUDE_SANDBOX_SETTINGS;
+  return JSON.stringify({
+    sandbox: { ...CLAUDE_SANDBOX, filesystem: { denyWrite: [...protectedPaths] } },
+  });
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -116,6 +199,9 @@ export function claudeArgv(executable: string, invocation: RunnerInvocation): st
     "--permission-prompts",
     "none",
     "--strict-mcp-config",
+    "--safe-mode",
+    "--tools",
+    CLAUDE_TOOLS.join(","),
     "--max-turns",
     String(limits.maxTurns),
     ...(limits.maxBudgetUsd === null ? [] : ["--max-budget-usd", String(limits.maxBudgetUsd)]),
@@ -125,9 +211,9 @@ export function claudeArgv(executable: string, invocation: RunnerInvocation): st
     ...CLAUDE_BASE_TOOLS,
     ...bashRules(invocation.allowedCommands),
     "--disallowedTools",
-    ...CLAUDE_DENIED_TOOLS,
+    ...deniedTools(),
     "--settings",
-    CLAUDE_SANDBOX_SETTINGS,
+    claudeSettings(invocation.protectedPaths),
     ...(invocation.systemPrompt ? ["--append-system-prompt", invocation.systemPrompt] : []),
   ];
 }
@@ -231,6 +317,23 @@ function blockFor(
   return null;
 }
 
+/** Facts about the executable and how bounded runs use it (kept with the capabilities). */
+function preflightNotes(
+  executable: string,
+  resolution: readonly string[],
+  auth: AuthProbe,
+): string[] {
+  return [
+    executable,
+    ...resolution,
+    "--max-turns is documented but hidden from --help; Groot passes it on every run",
+    "usage cost is Claude Code's client-side estimate (total_cost_usd), not billing",
+    "bounded runs use --safe-mode: hooks, installed plugins, skills, and CLAUDE.md files do not load (the task prompt carries the rules and project context)",
+    `bounded runs expose only ${CLAUDE_TOOLS.join(", ")}; Bash runs only allow-listed commands, inside the OS sandbox`,
+    ...(auth.status === "unknown" ? [auth.detail] : []),
+  ];
+}
+
 /** Discovery + the exact reason Claude Code cannot take work (if any). */
 export async function preflightClaude(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -249,16 +352,9 @@ export async function preflightClaude(
   ]);
   const version = parseVersion(versionProbe.stdout);
   const help = helpProbe.stdout;
-  const missing = REQUIRED_FLAGS.filter((flag) => !help.includes(flag));
   const auth = parseClaudeAuth(authProbe.exitCode, authProbe.stdout, authProbe.stderr);
-  const block = blockFor(missing, version, auth);
-  const notes = [
-    `executable ${exe.path} (${exe.kind})`,
-    ...resolution.notes,
-    "--max-turns is documented but hidden from --help; Groot passes it on every run",
-    "usage cost is Claude Code's client-side estimate (total_cost_usd), not billing",
-    ...(auth.status === "unknown" ? [auth.detail] : []),
-  ];
+  const block = blockFor(missingClaudeFlags(help), version, auth);
+  const notes = preflightNotes(`executable ${exe.path} (${exe.kind})`, resolution.notes, auth);
   return {
     capabilities: buildCapabilities({
       runner: "claude-code",
@@ -289,6 +385,7 @@ function startClaude(invocation: RunnerInvocation): RunnerHandle {
     maxTurns: invocation.limits.maxTurns,
     maxBudgetUsd: invocation.limits.maxBudgetUsd,
     wallTimeMs: invocation.limits.wallTimeMs,
+    tools: CLAUDE_TOOLS,
   });
   return startRun(
     invocation,

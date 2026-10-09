@@ -12,6 +12,15 @@
  * - `total_cost_usd` is Claude Code's client-side ESTIMATE (and cumulative
  *   across a resumed session); it is labelled as such in usage.source.
  * - A run can end with no `result` at all (SIGINT while a tool starts).
+ * - Failures before the session starts — an unknown `--resume` target ("No
+ *   conversation found with session ID: …"), a sandbox that cannot start
+ *   under `failIfUnavailable` — print the message on stderr AND (2.1.293,
+ *   stream-json) a `result` line with `errors: [message]` and a FRESH
+ *   `session_id` that was never persisted. So a session counts as
+ *   established only once `system/init` announced it; a result alone never
+ *   names a resumable session.
+ * - `system/init` lists the tools the session really has; anything beyond
+ *   Groot's `--tools` list is recorded as a warning note.
  */
 import type { ErrorId, ErrorInfo } from "../contracts/envelope.ts";
 import type { UsageReport } from "../contracts/task.ts";
@@ -50,6 +59,8 @@ export interface ClaudeClassifyContext {
   readonly maxTurns: number;
   readonly maxBudgetUsd: number | null;
   readonly wallTimeMs: number;
+  /** The `--tools` list Groot passed (init-reported extras become a warning). */
+  readonly tools?: readonly string[];
 }
 
 interface Outcome {
@@ -89,6 +100,7 @@ function toolSummary(block: Record<string, unknown>): string {
 
 /** Stateful line parser for one Claude run. */
 export class ClaudeStreamParser implements StreamParser {
+  /** The session `system/init` announced (null: none was established). */
   sessionId: string | null = null;
   model: string | null = null;
   version: string | null = null;
@@ -97,6 +109,8 @@ export class ClaudeStreamParser implements StreamParser {
   lastText: string | null = null;
   apiError: string | null = null;
   final: ClaudeFinal | null = null;
+  /** Tools `system/init` reported (null until init). */
+  tools: string[] | null = null;
 
   constructor(private readonly context: ClaudeClassifyContext) {}
 
@@ -119,8 +133,8 @@ export class ClaudeStreamParser implements StreamParser {
       case "user":
         return event("tool", "user", "tool result");
       case "result":
+        // Its session_id is NOT adopted: before init it names a session that never existed.
         this.final = parseFinal(doc);
-        this.sessionId = asString(doc.session_id) ?? this.sessionId;
         return event(
           "result",
           "result",
@@ -138,6 +152,9 @@ export class ClaudeStreamParser implements StreamParser {
     this.model = asString(doc.model);
     this.version = asString(doc.claude_code_version);
     this.permissionMode = asString(doc.permissionMode);
+    if (Array.isArray(doc.tools)) {
+      this.tools = doc.tools.filter((tool): tool is string => typeof tool === "string");
+    }
     return event(
       "session",
       "system/init",
@@ -321,8 +338,46 @@ function apiErrorOutcome(
   };
 }
 
+const SANDBOX_UNAVAILABLE = /sandbox required but unavailable/i;
+const SESSION_NOT_FOUND = /no conversation found/i;
+
+/** Claude Code refused to start without its OS sandbox (Groot sets failIfUnavailable). */
+function sandboxUnavailable(text: string): Outcome {
+  const line =
+    text.split("\n").find((entry) => SANDBOX_UNAVAILABLE.test(entry)) ?? "sandbox unavailable";
+  return {
+    status: "failed",
+    error: errorInfo(
+      "GROOT_E_BLOCKED",
+      `Claude Code's OS sandbox could not start: ${truncate(line, 300)}`,
+      {
+        hint: "Install what the message names (on Linux: bubblewrap and socat), then retry — Groot never lets Claude Code run Bash unsandboxed.",
+        details: { cause: "sandbox-unavailable" },
+      },
+    ),
+  };
+}
+
+/** A `--resume` target Claude Code has no conversation for (it never started, or was purged). */
+function sessionNotFound(text: string): Outcome {
+  const line = text.split("\n").find((entry) => SESSION_NOT_FOUND.test(entry)) ?? text;
+  return {
+    status: "failed",
+    error: errorInfo(
+      "GROOT_E_NOT_RESUMABLE",
+      `Claude Code has no conversation to resume: ${truncate(line, 300)}`,
+      {
+        hint: "Groot starts a fresh session with the task prompt instead.",
+        details: { cause: "session-not-found" },
+      },
+    ),
+  };
+}
+
 function noResultOutcome(exit: SupervisedExit): Outcome {
   const tail = truncate(exit.stderrTail, 400);
+  if (SANDBOX_UNAVAILABLE.test(exit.stderrTail)) return sandboxUnavailable(exit.stderrTail);
+  if (SESSION_NOT_FOUND.test(tail)) return sessionNotFound(tail);
   if (/requires --verbose|unknown option|error: option|invalid choice|is not a valid/i.test(tail)) {
     return {
       status: "failed",
@@ -364,11 +419,8 @@ function isCleanSuccess(final: ClaudeFinal, exit: SupervisedExit): boolean {
   );
 }
 
-function claudeOutcome(
-  state: ClaudeStreamParser,
-  exit: SupervisedExit,
-  context: ClaudeClassifyContext,
-): Outcome {
+/** Outcomes decided by how the process ended, whatever it printed (null: look at the stream). */
+function exitOutcome(exit: SupervisedExit, context: ClaudeClassifyContext): Outcome | null {
   if (exit.spawnError !== null) {
     return {
       status: "failed",
@@ -394,9 +446,24 @@ function claudeOutcome(
       ),
     };
   }
+  return null;
+}
+
+function claudeOutcome(
+  state: ClaudeStreamParser,
+  exit: SupervisedExit,
+  context: ClaudeClassifyContext,
+): Outcome {
+  const ended = exitOutcome(exit, context);
+  if (ended !== null) return ended;
   const final = state.final;
   if (final === null) return noResultOutcome(exit);
   if (isCleanSuccess(final, exit)) return { status: "succeeded", error: null };
+  const reported = [...final.errors, exit.stderrTail].join("\n");
+  if (SANDBOX_UNAVAILABLE.test(reported)) return sandboxUnavailable(reported);
+  if (state.sessionId === null && SESSION_NOT_FOUND.test(reported)) {
+    return sessionNotFound(reported);
+  }
   if (final.subtype === "error_max_budget_usd" || final.terminalReason === "budget_exhausted") {
     return {
       status: "budget-exceeded",
@@ -432,13 +499,21 @@ function claudeOutcome(
   };
 }
 
-function runNotes(state: ClaudeStreamParser): string[] {
+function runNotes(state: ClaudeStreamParser, context: ClaudeClassifyContext): string[] {
   const notes: string[] = [];
   if (state.version !== null) notes.push(`Claude Code ${state.version}`);
   if (state.model !== null) notes.push(`model ${state.model}`);
   if (state.permissionMode !== null && state.permissionMode !== "acceptEdits") {
     notes.push(
       `WARNING: runner reported permission mode ${state.permissionMode} (Groot passed acceptEdits)`,
+    );
+  }
+  const allowed = context.tools;
+  const extra =
+    allowed === undefined ? [] : (state.tools ?? []).filter((tool) => !allowed.includes(tool));
+  if (extra.length > 0) {
+    notes.push(
+      `WARNING: Claude Code exposed tools beyond Groot's --tools list: ${truncate(extra.join(", "), 300)}`,
     );
   }
   if (state.simulated) notes.push("simulated runner (test double) — not live evidence");
@@ -461,6 +536,6 @@ export function classifyClaude(
     usage: claudeUsage(state.final, exit.durationMs),
     finalMessage: message === null ? null : redact(message).slice(0, FINAL_MESSAGE_CAP),
     simulated: state.simulated,
-    notes: [...runNotes(state), ...exitNotes(exit)],
+    notes: [...runNotes(state, context), ...exitNotes(exit)],
   };
 }

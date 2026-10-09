@@ -110,9 +110,65 @@ export function notStartedResult(
   };
 }
 
+async function prepared(
+  prepare: () => Promise<LaunchSpec | RunnerResult>,
+): Promise<LaunchSpec | RunnerResult> {
+  try {
+    return await prepare();
+  } catch (error) {
+    return notStartedResult("failed", toErrorInfo(error), []);
+  }
+}
+
+/**
+ * Final message and error text are persisted in task.json — redact
+ * env-derived secrets too, not just credential-shaped patterns.
+ */
+function scrubbed(
+  outcome: RunnerResult,
+  notes: readonly string[],
+  secrets: readonly string[],
+): RunnerResult {
+  return {
+    ...outcome,
+    finalMessage: outcome.finalMessage === null ? null : redact(outcome.finalMessage, secrets),
+    error:
+      outcome.error === null
+        ? null
+        : { ...outcome.error, message: redact(outcome.error.message, secrets) },
+    notes: [...notes, ...outcome.notes],
+  };
+}
+
+/** Supervise the prepared launch; parsed events go to `events`. */
+function launch(
+  invocation: RunnerInvocation,
+  spec: LaunchSpec,
+  log: AttemptLog,
+  parser: StreamParser,
+  events: EventQueue<RunnerEvent>,
+): ReturnType<typeof supervise> {
+  return supervise({
+    argv: spec.argv,
+    cwd: invocation.cwd,
+    env: spec.env,
+    stdin: invocation.prompt,
+    wallTimeMs: invocation.limits.wallTimeMs,
+    signal: invocation.signal,
+    grace: invocation.grace ?? DEFAULT_CANCEL_GRACE,
+    log,
+    onLine: (line) => {
+      const event = parser.line(line);
+      if (event !== null) events.push(event);
+    },
+    onSpawn: invocation.onSpawn,
+  });
+}
+
 /**
  * Start a run: `prepare` resolves the executable and argv (or returns an
- * early result), then the process is supervised and its lines parsed.
+ * early result), then the process is supervised and its lines — redacted
+ * with the env-derived secrets before anything sees them — are parsed.
  * cancel() works at any point — before spawn it prevents the spawn.
  */
 export function startRun(
@@ -125,55 +181,22 @@ export function startRun(
   const log = new AttemptLog(invocation.eventsLogPath, secrets);
   let cancelRequested = false;
   let supervised: ReturnType<typeof supervise> | null = null;
-  const cancelledResult = (): RunnerResult =>
-    notStartedResult("interrupted", errorInfo("GROOT_E_INTERRUPTED", "The run was cancelled."), []);
 
-  const result = (async (): Promise<RunnerResult> => {
-    try {
-      let spec: LaunchSpec | RunnerResult;
-      try {
-        spec = await prepare();
-      } catch (error) {
-        spec = notStartedResult("failed", toErrorInfo(error), []);
-      }
-      if ("status" in spec) {
-        log.record("not-started", { error: spec.error });
-        return spec;
-      }
-      if (cancelRequested || invocation.signal.aborted) {
-        log.record("not-started", { reason: "cancelled before the runner started" });
-        return cancelledResult();
-      }
-      supervised = supervise({
-        argv: spec.argv,
-        cwd: invocation.cwd,
-        env: spec.env,
-        stdin: invocation.prompt,
-        wallTimeMs: invocation.limits.wallTimeMs,
-        signal: invocation.signal,
-        grace: invocation.grace ?? DEFAULT_CANCEL_GRACE,
-        log,
-        onLine: (raw) => {
-          const event = parser.line(raw);
-          if (event !== null) events.push(event);
-        },
-      });
-      const outcome = parser.finish(await supervised.done);
-      // Final message and error text are persisted in task.json — redact
-      // env-derived secrets too, not just credential-shaped patterns.
-      return {
-        ...outcome,
-        finalMessage: outcome.finalMessage === null ? null : redact(outcome.finalMessage, secrets),
-        error:
-          outcome.error === null
-            ? null
-            : { ...outcome.error, message: redact(outcome.error.message, secrets) },
-        notes: [...spec.notes, ...outcome.notes],
-      };
-    } finally {
-      events.close();
+  const run = async (): Promise<RunnerResult> => {
+    const spec = await prepared(prepare);
+    if ("status" in spec) {
+      log.record("not-started", { error: spec.error });
+      return spec;
     }
-  })();
+    if (cancelRequested || invocation.signal.aborted) {
+      log.record("not-started", { reason: "cancelled before the runner started" });
+      const cancelled = errorInfo("GROOT_E_INTERRUPTED", "The run was cancelled.");
+      return notStartedResult("interrupted", cancelled, []);
+    }
+    supervised = launch(invocation, spec, log, parser, events);
+    return scrubbed(parser.finish(await supervised.done), spec.notes, secrets);
+  };
+  const result = run().finally(() => events.close());
 
   return {
     events,
@@ -263,6 +286,23 @@ export function exitNotes(exit: SupervisedExit): string[] {
     notes.push(`WARNING: ${exit.leftover} process(es) survived the process-group sweep`);
   }
   return notes;
+}
+
+/**
+ * Does an attempt log show the provider establishing its session (Claude
+ * `system/init`, Codex `thread.started`)? A pre-assigned session id whose
+ * run never got that far does not exist and cannot be resumed.
+ */
+export function logShowsSession(log: string): boolean {
+  return log.split("\n").some((line) => {
+    if (!line.includes("init") && !line.includes("thread.started")) return false;
+    try {
+      const doc = asRecord(JSON.parse(line));
+      return (doc?.type === "system" && doc.subtype === "init") || doc?.type === "thread.started";
+    } catch {
+      return false;
+    }
+  });
 }
 
 export const RUNNER_LABEL: Record<RunnerId, string> = {

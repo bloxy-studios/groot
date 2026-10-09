@@ -6,7 +6,9 @@
  * Exit codes: 0 when the task reached the expected state (created, awaiting
  * review, completed); 7 blocked (with the exact cause and next step); 5 when
  * the task failed its acceptance checks or attempts; 130 interrupted (resume
- * with `groot task resume`).
+ * with `groot task resume`). `task run --ready` exits with the most serious
+ * outcome of the batch — a task that could not even start counts (its error
+ * is in the warnings).
  */
 import { realpathSync } from "node:fs";
 import { defineCommand } from "citty";
@@ -22,6 +24,7 @@ import {
   createTask,
   integrateTask,
   listTasks,
+  type ReadyRun,
   readTask,
   resumeTask,
   runReadyTasks,
@@ -83,7 +86,10 @@ export function nextStep(task: Task): string | null {
     case "pending":
       return `groot task run ${task.id}`;
     case "running":
-      return `groot task show ${task.id} (a run is in progress)`;
+      // A reason on a running task means its groot process is gone (see the reason).
+      return task.statusReason === null
+        ? `groot task show ${task.id} (a run is in progress)`
+        : `follow the reason above, then: groot task resume ${task.id}`;
     case "blocked":
       return task.integration !== null
         ? `fix the cause above, then: groot task integrate ${task.id}`
@@ -156,6 +162,25 @@ export function taskExitCode(task: Task, expected: readonly Task["status"][]): n
   return EXIT_V2.INTERNAL;
 }
 
+/**
+ * One exit code for `task run --ready`: interrupted first, then a task that
+ * could not start (its own error's code), failed, blocked, anything else
+ * unexpected; 0 only when every task reached review.
+ */
+export function readyExitCode(run: ReadyRun): number {
+  const failed = new Set(run.failures.map((failure) => failure.taskId));
+  const codes = run.tasks
+    .filter((task) => !failed.has(task.id))
+    .map((task) => taskExitCode(task, ["awaiting-review"]));
+  if (codes.includes(EXIT_V2.CANCELLED)) return EXIT_V2.CANCELLED;
+  const startError = run.failures[0];
+  if (startError !== undefined) return startError.error.exitCode;
+  const serious = [exitCodeFor("GROOT_E_VERIFY_FAILED"), EXIT_V2.BLOCKED].find((code) =>
+    codes.includes(code),
+  );
+  return serious ?? codes.find((code) => code !== EXIT_V2.OK) ?? EXIT_V2.OK;
+}
+
 function taskResult(task: Task, expected: readonly Task["status"][]): CommandResult {
   const exitCode = taskExitCode(task, expected);
   return {
@@ -197,7 +222,10 @@ const create = defineCommand({
       description:
         "Acceptance verification profile: structural|build|runtime|product-flow (repeatable)",
     },
-    "wall-time": { type: "string", description: "Wall time per attempt in seconds (default 900)" },
+    "wall-time": {
+      type: "string",
+      description: "Wall time per attempt in seconds (default 900, max 86400)",
+    },
     "max-turns": { type: "string", description: "Turn limit per attempt (default 25)" },
     "max-budget-usd": {
       type: "string",
@@ -206,7 +234,7 @@ const create = defineCommand({
     "max-attempts": { type: "string", description: "Attempts per run, 1–5 (default 2)" },
     "accept-timeout": {
       type: "string",
-      description: "Timeout per acceptance check in seconds (default 600)",
+      description: "Timeout per acceptance check in seconds (default 600, max 86400)",
     },
     ...GLOBAL_ARGS,
   },
@@ -305,17 +333,17 @@ const run = defineCommand({
       if (args.id !== undefined)
         return taskResult(await runTask(ctx, root, args.id, options), ["awaiting-review"]);
       const parallel = numberFlag("parallel", args.parallel, true) ?? 2;
-      const tasks = await runReadyTasks(ctx, root, { parallel, ...options });
-      const codes = tasks.map((task) => taskExitCode(task, ["awaiting-review"]));
-      const exitCode =
-        [EXIT_V2.CANCELLED, exitCodeFor("GROOT_E_VERIFY_FAILED"), EXIT_V2.BLOCKED].find((code) =>
-          codes.includes(code),
-        ) ?? EXIT_V2.OK;
+      const ready = await runReadyTasks(ctx, root, { parallel, ...options });
+      const { tasks } = ready;
+      const exitCode = readyExitCode(ready);
       return {
         ok: exitCode === EXIT_V2.OK,
         data: tasks,
         exitCode,
         blocked: tasks.filter((task) => task.status === "blocked").map(blockedDecision),
+        warnings: ready.failures.map(
+          (failure) => `${failure.taskId} could not start: ${failure.error.message}`,
+        ),
         refs: { evidence: tasks.flatMap((task) => task.evidence) },
         human: () => {
           if (tasks.length === 0)

@@ -24,7 +24,11 @@ export interface FakeStep {
     | "hang"
     | "usage-limit"
     | "config-error"
-    | "turn-failed";
+    | "turn-failed"
+    /** Claude: exit 1 before any session exists (no init, no result). */
+    | "crash";
+  /** Claude "success": run `git update-ref <ref> <to>` in the cwd (a sandbox escape). */
+  readonly moveRef?: { readonly ref: string; readonly to: string };
   /** Files to write in the working directory (relative path → content). */
   readonly edits?: Readonly<Record<string, string>>;
   readonly message?: string;
@@ -41,6 +45,8 @@ export interface FakeStep {
   readonly retryNotice?: boolean;
   /** "success": work this long before finishing (makes concurrency observable). */
   readonly delayMs?: number;
+  /** "success": finish only once this file exists (a test decides when; at most 2 minutes). */
+  readonly waitForFile?: string;
 }
 
 export interface FakeScenario {
@@ -49,6 +55,13 @@ export interface FakeScenario {
   readonly auth?: "ok" | "logged-out" | "config-error";
   /** Claude: "old" drops --permission-prompts. Codex: "modern" lists --ignore-user-config. */
   readonly help?: "current" | "old" | "modern";
+  /**
+   * Claude: "known" behaves like the real CLI — `--resume` of a session this
+   * fake never started fails with "No conversation found" (default "any").
+   */
+  readonly sessions?: "any" | "known";
+  /** Delay discovery probes (--version, --help, auth status); `probing` marks the first. */
+  readonly probeDelayMs?: number;
 }
 
 const ENV_ALLOWLIST = [
@@ -142,6 +155,12 @@ function armInterrupt(step: FakeStep, onInterrupt: () => Promise<never>): void {
   });
 }
 
+/** Poll for a file a test creates (bounded, so a broken test cannot hang the fake forever). */
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 120_000;
+  while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(50);
+}
+
 /** Block until signalled; `ready.jsonl` says when everything the step starts is running. */
 async function hang(step: FakeStep): Promise<never> {
   setInterval(() => {}, 1000);
@@ -168,9 +187,11 @@ Options:
                                         "dontAsk", "plan")
   --permission-prompts <target>         Who answers permission prompts
   -r, --resume [value]                  Resume a conversation by session ID
+  --safe-mode                           Start with all customizations disabled
   --session-id <uuid>                   Use a specific session ID
   --settings <file-or-json>             Additional settings
   --strict-mcp-config                   Only use MCP servers from --mcp-config
+  --tools <tools...>                    Specify the list of available tools
   --verbose                             Override verbose mode setting
 `;
 
@@ -246,6 +267,9 @@ function claudeInterrupted(step: FakeStep, sessionId: string): Promise<never> {
   return exit(0);
 }
 
+/** Without --tools the real CLI exposes its whole default surface (agents, cron, messaging…). */
+const DEFAULT_TOOLS = ["Task", "Bash", "Glob", "Grep", "Read", "Edit", "Write", "WebFetch"];
+
 async function claudeRun(step: FakeStep, sessionId: string): Promise<never> {
   emit({ type: "system", subtype: "ui_invalidate", event: "ui.render" });
   emit({
@@ -253,6 +277,7 @@ async function claudeRun(step: FakeStep, sessionId: string): Promise<never> {
     subtype: "init",
     cwd: process.cwd(),
     session_id: sessionId,
+    tools: flagValue("--tools")?.split(",") ?? DEFAULT_TOOLS,
     model: "claude-opus-5-5",
     permissionMode: flagValue("--permission-mode") ?? "default",
     claude_code_version: "2.1.293",
@@ -284,7 +309,15 @@ async function claudeRun(step: FakeStep, sessionId: string): Promise<never> {
     });
     emit({ type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } });
   }
+  if (step.moveRef !== undefined) {
+    Bun.spawnSync(["git", "update-ref", step.moveRef.ref, step.moveRef.to], {
+      cwd: process.cwd(),
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  }
   if (step.delayMs !== undefined) await Bun.sleep(step.delayMs);
+  if (step.waitForFile !== undefined) await waitForFile(step.waitForFile);
   if (step.mode !== "success") {
     emit(claudeFailure(step, sessionId));
     return exit(1);
@@ -297,7 +330,53 @@ async function claudeRun(step: FakeStep, sessionId: string): Promise<never> {
   return exit(0);
 }
 
+const SESSIONS = join(dir, "sessions.txt");
+
+function knownSessions(): string[] {
+  return existsSync(SESSIONS) ? readFileSync(SESSIONS, "utf8").split("\n").filter(Boolean) : [];
+}
+
+/**
+ * Real Claude (2.1.293, print mode) refuses a resume target it has no
+ * transcript for: the message on stderr and — with stream-json — a result
+ * line carrying the message and its OWN fresh session id (never persisted),
+ * then exit 1. No `system/init` precedes it.
+ */
+async function rejectUnknownResume(spec: FakeScenario, stdin: () => Promise<string>) {
+  const resume = flagValue("--resume");
+  if (spec.sessions !== "known" || resume === null || knownSessions().includes(resume)) return;
+  record(await stdin());
+  const message = `No conversation found with session ID: ${resume}`;
+  console.error(message);
+  if (flagValue("--output-format") === "stream-json") {
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      duration_ms: 0,
+      duration_api_ms: 0,
+      is_error: true,
+      num_turns: 0,
+      stop_reason: null,
+      session_id: crypto.randomUUID(),
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [],
+      errors: [message],
+    });
+  }
+  await exit(1);
+}
+
+async function probeDelay(spec: FakeScenario): Promise<void> {
+  if (spec.probeDelayMs === undefined) return;
+  writeFileSync(join(dir, "probing"), String(process.pid));
+  await Bun.sleep(spec.probeDelayMs);
+}
+
 async function claude(spec: FakeScenario, stdin: () => Promise<string>): Promise<never> {
+  const probing = argv[0] === "--version" || argv[0] === "--help" || argv[0] === "auth";
+  if (probing) await probeDelay(spec);
   if (argv[0] === "--version") {
     console.log(`${spec.version ?? "2.1.293"} (Claude Code)`);
     return exit(0);
@@ -323,10 +402,16 @@ async function claude(spec: FakeScenario, stdin: () => Promise<string>): Promise
     console.error("fake claude: refusing to run without -p");
     return exit(2);
   }
+  await rejectUnknownResume(spec, stdin);
   const step = nextStep(spec);
   const sessionId = flagValue("--session-id") ?? flagValue("--resume") ?? "unknown";
   if (step.mode === "hang") armInterrupt(step, () => claudeInterrupted(step, sessionId));
   record(await stdin());
+  if (step.mode === "crash") {
+    console.error("fake claude: crashed before the session started");
+    return exit(1);
+  }
+  if (flagValue("--session-id") !== null) appendFileSync(SESSIONS, `${sessionId}\n`);
   return claudeRun(step, sessionId);
 }
 
