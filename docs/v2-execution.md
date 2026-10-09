@@ -11,16 +11,15 @@
 | Background work | (1) workflow `groot-v2-core-units` (run `wf_51587296-f9b`): runners+tasks (`worktree-wf_51587296-f9b-3`) and recipes (`-4`) implementers, then the executor and discovery adversarial reviews. (2) workflow `v2-review-fixes` (run `wf_5c648abe-1df`): fixes for the coordinator review in three file-disjoint groups (A safety primitives · B planning/transforms/policy · C solver/verification/CLI-MCP contract), each adversarially re-verified with the review's original probes |
 | Placeholders | `core/recipes/index.ts` and `core/tasks/index.ts` on the integration branch are **temporary** (commit `e030a96`) and are replaced by the recipes and runners unit merges |
 
-### Next runnable task (resume here)
+### Next runnable task (resume here) — lean finish (2026-10-09)
 
-Done since the last checkpoint: recipes and runners units merged (placeholders gone); CLI `task run/resume` get the task-context provider; dynamic port allocation for v2 `groot add` (real E2E passed); MCP end-to-end test (`mcp.e2e.test.ts`, gated); task/review spec aligned; README v2; changesets pre mode `next` + six changesets.
+The user asked to cut verification to finish within their limit. State on `wip/v2-integration`: every unit, review waves 1–2 (A–G), the docs consolidation, and the coordinator follow-ups are merged. Coordinator review 2 found 6 confirmed + 21 unverified issues; wave 3 (run `wf_22e4278d-104`) is fixing them in two worktrees: H `.claude/worktrees/wf_22e4278d-104-1` (engine locks, ports, stitch containment, v1 exit codes) and I `.claude/worktrees/wf_22e4278d-104-2` (MCP operation linking, context-sync ownership, verification secrets, rollback policy, --json usage envelopes, verify --unit, recipe/next-step fixes).
 
-**Wave 1 done (2026-10-08 18:40):** all three groups merged with their verified fix-ups (`515ef3c`, `1158b17`, then fix-ups and group C at `4087108`); coordinator follow-ups `bd71127` (repeatable `--recipe` attached to the capability it supplies), `a46c62a` (MCP external-refusal next step; inspect caveat), `a16f996` (forced exit SIGKILLs supervised groups — JOURNALED #13), `20c747b` (policy enums pinned), docs `37535c2`. Full suite after wave 1: **724 pass · 15 skip · 0 fail** (360 s, quiet machine). In flight: wave 2a (F runners/tasks, G recipes — fix-ups running, run `wf_0ce1a701-5b6`), wave 2b (D executor fix-up running, then E discovery — run `wf_ae31e042-981`), and the first Gate C acceptance run on the integrated product.
-
-1. ~~Wave 1~~ — done (see above).
-2. **Wave 2 fixes** (after step 1, so ownership is clean): unit-review findings saved in `/tmp/groot-review/unit-reviews.{txt,json}` — executor 14 (2 high: forged `produced` expectations bypass freshness and the recursive-delete guard; toolchain preconditions execute a plan-named path), discovery 8 (git fingerprint following untracked symlinks; script ports as app ports; unreadable groot.json crash; env-file key material as names; eager command imports; pnpm zero-indent; adopt plans declaring failing checks), plus the runners and recipes reviews when they arrive. Groups: D executor · E discovery/startup · F runners · G recipes; adversarial verification as in wave 1.
-3. Gate C proof on the merged result: `GROOT_E2E=1 bun test v2-flow.e2e mcp.e2e` (+ `GROOT_RECIPE_E2E=1` certification) on a quiet machine (load average was 120–220 during wave 1; process tests with Bun's 5 s default time out under that load on main as well); full suite on Bun 1.4 and 1.3.14.
-4. Gate D/E: final real Claude Code task demo on the compiled binary; Codex stays blocked (local config); refresh the ledger statuses from the evidence; compiled-binary demos; fast-forward `refactor/groot-v2-core`; push; draft PR; Greptile loop.
+1. When H and I have committed: stop the workflow (skip its verifiers), merge both branches, resolve any conflict, `bun run lint && bun run typecheck`.
+2. One full suite (`cd packages/cli && bun test`); fix real breakage only (5 s process-test timeouts under machine load are known noise — re-run that file alone).
+3. `bun run build`; smoke the binary: `dist/groot --version`, `dist/groot init demo --dry-run --yes --json`, `dist/groot schema --json`.
+4. Fast-forward `refactor/groot-v2-core` to `wip/v2-integration`; push with `-u`; open a draft PR (body draft: /tmp/groot-pr/body-draft.md — fill evidence and limitations).
+5. Report as NOT re-run on the final revision: Gate C / MCP / recipe E2E (last green: Gate C 5/5 at `d69e71b`, recipe certification 3/3 on G's branch), a real Claude Code run with the hardened containment flags, the Bun 1.3.14 parity suite.
 
 ### Integration branch commits (`232a30c..wip/v2-integration`, first parent)
 
