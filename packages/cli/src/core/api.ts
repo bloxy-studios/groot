@@ -4,7 +4,6 @@
  * policy enforcement, execution, verification, context, and tasks behave
  * identically no matter who asks.
  */
-import { readdir } from "node:fs/promises";
 import { readLock, readManifest } from "./blueprint/index.ts";
 import { bootstrapCore } from "./bootstrap.ts";
 import { listCapabilities } from "./capabilities/registry.ts";
@@ -321,15 +320,4 @@ export function taskContextProvider(ctx: Parameters<GrootApi["inspect"]>[0]) {
     ];
     return lines.filter((line) => line !== "").join("\n");
   };
-}
-
-/** Unused-directory guard for `.groot/plans` listings (kept for status views). */
-export async function listSavedPlans(root: string): Promise<string[]> {
-  try {
-    return (await readdir(statePaths.plans(root)))
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => name.slice(0, -5));
-  } catch {
-    return [];
-  }
 }
