@@ -66,6 +66,18 @@ async function linkOperation(
   }
 }
 
+/** The same refusal for a resumed operation, pointing at `groot resume`. */
+function externalResumeRefused(operationId: string): GrootV2Error {
+  return new GrootV2Error(
+    "GROOT_E_POLICY_DENIED",
+    "External effects can't be approved over MCP; a person approves them in a terminal.",
+    {
+      hint: `Ask the user to review the operation and run \`groot resume ${operationId} --allow external\` in a terminal.`,
+      details: { denied: ["external"], operationId },
+    },
+  );
+}
+
 /**
  * External effects (provider accounts) need a person's approval: the agent
  * calling this server cannot grant one to itself, so it is pointed at the
@@ -296,6 +308,12 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
         operationId: z.string(),
         retryStep: z.string().optional().describe("Re-run this interrupted non-idempotent step"),
         skipStep: z.string().optional().describe("Treat this interrupted step as done"),
+        allow: z
+          .array(ActionClass)
+          .optional()
+          .describe(
+            "Extra action classes the user approved for this run (resume re-checks the policy; approvals given to operation_apply do not carry over). Never external: a person approves those with `groot resume <operationId> --allow external` in a terminal.",
+          ),
         waitMs: WaitMs,
       }),
       outputSchema: Summary,
@@ -306,13 +324,15 @@ export function registerOperationTools(server: McpServer, deps: ToolDeps): void 
         openWorldHint: true,
       },
     },
-    async ({ root, operationId, retryStep, skipStep, waitMs }, ctx) => {
+    async ({ root, operationId, retryStep, skipStep, allow, waitMs }, ctx) => {
       try {
         const projectRoot = rootOf(root);
+        if (allow?.includes("external")) throw externalResumeRefused(operationId);
         const job = deps.jobs.start(`resume:${operationId}`, `resume:${operationId}`, (signal) =>
           deps.api.resume(background(projectRoot, signal), projectRoot, operationId, {
             retryStep,
             skipStep,
+            approvals: allow ?? [],
           }),
         );
         job.operationId = operationId;

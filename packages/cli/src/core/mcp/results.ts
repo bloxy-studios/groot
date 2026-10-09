@@ -62,14 +62,23 @@ const NEXT_BY_ERROR: Partial<Record<ErrorId, string>> = {
  * a person-at-a-terminal step instead of the generic "approve and retry".
  */
 function nextStepFor(info: ErrorInfo): string | undefined {
-  const details = (info.details ?? {}) as { denied?: unknown; planId?: unknown };
+  const details = (info.details ?? {}) as {
+    denied?: unknown;
+    planId?: unknown;
+    operationId?: unknown;
+  };
   if (
     info.id === "GROOT_E_POLICY_DENIED" &&
     Array.isArray(details.denied) &&
     details.denied.includes("external")
   ) {
-    const plan = typeof details.planId === "string" ? details.planId : "<planId>";
-    return `External effects need a person's approval: ask the user to review the plan and run \`groot apply ${plan} --allow external\` in a terminal, then call operation_status to follow the operation.`;
+    const command =
+      typeof details.planId === "string"
+        ? `groot apply ${details.planId} --allow external`
+        : typeof details.operationId === "string"
+          ? `groot resume ${details.operationId} --allow external`
+          : "groot apply <planId> --allow external";
+    return `External effects need a person's approval: ask the user to review the change and run \`${command}\` in a terminal, then call operation_status to follow the operation.`;
   }
   return NEXT_BY_ERROR[info.id];
 }

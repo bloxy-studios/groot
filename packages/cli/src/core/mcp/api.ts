@@ -69,7 +69,12 @@ export interface GrootApi {
     ctx: CoreContext,
     root: string,
     operationId: string,
-    options: { retryStep?: string; skipStep?: string },
+    options: {
+      retryStep?: string;
+      skipStep?: string;
+      /** Classes approved for this run (resume re-checks the policy; apply's approvals do not carry over). */
+      approvals?: readonly ActionClass[];
+    },
   ): Promise<OperationResult>;
   previewRollback(ctx: CoreContext, root: string, operationId: string): Promise<RollbackPreview>;
   rollback(ctx: CoreContext, root: string, operationId: string): Promise<OperationResult>;
