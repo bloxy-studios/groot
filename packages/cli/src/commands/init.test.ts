@@ -113,6 +113,27 @@ describe("groot init (process-level, non-TTY)", () => {
     expect(pub.stdout).toContain("github     create public repo + push");
   });
 
+  test("--dir-conflict merge into a directory with an unreadable groot.lock.json → exit 2 up front, even on a dry run", async () => {
+    const cwd = await scratch();
+    await mkdir(join(cwd, "app"));
+    await writeFile(
+      join(cwd, "app", "groot.lock.json"),
+      "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n",
+    );
+    const { stdout, stderr, exitCode } = await runCli(cwd, [
+      "init",
+      "app",
+      "--yes",
+      "--dir-conflict",
+      "merge",
+      "--dry-run",
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("groot.lock.json");
+    expect(stderr).not.toContain("SyntaxError");
+    expect(stdout).not.toContain("dry run — nothing was written");
+  }, 60_000);
+
   test("--github without a git identity → exit 2 up front, even on a dry run", async () => {
     const cwd = await scratch();
     const home = join(cwd, "empty-home");

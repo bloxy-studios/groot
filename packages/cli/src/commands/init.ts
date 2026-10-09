@@ -22,7 +22,7 @@ import {
   gitIdentityPresent,
   publishToGitHub,
 } from "../engine/github.ts";
-import { resolveGenerators } from "../engine/locks.ts";
+import { assertLockReadable, resolveGenerators } from "../engine/locks.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
 import {
   applyYesDefaults,
@@ -269,6 +269,9 @@ async function runInit(args: {
     const note = `directory conflict: using ${targetDir} (increment policy)`;
     (args.json ? console.error : console.log)(`${pc.yellow("●")} ${note}`);
   }
+  // Stitch updates groot.lock.json last, so an unreadable one in a merge target
+  // is refused now — before anything is generated, dry runs included.
+  await assertLockReadable(plan);
 
   // Composed once so every summary (dry-run, prompt confirm, plain) shows it.
   const githubSummaryLine = args.github

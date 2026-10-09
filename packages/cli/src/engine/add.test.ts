@@ -86,7 +86,11 @@ async function workspace(
  */
 async function workspaceV2(
   scaffolds: PlannedScaffold[],
-  adoptedApps: readonly { readonly path: string; readonly port: number }[] = [],
+  adoptedApps: readonly {
+    readonly path: string;
+    readonly port: number | null;
+    readonly framework?: string | null;
+  }[] = [],
 ): Promise<{ root: string; loaded: LoadedManifest }> {
   const { root } = await workspace(scaffolds);
   const blueprint = planToManifest({
@@ -107,7 +111,7 @@ async function workspaceV2(
     id: basename(app.path),
     path: app.path,
     kind: "web" as const,
-    framework: null,
+    framework: app.framework ?? null,
     packageName: basename(app.path),
     port: app.port,
     origin: "adopted" as const,
@@ -378,6 +382,67 @@ describe("resolveAddScaffold — v2 workspaces allocate dev ports", () => {
     expect(scaffold.port).toBe(3001);
   });
 
+  test("an app that declares no port claims its framework's default (an adopted `next dev`)", async () => {
+    const { root, loaded } = await workspaceV2(
+      [],
+      [{ path: "apps/site", port: null, framework: "next" }],
+    );
+    const { scaffold, warnings, notes } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "next",
+      undefined,
+      loaded.blueprint,
+    );
+    expect(scaffold.port).toBe(3001);
+    expect(warnings).toEqual([]);
+    expect(notes).toEqual(["dev port 3000 is taken by apps/site → apps/web gets 3001"]);
+  });
+
+  test("a server that declares no port claims Bun's 3000 — groot's 3001 only exists in servers it wrote", async () => {
+    const { root, loaded } = await workspaceV2(
+      [],
+      [{ path: "apps/legacy-api", port: null, framework: "hono" }],
+    );
+    const web = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "next",
+      undefined,
+      loaded.blueprint,
+    );
+    expect(web.scaffold.port).toBe(3001);
+    expect(web.notes).toEqual(["dev port 3000 is taken by apps/legacy-api → apps/web gets 3001"]);
+    const api = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "hono",
+      undefined,
+      loaded.blueprint,
+    );
+    expect(api.scaffold.port).toBe(3001);
+    expect(api.notes).toEqual([]);
+  });
+
+  test("an app without a port claims nothing when groot doesn't know its framework", async () => {
+    const { root, loaded } = await workspaceV2(
+      [],
+      [
+        { path: "apps/legacy", port: null, framework: "express" },
+        { path: "apps/tools", port: null, framework: null },
+      ],
+    );
+    const { scaffold, notes } = await resolveAddScaffold(
+      loaded.manifest,
+      root,
+      "next",
+      undefined,
+      loaded.blueprint,
+    );
+    expect(scaffold.port).toBe(3000);
+    expect(notes).toEqual([]);
+  });
+
   test("a free default port is kept as is", async () => {
     const { root, loaded } = await workspaceV2([entryFor("next")]);
     const { scaffold, notes } = await resolveAddScaffold(
@@ -622,5 +687,29 @@ describe("executeAdd (offline, real adapters)", () => {
       generator: null,
       port: null,
     });
+  });
+
+  test("v1: growing leaves another scaffold's hand-set dev port byte-identical", async () => {
+    // The fix `groot doctor` recommends for a collision: move one scaffold's
+    // port (in its dev script and groot.json). A later add must not touch it.
+    const { root, loaded } = await workspace([{ ...entryFor("next"), port: 3005 }]);
+    const web = `${JSON.stringify(
+      { name: "web", private: true, scripts: { dev: "next dev --turbopack -p 3005" } },
+      null,
+      2,
+    )}\n`;
+    await writeFile(join(root, "apps/web/package.json"), web);
+    const { scaffold } = await resolveAddScaffold(loaded.manifest, root, "elysia", undefined);
+    const plan = buildAddPlan(loaded, scaffold, await readRootPackageName(root), {
+      install: false,
+      keepFailed: false,
+      verbose: false,
+    });
+
+    await executeAdd(plan, scaffold, { verbose: false });
+
+    expect(await readFile(join(root, "apps/web/package.json"), "utf8")).toBe(web);
+    expect(JSON.parse(await readFile(join(root, "groot.json"), "utf8")).version).toBe(1);
+    expect(existsSync(join(root, "groot.lock.json"))).toBe(false);
   });
 });
