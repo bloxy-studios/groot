@@ -10,30 +10,30 @@
 | Item | Status | Depends on | Support | Evidence required |
 | --- | --- | --- | --- | --- |
 | Versioned contracts + published schemas (project, blueprint, lock, capability, plan, operation, evidence, task, envelope) | done | — | certified | schema drift test; contract tests |
-| v1 compatibility path (init/add/doctor flags, exit codes, JSON; v1+v2 reading; explicit migration) | done (migrate: in progress) | contracts | certified | contract + process tests; v1 fixtures |
+| v1 compatibility path (init/add/doctor flags, exit codes, JSON; v1+v2 reading; explicit migration) | done | contracts | certified (contract + process tests in CI) | contract + process tests; v1 fixtures |
 | Single-app and monorepo creation | done (single: hono certified) | v1 adapters | certified for hono single + v1 monorepo set | real-generator E2E per topology |
-| Read-only discovery (`inspect`) | in progress | contracts | — | fixtures incl. custom layouts, dirty trees, symlinks, non-Bun repos |
-| Adoption preserving layout + dirty/staged state | in progress | discovery, executor | — | adopt a customized project; files outside groot.json/lock untouched |
+| Read-only discovery (`inspect`) | done | contracts | experimental (unit/process tests in CI; adopted-project E2E local) | fixtures incl. custom layouts, dirty trees, symlinks, non-Bun repos |
+| Adoption preserving layout + dirty/staged state | done | discovery, executor | experimental (local Gate C E2E: custom layout, staged diff byte-identical, untracked file untouched) | adopt a customized project; files outside groot.json/lock untouched |
 | Compatibility solver | done | capability registry | certified | refusal/ordering/ambiguity tests |
-| Exact generator + recipe locks | partial (recipe locks via planner; generator resolution in progress) | registry resolver | — | lock records exact version + integrity; replay uses exact versions |
+| Exact generator + recipe locks | done (init/add resolve exact versions + integrity; recipe locks) | registry resolver | experimental (local E2E) | lock records exact version + integrity; replay uses exact versions |
 | Plans with exact previews, preconditions, ownership, recovery limits | done | PlanBuilder, transforms | certified | planner tests |
-| Journaled apply/resume/rollback, writer lock, cancellation, idempotency | in progress | executor | — | crash-at-boundary, concurrent writer, SIGINT, stale-plan, rollback-conflict tests |
+| Journaled apply/resume/rollback, writer lock, cancellation, idempotency | done | executor | experimental (crash-at-boundary, concurrent writer, SIGINT, stale-plan, rollback-conflict tests in CI; local Gate C crash → resume E2E) | crash-at-boundary, concurrent writer, SIGINT, stale-plan, rollback-conflict tests |
 | Dynamic ports + runtime occupancy | done for `groot add` in v2 workspaces (allocation applied via dev-script `--port` / source); verification on ephemeral ports; re-allocating existing apps not implemented | — | experimental | unit tests (allocation matrix, `stitchDevPorts`); real E2E: `add next --path` next to a Next app serves on the allocated port |
 | Environment contracts (scope, sensitivity, storage; no public secrets) | done | — | certified | contract validation + structural.env tests |
-| Verification profiles + evidence (structural/build/runtime/product-flow) | done (engine); recipe checkers in progress | verify engine | — | evidence tied to revision; blocked/skipped truthful |
-| Managed instructions (AGENTS.md, CLAUDE.md shims, skills) + task context | done (core); command wiring pending | discovery | — | human text preserved; conflicts; budgets |
+| Verification profiles + evidence (structural/build/runtime/product-flow) | done (engine + recipe checkers) | verify engine | experimental (local Gate C: all four profiles pass on created and adopted projects) | evidence tied to revision; blocked/skipped truthful |
+| Managed instructions (AGENTS.md, CLAUDE.md shims, skills) + task context | done (incl. `groot context sync`) | discovery | experimental (tests in CI; local E2E sync idempotent) | human text preserved; conflicts; budgets |
 | `groot schema` discovery | done | contracts | certified | process tests |
-| MCP facade (typed tools, both protocol eras, bounded waits) | done (facade); real-API wiring pending | core API | — | client tests both eras; stdout purity |
+| MCP facade (typed tools, both protocol eras, bounded waits) | done (real core API) | core API | experimental (contract tests in CI for both eras; gated real-API E2E written, not yet run) | client tests both eras; stdout purity |
 
 ## First capability release (P0 — reference flow)
 
 | Item | Status | Depends on | Support | Evidence required |
 | --- | --- | --- | --- | --- |
-| Typed persistence: Drizzle + bun:sqlite on Hono/Bun | in progress | recipe contract, executor | prototype passed live flow | fresh single + monorepo + adopted: install, build (`data.build` bundles the entry with `db/client.ts` and `db/migrate.ts`, so a data-only app's modules are checked), migrate, runtime; the SQLite database and its `-wal`/`-shm`/`-journal` files kept out of git |
-| Authentication: Better Auth (email/password) on Hono/Bun | in progress | data recipe | Groot certification flow passed (`GROOT_RECIPE_E2E`, local, not yet in CI): 26 steps — the prototype's 24, with g3 tightened to the 403 Better Auth's CSRF guard gives a cookie-bearing POST without `Origin` and g4 asserting the session survives, plus the owner's delete (j1/j2) | sign-up, session, protected write, isolation, unauthorized 401, Origin-less cookie POST 403 (CSRF), sign-out |
-| Installed-agent runner: Claude Code | in progress | tasks, worktrees | — | real task: edit → acceptance → review → integration |
-| Installed-agent runner: Codex | in progress (adapter) | runner contract | blocked locally (CLI/config mismatch, quota) | real task on a working Codex install |
-| Task dependencies, worktrees, review, fresh integration checks | in progress | runners | — | DAG blocking, ownership overlap, integration re-verify |
+| Typed persistence: Drizzle + bun:sqlite on Hono/Bun | done | recipe contract, executor | experimental (local recipe certification 3/3 + Gate C; not yet in CI) | fresh single + monorepo + adopted: install, build (`data.build` bundles the entry with `db/client.ts` and `db/migrate.ts`, so a data-only app's modules are checked), migrate, runtime; the SQLite database and its `-wal`/`-shm`/`-journal` files kept out of git |
+| Authentication: Better Auth (email/password) on Hono/Bun | done | data recipe | experimental (local certification: 26-step flow incl. CSRF 403, + Gate C 5/5; not yet in CI) | sign-up, session, protected write, isolation, unauthorized 401, Origin-less cookie POST 403 (CSRF), sign-out |
+| Installed-agent runner: Claude Code | done | tasks, worktrees | experimental (one real task end to end — create → run → review → integrate — before the containment hardening; hardened flags not yet re-validated with a real run) | real task: edit → acceptance → review → integration |
+| Installed-agent runner: Codex | adapter done | runner contract | blocked locally (installed codex 0.116 rejects the local `model_reasoning_effort="ultra"` config; quota) — simulated-runner tests only | real task on a working Codex install |
+| Task dependencies, worktrees, review, fresh integration checks | done | runners | experimental (process tests with simulated runners in CI; one real Claude run) | DAG blocking, ownership overlap, integration re-verify |
 
 ## Next (P1)
 
