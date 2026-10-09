@@ -11,10 +11,15 @@
  * path just before touching it. Irreversible steps are reported, not undone.
  * When dependency changes or installs are undone, `bun install --no-save`
  * re-syncs node_modules with the restored manifests (the compensating
- * command; --no-save so no lockfile appears that wasn't there before).
+ * command; --no-save so no lockfile appears that wasn't there before). It is
+ * held to the action policy like the planner's own install step: when the
+ * policy (plus this run's approvals) refuses its classes, the rollback is
+ * refused before anything changes (GROOT_E_POLICY_DENIED). A rollback that
+ * needs no install never reads the policy.
  */
 import { hostname } from "node:os";
-import type { Sha256 } from "../contracts/common.ts";
+import type { Policy } from "../contracts/blueprint.ts";
+import type { ActionClass, Sha256 } from "../contracts/common.ts";
 import { schemaUrl } from "../contracts/common.ts";
 import {
   type OperationResult,
@@ -37,7 +42,9 @@ import {
   pathKind,
 } from "./fsops.ts";
 import { operationFile, progressOf, type Replay } from "./journal.ts";
+import { deniedAmong } from "./policy.ts";
 import { realRoot } from "./project.ts";
+import { loadProjectPolicy } from "./project-policy.ts";
 import {
   executeRollbackSteps,
   reservedInTree,
@@ -53,8 +60,22 @@ import { simulatedTreeHash } from "./tree-sim.ts";
 /** The compensating command after dependency changes/installs are undone. */
 export const COMPENSATING_INSTALL: readonly string[] = ["bun", "install", "--no-save"];
 
+/**
+ * What the policy requires of the compensating install — the classes of the
+ * planner's own `bun install` step: it runs a process that installs packages
+ * over the network (and dependencies' lifecycle scripts).
+ */
+export const COMPENSATION_CLASSES: readonly ActionClass[] = ["command", "install", "network"];
+
 /** Wall-time cap for the compensating install. */
 const COMPENSATION_TIMEOUT_MS = 600_000;
+
+export interface RollbackOptions {
+  /** The action policy (default: the project's, loaded only when the install is needed). */
+  readonly policy?: Policy;
+  /** Classes approved for this run only; approvals given to apply or resume never carry over. */
+  readonly approvals?: readonly ActionClass[];
+}
 
 /** Simulated current hashes during the reverse walk (lazily read from disk). */
 class Simulation {
@@ -277,6 +298,13 @@ async function planUndo(ex: Execution, replayed: Replay): Promise<StepUndo[]> {
   return undos;
 }
 
+/** Undoing these steps needs the compensating install (a dependency change or install is undone). */
+function needsCompensation(undos: readonly StepUndo[]): boolean {
+  return undos.some(
+    (undo) => undo.compensates && (undo.action === "restore" || undo.action === "delete"),
+  );
+}
+
 function toPreview(ex: Execution, undos: readonly StepUndo[]): RollbackPreview {
   const conflicts = [
     ...new Set(undos.filter((undo) => undo.action === "conflict").flatMap((undo) => undo.paths)),
@@ -284,14 +312,11 @@ function toPreview(ex: Execution, undos: readonly StepUndo[]): RollbackPreview {
   const irreversible = undos
     .filter((undo) => undo.action === "irreversible")
     .map((undo) => `${undo.stepId}: ${undo.description} — ${undo.reason}`);
-  const willCompensate = undos.some(
-    (undo) => undo.compensates && (undo.action === "restore" || undo.action === "delete"),
-  );
   const limits = [
     ...ex.sc.plan.recovery.limits,
-    ...(willCompensate
+    ...(needsCompensation(undos)
       ? [
-          `compensating command: \`${COMPENSATING_INSTALL.join(" ")}\` re-syncs node_modules with the restored manifests`,
+          `compensating command: \`${COMPENSATING_INSTALL.join(" ")}\` re-syncs node_modules with the restored manifests (action classes ${COMPENSATION_CLASSES.join(", ")}, held to the project policy)`,
         ]
       : []),
   ];
@@ -340,6 +365,28 @@ function rollbackConflict(operationId: string, preview: RollbackPreview): GrootV
   );
 }
 
+/**
+ * Refuse a rollback whose compensating install the policy (plus this run's
+ * approvals) does not allow — checked before anything changes.
+ */
+async function assertCompensationAllowed(
+  root: string,
+  operationId: string,
+  options: RollbackOptions,
+): Promise<void> {
+  const policy = options.policy ?? (await loadProjectPolicy(root)).policy;
+  const denied = deniedAmong(COMPENSATION_CLASSES, policy, options.approvals ?? []);
+  if (denied.length === 0) return;
+  throw new GrootV2Error(
+    "GROOT_E_POLICY_DENIED",
+    `Rolling back ${operationId} re-syncs node_modules with \`${COMPENSATING_INSTALL.join(" ")}\`, which needs action classes the project policy does not allow: ${denied.join(", ")}. Nothing was changed.`,
+    {
+      hint: `Approve them for this run (groot rollback ${operationId} --allow ${denied.join(",")}) or extend policy.allow in groot.json.`,
+      details: { denied, operationId, policy },
+    },
+  );
+}
+
 async function compensate(ex: Execution): Promise<string | null> {
   emit(ex, {
     type: "rollback.compensate",
@@ -379,6 +426,7 @@ export async function rollbackOperation(
   ctx: CoreContext,
   root: string,
   operationId: string,
+  options: RollbackOptions = {},
 ): Promise<OperationResult> {
   const canonical = realRoot(root);
   const loaded = loadOperation(canonical, operationId);
@@ -394,6 +442,7 @@ export async function rollbackOperation(
     const undos = await planUndo(ex, replayed);
     const preview = toPreview(ex, undos);
     if (!preview.possible) throw rollbackConflict(operationId, preview);
+    if (needsCompensation(undos)) await assertCompensationAllowed(canonical, operationId, options);
 
     ex.journal.append({ type: "rollback.started", pid: process.pid });
     checkpoint(ex);

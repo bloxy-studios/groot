@@ -68,19 +68,19 @@ export function requiredClasses(plan: OperationPlan): ActionClass[] {
 }
 
 /**
- * Classes the policy (plus explicit approvals) does not permit. External
- * effects are never implicit: they additionally need `policy.external: "ask"`
- * AND an explicit "external" approval for this run — "external" listed in
- * `policy.allow` does not count.
+ * Which of `classes` the policy (plus explicit approvals) does not permit.
+ * External effects are never implicit: they additionally need
+ * `policy.external: "ask"` AND an explicit "external" approval for this run —
+ * "external" listed in `policy.allow` does not count.
  */
-export function deniedClasses(
-  plan: OperationPlan,
+export function deniedAmong(
+  classes: Iterable<ActionClass>,
   policy: Policy,
   approvals: readonly ActionClass[],
 ): ActionClass[] {
   const allowed = new Set<ActionClass>([...policy.allow, ...approvals]);
   const denied = new Set<ActionClass>();
-  for (const cls of requiredClasses(plan)) {
+  for (const cls of classes) {
     if (cls === "external") {
       if (policy.external !== "ask" || !approvals.includes("external")) denied.add(cls);
       continue;
@@ -88,6 +88,15 @@ export function deniedClasses(
     if (!allowed.has(cls)) denied.add(cls);
   }
   return [...denied].sort();
+}
+
+/** Classes the plan needs that the policy (plus explicit approvals) does not permit. */
+export function deniedClasses(
+  plan: OperationPlan,
+  policy: Policy,
+  approvals: readonly ActionClass[],
+): ActionClass[] {
+  return deniedAmong(requiredClasses(plan), policy, approvals);
 }
 
 /** Throw GROOT_E_POLICY_DENIED (details.denied) when any required class is not permitted. */
