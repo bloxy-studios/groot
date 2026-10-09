@@ -56,6 +56,7 @@ export function producedPath(action: PlannedAction): string | null {
   switch (action.type) {
     case "file.write":
     case "file.edit":
+    case "env.secret":
       return action.path;
     case "file.move":
       return action.to;
