@@ -190,7 +190,9 @@ async function scriptCheck(
   const result = await runProcess({
     argv,
     cwd,
-    env: { ...process.env, CI: "1" },
+    // The context's environment: a task's pre-review checks pass a
+    // credential-free one, so unreviewed scripts never see credentials.
+    env: { ...input.ctx.env, CI: "1" },
     timeoutMs: 600_000,
     signal: input.ctx.signal,
   });

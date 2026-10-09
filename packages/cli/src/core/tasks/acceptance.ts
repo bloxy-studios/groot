@@ -64,14 +64,6 @@ const UNREVIEWED_LIMITATION =
   "ran before review without an OS sandbox: the agent's code could use the network and read and write any file the user can, outside the worktree too — groot checks only the repository's git refs, hooks, and config for changes";
 const CREDENTIAL_FREE_LIMITATION =
   "ran before review with credential-like environment variables removed (recognized by name and URL shape; a credential named otherwise stays)";
-const FULL_ENV_LIMITATION =
-  "the scripts this check ran before review got groot's full environment, credentials included (the verification engine does not take the credential-free environment)";
-/**
- * The verification engine's project-script checks (core/verify/checkers.ts
- * scriptCheck): they run with Groot's process environment, not the
- * context's. Every other checker uses the credential-free context env.
- */
-const ENGINE_SCRIPT_TOOLS: ReadonlySet<string> = new Set(["build.typecheck", "build.build"]);
 const STOPPED_BY_TAMPERING =
   "the repository changed outside the worktree while the checks ran (see the task's reason)";
 
@@ -301,15 +293,6 @@ function artifactName(worktree: string, record: Evidence, path: string): string 
   return name === "" || name.startsWith("..") ? null : name;
 }
 
-/** Limitations an imported verification record carries beyond its own. */
-function importedLimitations(checked: Checked, record: Evidence): string[] {
-  const fullEnv =
-    !checked.run.reviewed &&
-    record.method.kind === "command" &&
-    ENGINE_SCRIPT_TOOLS.has(record.method.tool);
-  return [...checked.limitations, ...(fullEnv ? [FULL_ENV_LIMITATION] : [])];
-}
-
 /**
  * Move evidence produced inside a worktree into the project's store (same
  * id), redacted with the run's secrets and carrying the run's limitations;
@@ -331,7 +314,7 @@ function importEvidence(checked: Checked, record: Evidence): Evidence {
     ...redactValue(record, run.secrets),
     artifacts,
     simulated: record.simulated || run.simulated,
-    limitations: [...new Set([...record.limitations, ...importedLimitations(checked, record)])],
+    limitations: [...new Set([...record.limitations, ...checked.limitations])],
   });
   mkdirSync(to, { recursive: true });
   writeFileAtomic(join(to, "evidence.json"), prettyJson(imported));

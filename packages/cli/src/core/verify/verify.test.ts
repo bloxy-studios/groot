@@ -56,6 +56,38 @@ describe("verification engine", () => {
     expect(report.ok).toBe(true);
   });
 
+  test("project scripts run with the context's environment, not groot's own", async () => {
+    // Arrange — a typecheck script that fails when it can see the canary, which
+    // groot's process has but the context (like a task's pre-review checks) drops.
+    const root = project();
+    writeFileSync(
+      join(root, "apps/api/package.json"),
+      JSON.stringify({ name: "api", scripts: { typecheck: 'test -z "$GROOT_TEST_CANARY"' } }),
+    );
+    const blueprint = blueprintFixture({ apps: [appFixture({ id: "api", path: "apps/api" })] });
+    process.env.GROOT_TEST_CANARY = "leaked";
+    try {
+      const { GROOT_TEST_CANARY: _dropped, ...scrubbed } = process.env;
+
+      // Act
+      const report = await runVerification(createContext({ cwd: tmpdir(), env: scrubbed }), {
+        root,
+        blueprint,
+        observation: null,
+        lock: null,
+        profiles: ["build"],
+        extra: defaultContracts(blueprint),
+      });
+
+      // Assert
+      expect(report.evidence.find((entry) => entry.check === "build.typecheck.api")?.status).toBe(
+        "pass",
+      );
+    } finally {
+      delete process.env.GROOT_TEST_CANARY;
+    }
+  });
+
   test("a missing required secret is blocked with the exact next step, never a pass", async () => {
     const root = project();
     const blueprint = blueprintFixture({
