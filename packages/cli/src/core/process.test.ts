@@ -194,3 +194,17 @@ describe.skipIf(!posix)("runProcess group supervision", () => {
     expect(result.stdout.startsWith("progress ")).toBe(true);
   }, 30_000);
 });
+
+describe("runProcess timeouts", () => {
+  test("a timeout beyond setTimeout's range never fires immediately", async () => {
+    // setTimeout runs a callback at once when its delay exceeds 2^31-1 ms.
+    const result = await runProcess({
+      argv: ["sh", "-c", "sleep 0.2; echo done"],
+      cwd: tmpdir(),
+      timeoutMs: 3_000_000_000,
+    });
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("done");
+  });
+});

@@ -58,6 +58,9 @@ const SWEEP_POLL_MS = 25;
 /** Bound on the final flush of a capture whose pipe reads had to be cancelled. */
 const CANCEL_FLUSH_MS = 500;
 
+/** setTimeout fires at once beyond this delay (2^31-1 ms, ~24.8 days), so longer timeouts are clamped. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Send a signal to the child's whole process group (POSIX) or the child (Windows). */
@@ -288,10 +291,13 @@ export async function runProcess(options: SpawnOptions): Promise<SpawnResult> {
     killTree(proc.pid, "SIGTERM");
     killTimer = setTimeout(() => killTree(proc.pid, "SIGKILL"), grace);
   };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    terminate();
-  }, options.timeoutMs);
+  const timer = setTimeout(
+    () => {
+      timedOut = true;
+      terminate();
+    },
+    Math.min(options.timeoutMs, MAX_TIMER_MS),
+  );
   const onAbort = (): void => {
     aborted = true;
     terminate();
