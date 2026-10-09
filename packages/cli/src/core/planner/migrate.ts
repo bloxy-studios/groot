@@ -57,6 +57,11 @@ async function v1Manifest(
     const manifest = await readManifest(observation.root);
     if (manifest.state === "v1") return { doc: manifest.doc, sha256: manifest.sha256 };
   }
+  if (registration.status === "invalid" || registration.status === "unsupported-version") {
+    // The reader's own error names the problem and its one next step:
+    // GROOT_E_INVALID_DOCUMENT or GROOT_E_UNSUPPORTED_SCHEMA (docs/v2-cli-spec.md).
+    await readManifest(observation.root);
+  }
   const explained = STATE_EXPLANATION[registration.status] ?? {
     message: "is not a groot version 1 workspace",
     hint: "Run groot inspect to see its registration state.",

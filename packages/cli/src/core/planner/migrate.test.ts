@@ -154,17 +154,28 @@ describe("planMigrate — groot v1 workspace (c)", () => {
 
 describe("planMigrate — refusals explain the registration state", () => {
   test.each([
-    ["unregistered", () => bunMonorepo(), "nothing to migrate"],
+    ["unregistered", () => bunMonorepo(), "GROOT_E_USAGE", "nothing to migrate"],
     [
       "already version 2",
       () => bunMonorepo({ "groot.json": serializeBlueprint(blueprintFixture()) }),
+      "GROOT_E_USAGE",
       "already has a version 2",
     ],
-    ["invalid", () => bunMonorepo({ "groot.json": "{ broken" }), "cannot be read"],
-    ["version 3", () => bunMonorepo({ "groot.json": json({ version: 3 }) }), "does not read"],
+    [
+      "invalid",
+      () => bunMonorepo({ "groot.json": "{ broken" }),
+      "GROOT_E_INVALID_DOCUMENT",
+      "not valid JSON",
+    ],
+    [
+      "version 3",
+      () => bunMonorepo({ "groot.json": json({ version: 3 }) }),
+      "GROOT_E_UNSUPPORTED_SCHEMA",
+      "declares version 3",
+    ],
   ])(
-    "%s → GROOT_E_USAGE",
-    async (_label, build, phrase) => {
+    "%s → %s (exit 2) with one next step",
+    async (_label, build, id, phrase) => {
       // Arrange
       const root = build();
 
@@ -172,10 +183,11 @@ describe("planMigrate — refusals explain the registration state", () => {
       const error = await errorOf(planMigrate(createContext({ cwd: root }), "."));
 
       // Assert
-      expect(error.id).toBe("GROOT_E_USAGE");
+      expect(error.id as string).toBe(id);
       expect(error.exitCode).toBe(2);
       expect(error.message).toContain(phrase);
-      expect(error.details).toHaveProperty("registration");
+      expect(error.message).not.toContain(".).");
+      expect(error.hint).not.toBeNull();
     },
     TIMEOUT,
   );
