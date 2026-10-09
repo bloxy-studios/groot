@@ -4,5 +4,18 @@
   "initialVersions": {
     "create-groot": "1.10.0"
   },
-  "changesets": []
+  "changesets": [
+    "api-port-env",
+    "compiled-binary-hardening",
+    "discovery-startup-fixes",
+    "init-empty-name",
+    "package-no-test-helpers",
+    "v2-agents",
+    "v2-blueprint-groot-json",
+    "v2-capabilities-verify",
+    "v2-operation-core",
+    "v2-operations-hardening",
+    "v2-tasks-hardening",
+    "v2-topology-ports"
+  ]
 }
