@@ -66,8 +66,14 @@ export function migrationDetails(migration: MigrationReport): Record<string, unk
   };
 }
 
-function cancelledOr(input: CheckInput, outcome: CheckOutcome): CheckOutcome {
-  if (!input.ctx.signal.aborted) return outcome;
+/**
+ * A failure under cancellation is recorded as cancelled — the check was cut
+ * short, not proven broken (the engine applies the same rule). A pass, or a
+ * check's own blocked/skipped result, stands even if the signal fired as it
+ * finished, so a completed check never marks the run interrupted.
+ */
+export function cancelledOr(input: CheckInput, outcome: CheckOutcome): CheckOutcome {
+  if (!input.ctx.signal.aborted || outcome.status !== "fail") return outcome;
   return {
     ...outcome,
     status: "skipped",
@@ -119,19 +125,35 @@ function migrationFailure(
   };
 }
 
+/**
+ * What to do about a server that never answered. Checks give the app an
+ * ephemeral port through PORT; an app that hard-codes its own port either
+ * fails to bind it (the log names it) or listens where the check never looks.
+ */
+export function startFailureNextStep(log: string, port: number): string {
+  const named = [...log.matchAll(/(?:port|localhost:|127\.0\.0\.1:|0\.0\.0\.0:)\s*(\d{2,5})\b/gi)]
+    .map((match) => Number(match[1]))
+    .find((value) => value !== port);
+  if (named !== undefined) {
+    return `The app used port ${named}, not the PORT=${port} the check gave it. Make the server read PORT with its own port as the default (e.g. \`port: Number(process.env.PORT ?? ${named})\`), then run \`groot verify\` again.`;
+  }
+  return `The app did not answer on PORT=${port} within the check's timeout. Make sure the server reads process.env.PORT (checks run on ephemeral ports) and starts without errors — see server.log.`;
+}
+
 function startFailure(
   method: Evidence["method"],
   migration: MigrationReport,
   error: unknown,
+  port: number,
 ): CheckOutcome {
   const message = error instanceof Error ? error.message : String(error);
   return {
     status: "fail",
     summary: `the server did not start: ${firstLine(message)}`,
     method,
-    details: { command: method.command?.argv, migration: migrationDetails(migration) },
+    details: { command: method.command?.argv, port, migration: migrationDetails(migration) },
     artifacts: [migrateLog(migration), { name: "server.log", kind: "log", content: message }],
-    nextStep: "See server.log for the startup error.",
+    nextStep: startFailureNextStep(message, port),
   };
 }
 
@@ -197,7 +219,10 @@ async function runLive(
       signal: input.ctx.signal,
     });
   } catch (error) {
-    return cancelledOr(input, { ...startFailure(method, migration, error), secrets });
+    return cancelledOr(input, {
+      ...startFailure(method, migration, error, environment.port),
+      secrets,
+    });
   }
   const bootMs = Math.round(performance.now() - started);
   const run: LiveRun = { unit, environment, migration, baseUrl: server.baseUrl, argv, bootMs };

@@ -14,8 +14,9 @@ import type { Evidence } from "../contracts/evidence.ts";
 import { ephemeralPort } from "../ports.ts";
 import { createContext } from "../runtime.ts";
 import { appFixture, blueprintFixture } from "../test-fixtures.ts";
-import { runVerification } from "../verify/engine.ts";
+import { type CheckInput, type CheckOutcome, runVerification } from "../verify/engine.ts";
 import { CHECK_ENV_NAMES, checkEnvironment } from "./checkers/harness.ts";
+import { cancelledOr, startFailureNextStep } from "./checkers/live.ts";
 import { registerRecipeCheckers } from "./index.ts";
 import { materializePlan } from "./testing/apply.ts";
 import { planBoth, removeScratchDirs, scratchDir, singleApp } from "./testing/fixtures.ts";
@@ -140,6 +141,53 @@ function artifactText(root: string, evidence: Evidence): string {
     .map((artifact) => readFileSync(join(root, artifact.path), "utf8"))
     .join("\n");
 }
+
+describe("live checks under cancellation", () => {
+  const outcome = (status: CheckOutcome["status"]): CheckOutcome => ({
+    status,
+    summary: "the check's own summary",
+    method: { kind: "http", tool: "runtime.http", command: null },
+  });
+  const input = (aborted: boolean): CheckInput => {
+    const controller = new AbortController();
+    if (aborted) controller.abort();
+    // cancelledOr reads only the context's signal.
+    return { ctx: createContext({ cwd: tmpdir(), signal: controller.signal }) } as CheckInput;
+  };
+
+  test("only a failure under cancellation is recorded as cancelled; a finished result stands", () => {
+    expect(cancelledOr(input(true), outcome("fail"))).toMatchObject({
+      status: "skipped",
+      reason: "cancelled",
+    });
+    expect(cancelledOr(input(true), outcome("pass")).status).toBe("pass");
+    expect(cancelledOr(input(true), outcome("blocked")).status).toBe("blocked");
+    expect(cancelledOr(input(false), outcome("fail")).status).toBe("fail");
+  });
+});
+
+describe("servers that never answer", () => {
+  test("a hard-coded port named in the log is diagnosed with the PORT fix", () => {
+    // The log of the Gate C failure: groot's own Hono entry hard-coded port 3001.
+    const log = [
+      "the server did not answer on http://127.0.0.1:57660/ within 60000 ms",
+      "$ bun run --hot src/index.ts",
+      "28 |       server = globalThis[hmrSymbol] = Bun.serve(entryNamespace.default);",
+      "error: Failed to start server. Is port 3001 in use?",
+      ' syscall: "listen",',
+      '    code: "EADDRINUSE"',
+      "      at bun:main:28:49",
+    ].join("\n");
+    const step = startFailureNextStep(log, 57660);
+    expect(step).toContain("used port 3001, not the PORT=57660");
+    expect(step).toContain("port: Number(process.env.PORT ?? 3001)");
+  });
+
+  test("without port evidence, the step still names PORT and the ephemeral port", () => {
+    const log = "the server did not answer on http://127.0.0.1:57660/ within 60000 ms";
+    expect(startFailureNextStep(log, 57660)).toContain("did not answer on PORT=57660");
+  });
+});
 
 describe("runtime.http", () => {
   test("declared packages not installed → blocked with `bun install`, nothing started", async () => {
