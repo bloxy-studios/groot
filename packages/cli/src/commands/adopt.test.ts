@@ -1,9 +1,7 @@
 /**
- * Process-level tests for `groot adopt`: the dry run prints (and, once the
- * executor is integrated, saves) the plan as one envelope; refusals carry
- * stable error ids and exit 2. Apply-path tests run only when core/executor
- * is integrated — until then its stub throws "… is not integrated yet" and
- * they are skipped (see EXECUTOR_PENDING_REASON).
+ * Process-level tests for `groot adopt`: the dry run prints and saves the
+ * plan as one envelope; refusals carry stable error ids and exit 2; apply
+ * registers the project.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, symlinkSync } from "node:fs";
@@ -20,30 +18,8 @@ import {
   SECRET_VALUES,
   v1Workspace,
 } from "../core/discovery/test-projects.ts";
-import { GrootV2Error } from "../core/errors.ts";
-import { savePlan } from "../core/executor/index.ts";
-import { planAdopt } from "../core/planner/adopt.ts";
-import { createContext } from "../core/runtime.ts";
 
 const TIMEOUT = 90_000;
-
-const EXECUTOR_PENDING_REASON =
-  "skipped until core/executor is integrated (applyPlan/savePlan still throw 'not integrated')";
-
-/** Probe the executor once: its pre-integration stub rejects every call with "not integrated". */
-async function executorIntegrated(): Promise<boolean> {
-  const root = bunMonorepo();
-  const plan = await planAdopt(createContext({ cwd: root }), ".");
-  try {
-    await savePlan(root, plan);
-    return true;
-  } catch (error) {
-    if (error instanceof GrootV2Error && /not integrated/.test(error.message)) return false;
-    throw error;
-  }
-}
-
-const EXECUTOR_INTEGRATED = await executorIntegrated();
 
 function envelopeOf(stdout: string): ResultEnvelope {
   return ResultEnvelope.parse(JSON.parse(stdout));
@@ -72,11 +48,7 @@ describe("groot adopt --dry-run (process-level)", () => {
       ]);
       for (const secret of SECRET_VALUES) expect(run.stdout).not.toContain(secret);
       expect(existsSync(join(root, "groot.json"))).toBe(false);
-      if (EXECUTOR_INTEGRATED) {
-        expect(existsSync(join(root, ".groot/plans", `${plan.planId}.json`))).toBe(true);
-      } else {
-        expect(envelope.warnings.join("\n")).toContain("The plan was not saved");
-      }
+      expect(existsSync(join(root, ".groot/plans", `${plan.planId}.json`))).toBe(true);
     },
     TIMEOUT,
   );
@@ -171,8 +143,8 @@ describe("groot adopt refusals (process-level)", () => {
 });
 
 describe("groot adopt (apply path)", () => {
-  test.skipIf(!EXECUTOR_INTEGRATED)(
-    `writes exactly groot.json + groot.lock.json and leaves dirty work untouched — ${EXECUTOR_PENDING_REASON}`,
+  test(
+    `writes exactly groot.json + groot.lock.json and leaves dirty work untouched`,
     async () => {
       // Arrange
       const root = await customHonoApp();
