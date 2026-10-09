@@ -301,6 +301,47 @@ describe("context sync", () => {
     ).toBe(false);
   });
 
+  test("--skip-conflicts keeps a skipped file's ownership record (skill and region alike)", async () => {
+    // Arrange — a synced project, then hand edits to an owned skill and to the managed region.
+    const root = project();
+    const first = builder(root);
+    await planContextSync({
+      builder: first,
+      blueprint: blueprint(),
+      observation: observation(root),
+      lock: emptyLock(),
+      skipConflicts: false,
+    });
+    materialize(root, first.build());
+    const lock = JSON.parse(readFileSync(join(root, "groot.lock.json"), "utf8")) as GrootLock;
+    const skill = join(root, SKILL_PATHS.claude);
+    writeFileSync(skill, `${readFileSync(skill, "utf8")}\n# my notes\n`);
+    const agentsPath = join(root, "AGENTS.md");
+    writeFileSync(
+      agentsPath,
+      readFileSync(agentsPath, "utf8").replace("Topology:", "Topology (edited):"),
+    );
+
+    // Act
+    const lenient = builder(root);
+    const result = await planContextSync({
+      builder: lenient,
+      blueprint: blueprint(),
+      observation: observation(root),
+      lock,
+      skipConflicts: true,
+    });
+
+    // Assert — nothing to apply: groot still owns both files at the hashes it wrote.
+    expect(result.conflicts.map((change) => change.path).sort()).toEqual(
+      ["AGENTS.md", SKILL_PATHS.claude].sort(),
+    );
+    expect(lenient.build().actions).toEqual([]);
+    expect(result.artifacts).toEqual(
+      [...lock.context].sort((a, b) => a.path.localeCompare(b.path)),
+    );
+  });
+
   test("skills: an unowned existing file conflicts; an owned unchanged one is updated", async () => {
     const stale = "---\nname: groot\ndescription: old\n---\nold body\n";
     const root = project({
@@ -477,7 +518,32 @@ describe("task context", () => {
     expect(context.evidence.map((entry) => [entry.id, entry.status])).toEqual([
       [failed.id, "fail"],
     ]);
-    expect(context.gaps).toContain("auth.flow is fail: sign-up returned 500");
+    expect(context.gaps).toContain(`auth.flow is fail (evidence ${failed.id})`);
+  });
+
+  test("evidence gaps name the check, status, and evidence id — never a check's output", () => {
+    // Arrange — stored evidence whose free text quotes command output.
+    const root = project();
+    const leaked = "leaked-output-0123456789abcdef";
+    const failed = evidenceFixture("build.script.api", "fail", {
+      scope: { capability: null, unit: "apps/api", operationId: null, taskId: null },
+      summary: `bun run build failed in apps/api (exit 1): upstream refused key ${leaked}`,
+      reason: `refused ${leaked}`,
+      nextStep: `retry with ${leaked}`,
+    });
+
+    // Act
+    const context = buildTaskContext({
+      blueprint: blueprint(),
+      observation: observation(root),
+      evidence: [failed],
+      task: "fix the api build",
+      root,
+    });
+
+    // Assert
+    expect(context.gaps).toContain(`build.script.api is fail (evidence ${failed.id})`);
+    expect(JSON.stringify(context)).not.toContain(leaked);
   });
 
   test("without a task every app is in scope; unregistered projects say so", () => {

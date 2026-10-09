@@ -1,15 +1,97 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { EnvVarContract } from "./contracts/common.ts";
-import { envNamesIn, missingRequiredEnv } from "./env.ts";
+import { envNamesIn, ignoredByRepository, missingRequiredEnv, trackedByRepository } from "./env.ts";
 
 function envFile(content: string): string {
   const root = mkdtempSync(join(tmpdir(), "groot-env-"));
   writeFileSync(join(root, ".env.local"), content);
   return root;
 }
+
+/** Real git processes: generous under a loaded machine. */
+const GIT_TIMEOUT = 60_000;
+
+function git(root: string, args: readonly string[]): void {
+  const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "ignore", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+}
+
+/** A git repository holding `files` (nothing committed). */
+function repository(files: Record<string, string>): string {
+  const root = mkdtempSync(join(tmpdir(), "groot-env-git-"));
+  git(root, ["init", "-q", "-b", "main"]);
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
+  return root;
+}
+
+describe("ignoredByRepository — git's verdict, whatever the path looks like", () => {
+  test(
+    "a nested .gitignore in a non-ASCII directory counts (git quotes such paths)",
+    async () => {
+      // Arrange
+      const root = repository({ "apps/über-api/.gitignore": ".env.local\n" });
+
+      // Act
+      const ignored = await ignoredByRepository(root, "apps/über-api/.env.local");
+      const other = await ignoredByRepository(root, "apps/über-api/notes.txt");
+
+      // Assert
+      expect(ignored).toBe(true);
+      expect(other).toBe(false);
+    },
+    GIT_TIMEOUT,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a nested .gitignore in a directory with quotes or a backslash counts too",
+    async () => {
+      // Arrange
+      const root = repository({
+        'apps/say "hi"/.gitignore': ".env.local\n",
+        "apps/back\\slash/.gitignore": ".env.local\n",
+      });
+
+      // Act
+      const quoted = await ignoredByRepository(root, 'apps/say "hi"/.env.local');
+      const backslash = await ignoredByRepository(root, "apps/back\\slash/.env.local");
+
+      // Assert
+      expect(quoted).toBe(true);
+      expect(backslash).toBe(true);
+    },
+    GIT_TIMEOUT,
+  );
+});
+
+describe("trackedByRepository — committed files", () => {
+  test(
+    "a committed file is tracked even after .gitignore lists it; an untracked one is not",
+    async () => {
+      // Arrange
+      const root = repository({ "apps/api/.env.local": "SESSION_SECRET=x\n" });
+      git(root, ["add", "apps/api/.env.local"]);
+      git(root, ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "x"]);
+      writeFileSync(join(root, ".gitignore"), "apps/api/.env.local\n");
+      writeFileSync(join(root, "apps/api/.env.example"), "SESSION_SECRET=\n");
+      const outside = mkdtempSync(join(tmpdir(), "groot-env-plain-"));
+
+      // Act + Assert
+      expect(await trackedByRepository(root, "apps/api/.env.local")).toBe(true);
+      expect(await ignoredByRepository(root, "apps/api/.env.local")).toBe(false);
+      expect(await trackedByRepository(root, "apps/api/.env.example")).toBe(false);
+      // Paths are literal, never pathspec globs.
+      expect(await trackedByRepository(root, "apps/[a]pi/.env.local")).toBe(false);
+      expect(await trackedByRepository(outside, ".env.local")).toBeNull();
+    },
+    GIT_TIMEOUT,
+  );
+});
 
 describe("envNamesIn — names a dotenv file sets, as Bun loads it", () => {
   test("assignments with a value count; blank values, comments, and junk lines do not", () => {

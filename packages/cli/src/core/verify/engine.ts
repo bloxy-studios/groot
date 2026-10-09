@@ -24,9 +24,10 @@ import {
 } from "../contracts/evidence.ts";
 import type { GrootLock } from "../contracts/lock.ts";
 import type { ProjectObservation } from "../contracts/project.ts";
-import { envNamesIn } from "../env.ts";
+import { envNamesIn, secretValues } from "../env.ts";
 import { revisionInfo } from "../git.ts";
 import { newId, nowIso } from "../ids.ts";
+import { knownSecretsFromEnv } from "../runners/env.ts";
 import { type CoreContext, environmentInfo } from "../runtime.ts";
 import type { ArtifactInput } from "./store.ts";
 import { storeEvidence } from "./store.ts";
@@ -226,6 +227,18 @@ async function runOne(
 /** The check did not finish: cancellation came before or while it ran. */
 const wasCancelled = (entry: Evidence): boolean => entry.reason === CANCELLED_REASON;
 
+/**
+ * Values no stored evidence may carry — a failing script's output tail lands
+ * in its summary: the credentials in the run's environment (what task runs
+ * redact with) and the current values of the blueprint's secret contracts.
+ */
+function knownSecrets(ctx: CoreContext, request: VerifyRequest): string[] {
+  return [
+    ...knownSecretsFromEnv(ctx.env),
+    ...secretValues(request.root, request.blueprint.environment, ctx.env),
+  ];
+}
+
 function summarize(evidence: readonly Evidence[], requested: boolean): ProfileSummary {
   const count = (status: EvidenceStatus): number =>
     evidence.filter((entry) => entry.status === status).length;
@@ -254,6 +267,7 @@ export async function runVerification(
   const startedAt = nowIso();
   const revision: RevisionInfo = await revisionInfo(request.root);
   const environment = environmentInfo(ctx.env);
+  const secrets = knownSecrets(ctx, request);
   const evidence: Evidence[] = [];
 
   for (const contract of selectContracts(request)) {
@@ -297,7 +311,7 @@ export async function runVerification(
         simulated: outcome.simulated ?? false,
       },
       outcome.artifacts ?? [],
-      outcome.secrets ?? [],
+      [...secrets, ...(outcome.secrets ?? [])],
     );
     evidence.push(record);
     ctx.events.emit({
