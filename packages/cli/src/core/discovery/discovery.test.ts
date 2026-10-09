@@ -225,7 +225,7 @@ describe("registration and blueprint contradictions", () => {
   );
 
   test.skipIf(!POSIX)(
-    "an unreadable, self-looping, or directory groot.json is the state invalid, with a reason and a next step",
+    "an unreadable, self-looping, directory, or dangling groot.json is the state invalid, with a reason and a next step",
     async () => {
       // Arrange
       const unreadable = bunMonorepo({ "groot.json": json({ version: 2 }) });
@@ -234,11 +234,17 @@ describe("registration and blueprint contradictions", () => {
       symlinkSync("groot.json", join(looping, "groot.json"));
       const directory = bunMonorepo();
       mkdirSync(join(directory, "groot.json"));
+      const dangling = bunMonorepo();
+      symlinkSync("missing.json", join(dangling, "groot.json"));
+      const throughFile = bunMonorepo();
+      symlinkSync("package.json/x", join(throughFile, "groot.json"));
 
       // Act
       const observations = {
         looping: await observe(looping),
         directory: await observe(directory),
+        dangling: await observe(dangling),
+        throughFile: await observe(throughFile),
         ...(CAN_REVOKE_READ ? { unreadable: await observe(unreadable) } : {}),
       };
 
@@ -258,6 +264,13 @@ describe("registration and blueprint contradictions", () => {
       expect(errors.looping).toContain("restore it from version control");
       expect(errors.directory).toContain("expected a regular file");
       expect(errors.directory).toContain("restore it from version control");
+      expect(errors.dangling).toContain("is a symlink whose target does not exist (ENOENT)");
+      expect(errors.throughFile).toContain("is a symlink whose target does not exist (ENOTDIR)");
+      expect(errors.throughFile).toContain("check its permissions, owner, and symlinks");
+      for (const error of Object.values(errors)) {
+        // One next step, after the reason — never the write-side boundary hint.
+        expect(error).not.toContain("only writes");
+      }
       if (CAN_REVOKE_READ) {
         expect(errors.unreadable).toContain("could not be read (EACCES)");
         expect(errors.unreadable).toContain("readable");

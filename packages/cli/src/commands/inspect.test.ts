@@ -5,7 +5,7 @@
  * inspect; env values never reach stdout or stderr.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync } from "node:fs";
+import { chmodSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeArgv } from "../cli-compat.ts";
 import { ResultEnvelope } from "../core/contracts/envelope.ts";
@@ -122,6 +122,26 @@ describe("groot inspect (process-level)", () => {
       expect(registration.error).toContain("could not be read (EACCES)");
       expect(human.exitCode).toBe(0);
       expect(human.stdout).toContain("invalid — groot.json is invalid");
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a groot.json symlink that leads nowhere is registration invalid with a next step, not unregistered: exit 0",
+    async () => {
+      // Arrange
+      const root = bunMonorepo();
+      symlinkSync("package.json/x", join(root, "groot.json"));
+
+      // Act
+      const run = await runCli(root, ["inspect", "--json"]);
+
+      // Assert
+      expect(run.exitCode).toBe(0);
+      const registration = ProjectObservation.parse(envelopeOf(run.stdout).data).registration;
+      expect(registration).toMatchObject({ status: "invalid", manifestPath: "groot.json" });
+      expect(registration.error).toContain("is a symlink whose target does not exist (ENOTDIR)");
+      expect(registration.error).toContain("Make groot.json a readable regular file");
     },
     TIMEOUT,
   );

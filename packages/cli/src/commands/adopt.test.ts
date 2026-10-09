@@ -6,7 +6,7 @@
  * they are skipped (see EXECUTOR_PENDING_REASON).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { ResultEnvelope } from "../core/contracts/envelope.ts";
@@ -144,6 +144,27 @@ describe("groot adopt refusals (process-level)", () => {
       // Assert
       expect(run.exitCode).toBe(2);
       expect(envelopeOf(run.stdout).error?.id).toBe("GROOT_E_MIGRATION_REQUIRED");
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a groot.json symlink that leads nowhere → exit 2 GROOT_E_INVALID_DOCUMENT, never a plan that can only go stale",
+    async () => {
+      // Arrange: the link resolves through a regular file (ENOTDIR); the executor would refuse to replace it.
+      const root = bunMonorepo();
+      symlinkSync("package.json/x", join(root, "groot.json"));
+
+      // Act
+      const run = await runCli(root, ["adopt", root, "--json"]);
+
+      // Assert
+      expect(run.exitCode).toBe(2);
+      const error = envelopeOf(run.stdout).error;
+      expect(error?.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(error?.message).toContain("is a symlink whose target does not exist (ENOTDIR)");
+      expect(error?.hint).toContain("check its permissions, owner, and symlinks");
+      expect(existsSync(join(root, "groot.lock.json"))).toBe(false);
     },
     TIMEOUT,
   );

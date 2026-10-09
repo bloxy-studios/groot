@@ -4,7 +4,7 @@
  * uncommitted work, states every inference, and refuses precisely.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
 import { emptyLock } from "../blueprint/lock.ts";
@@ -489,6 +489,31 @@ describe("planAdopt — refusals", () => {
       // Assert
       expect(invalidError.id).toBe("GROOT_E_INVALID_DOCUMENT");
       expect(newerError.id).toBe("GROOT_E_UNSUPPORTED_SCHEMA");
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a groot.json symlink that loops or leads nowhere is refused with the reader's next step — never planned as absent",
+    async () => {
+      // Arrange
+      const looping = bunMonorepo();
+      symlinkSync("groot.json", join(looping, "groot.json"));
+      const throughFile = bunMonorepo();
+      symlinkSync("package.json/x", join(throughFile, "groot.json"));
+
+      // Act
+      const loopError = await errorOf(planAdopt(createContext({ cwd: looping }), "."));
+      const linkError = await errorOf(planAdopt(createContext({ cwd: throughFile }), "."));
+
+      // Assert
+      expect(loopError.id).toBe("GROOT_E_PATH_OUTSIDE_PROJECT");
+      expect(linkError.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(linkError.message).toContain("is a symlink whose target does not exist (ENOTDIR)");
+      for (const error of [loopError, linkError]) {
+        expect(error.hint).toContain("Make groot.json a readable regular file inside the project");
+        expect(error.hint).not.toContain("only writes");
+      }
     },
     TIMEOUT,
   );

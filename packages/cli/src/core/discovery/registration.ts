@@ -2,16 +2,15 @@
  * Registration: whether (and how) the project is registered with Groot, read
  * through core/blueprint readManifest — so discovery and every planner agree
  * on what counts as a valid groot.json. A broken, unreadable, looping, or
- * too-new groot.json is a registration *state* here (invalid /
- * unsupported-version) whose error states the reason and the next step, not
- * a crash: `groot inspect` must keep working on exactly the projects that
- * need help.
+ * too-new groot.json — or a symlink there that leads nowhere — is a
+ * registration *state* here (invalid / unsupported-version) whose error
+ * states the reason and the next step, not a crash: `groot inspect` must keep
+ * working on exactly the projects that need help.
  *
  * Contradictions between desired state (groot.json) and the disk are
  * reported, never reconciled: a recorded scaffold/app whose package.json is
  * missing, or whose framework dependency is absent.
  */
-import { unreadableHint } from "../blueprint/document.ts";
 import { type ManifestRead, readManifest } from "../blueprint/manifest.ts";
 import { UnitPath } from "../contracts/common.ts";
 import type { ProjectUnit, Registration } from "../contracts/project.ts";
@@ -30,13 +29,12 @@ export interface RegistrationFindings {
 const MANIFEST_PATH = "groot.json";
 
 /**
- * Why groot.json is unusable, followed by what to do about it. A symlink that
- * leaves the project or loops gets the reader's next step — the boundary
- * error's own hint is about writes.
+ * Why groot.json is unusable, followed by what to do about it (the reader's
+ * next step — readManifest gives a symlink that loops or leaves the project
+ * the reader's hint, not the boundary's write-side one).
  */
 function registrationError(error: GrootV2Error): string {
-  const next =
-    error.id === "GROOT_E_PATH_OUTSIDE_PROJECT" ? unreadableHint(MANIFEST_PATH) : error.hint;
+  const next = error.hint;
   return next === undefined || next === "" ? error.message : `${error.message} ${next}`;
 }
 
