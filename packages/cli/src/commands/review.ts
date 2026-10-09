@@ -4,12 +4,15 @@
  * (docs/v2-cli-spec.md#groot-task). Shows files, ownership violations,
  * secret findings (locations only), and acceptance results; records the
  * decision. Requesting changes sends the task back to `pending`: the next
- * `groot task run` resumes the same agent session with the notes.
+ * `groot task run` resumes the same agent session with the notes. Merely
+ * looking never waits for another operation's project lock: the summary is
+ * then shown but not recorded (a warning says so).
  */
 import { defineCommand } from "citty";
 import pc from "picocolors";
 import { GLOBAL_ARGS, runV2Command } from "../cli/run.ts";
 import type { Review } from "../core/contracts/task.ts";
+import type { EventSink } from "../core/runtime.ts";
 import { reviewTask } from "../core/tasks/index.ts";
 import { taskRoot } from "./task.ts";
 
@@ -71,7 +74,16 @@ export const review = defineCommand({
   },
   async run({ args }) {
     await runV2Command("review", { json: args.json, events: args.events }, async (ctx) => {
-      const result = await reviewTask(ctx, await taskRoot(ctx), args.taskId, {
+      // A review that could not be recorded (lock busy) says so in a warning event; with
+      // --json it also goes into the envelope, where an agent reads it.
+      const notRecorded: string[] = [];
+      const events: EventSink = {
+        emit(event) {
+          if (event.type === "task.warning") notRecorded.push(event.message);
+          ctx.events.emit(event);
+        },
+      };
+      const result = await reviewTask({ ...ctx, events }, await taskRoot(ctx), args.taskId, {
         ...(args.approve ? { approve: true } : {}),
         ...(args["request-changes"] === undefined
           ? {}
@@ -84,6 +96,7 @@ export const review = defineCommand({
         ok: true,
         data: result,
         warnings: [
+          ...(args.json ? notRecorded : []),
           ...result.ownershipViolations.map((path) => `outside the task's ownership: ${path}`),
           ...result.secretFindings.map((finding) => `possible secret: ${finding}`),
         ],

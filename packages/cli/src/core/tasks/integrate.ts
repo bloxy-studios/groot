@@ -9,14 +9,17 @@
  *    and reported (`conflicted`).
  * 3. Install the worktree's dependencies, re-run the task's acceptance
  *    criteria plus the structural and build profiles there (fresh evidence;
- *    the change was reviewed, so the checks get the caller's environment).
+ *    the change was reviewed, so the checks get the caller's environment),
+ *    under the repository guard (guard.ts): git refs, hooks, or config that
+ *    change while they run block the integration.
  * 4. Only when every check passed — a check that could not run (`blocked`)
  *    gates like a failure; only an unregistered project's skipped
  *    structural/build verification does not — AND the main checkout is clean
  *    and on the target branch: `git merge --ff-only groot/integrate/<id>`
- *    there; the task becomes `completed`. A dirty (or switched) checkout is
- *    never touched — the integration branch is left ready and the result is
- *    `blocked`.
+ *    there (journaled first, so a task running beside it is not blocked by
+ *    Groot's own move of the target); the task becomes `completed`. A dirty
+ *    (or switched) checkout is never touched — the integration branch is left
+ *    ready and the result is `blocked`.
  *
  * Worktrees are removed afterwards; branches are kept for audit.
  */
@@ -38,8 +41,9 @@ import {
   revParse,
   statusEntries,
 } from "./git-ops.ts";
+import { recordRefMove, watchRepository } from "./guard.ts";
 import { withProjectLock } from "./lock.ts";
-import { blockedAfterReview } from "./run.ts";
+import { blockedAfterReview, tamperedReason } from "./run.ts";
 import {
   type AcceptanceRecord,
   integrationBranch,
@@ -146,11 +150,17 @@ async function checkoutObstacle(root: string, target: string, env: Env): Promise
 
 interface FreshChecks {
   readonly acceptance: readonly AcceptanceRecord[];
-  readonly verification: ProfileRun;
+  /** null when the acceptance checks were stopped (the repository changed). */
+  readonly verification: ProfileRun | null;
   readonly evidence: string[];
+  /** Repository changes while the checks ran (empty: none). */
+  readonly tampering: readonly string[];
 }
 
-/** Dependencies, acceptance criteria, then structural + build verification in the integration worktree. */
+/**
+ * Dependencies, acceptance criteria, then structural + build verification in
+ * the integration worktree — under the repository guard.
+ */
 async function freshChecks(
   ctx: CoreContext,
   root: string,
@@ -165,39 +175,50 @@ async function freshChecks(
     reviewed: true,
     secrets: knownSecretsFromEnv(ctx.env),
   };
-  const acceptance = await runAcceptance(ctx, run, "always");
-  const verification = await verifyWorktree(
-    ctx,
-    run,
-    ["structural", "build"],
-    "integration-verify",
-    "skipped",
-  );
-  const evidence = [...acceptance.flatMap((entry) => entry.evidence), ...verification.evidence];
-  return { acceptance, verification, evidence };
+  const watch = await watchRepository(ctx, root, worktree, task.id, "groot ran the fresh checks");
+  const acceptance = await runAcceptance(ctx, run, {
+    install: "always",
+    tampering: () => watch.check(),
+  });
+  const verification =
+    acceptance.tampering.length > 0
+      ? null
+      : await verifyWorktree(ctx, run, ["structural", "build"], "integration-verify", "skipped");
+  const tampering = [...new Set([...acceptance.tampering, ...(await watch.finish())])];
+  const evidence = [
+    ...acceptance.records.flatMap((entry) => entry.evidence),
+    ...(verification?.evidence ?? []),
+  ];
+  return { acceptance: acceptance.records, verification, evidence, tampering };
+}
+
+/** Why verification does not let the integration through (null: it passed, or is not gating). */
+function verificationProblem(verification: ProfileRun | null): string | null {
+  if (verification === null) return "verification: not run";
+  const skippedUnregistered = !verification.registered && verification.status === "skipped";
+  if (verification.status === "pass" || skippedUnregistered) return null;
+  const failures =
+    verification.failures === "" ? "" : ` (${verification.failures.split("\n").join("; ")})`;
+  return `${verification.status}: ${verification.summary}${failures}`;
 }
 
 /** What kept the fresh checks from passing (empty: everything that gates passed). */
 function checkProblems(checks: FreshChecks): string[] {
-  const { acceptance, verification } = checks;
-  const skippedUnregistered = !verification.registered && verification.status === "skipped";
+  const problem = verificationProblem(checks.verification);
   return [
-    ...acceptance
+    ...checks.acceptance
       .filter((entry) => entry.status !== "pass")
       .map((entry) => `${entry.criterion}: ${entry.summary}`),
-    ...(verification.status === "pass" || skippedUnregistered
-      ? []
-      : [
-          `${verification.status}: ${verification.summary}${verification.failures === "" ? "" : ` (${verification.failures.split("\n").join("; ")})`}`,
-        ]),
+    ...(problem === null ? [] : [problem]),
   ];
 }
 
 /** "after fresh checks passed" — only when verification ran and passed too. */
 function passedChecks(checks: FreshChecks): string {
-  return checks.verification.registered
+  const { verification } = checks;
+  return verification === null || verification.registered
     ? "after fresh checks passed"
-    : `after the task's acceptance checks passed (structural/build verification skipped: ${checks.verification.summary})`;
+    : `after the task's acceptance checks passed (structural/build verification skipped: ${verification.summary})`;
 }
 
 async function fastForward(
@@ -217,6 +238,10 @@ async function fastForward(
       detail: `${obstacle} — groot never touches it. ${branch} is verified and ready at ${short(commit)}: merge it yourself, or clean up and run \`groot task integrate ${task.id}\` again`,
     });
   }
+  const ref = `refs/heads/${target}`;
+  const from = await revParse(root, ref, ctx.env);
+  if (from !== null && commit !== null)
+    recordRefMove(root, { ref, from, to: commit, taskId: task.id });
   const ff = await gitRun(root, ["merge", "--ff-only", "--no-edit", branch], ctx.env);
   if (ff.exitCode !== 0) {
     return record(ctx, root, task, "blocked", {
@@ -250,6 +275,14 @@ async function integrateMerged(
       ...base,
       status: "failed",
       detail: `integration was interrupted before ${target} changed — run it again`,
+    });
+  }
+  if (checks.tampering.length > 0) {
+    const next = `integrate it again (nothing changed on ${target})`;
+    return record(ctx, root, task, "blocked", {
+      ...base,
+      status: "failed",
+      detail: tamperedReason(checks.tampering, "while groot ran the fresh checks", next),
     });
   }
   const problems = checkProblems(checks);

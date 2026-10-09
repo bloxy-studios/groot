@@ -6,16 +6,17 @@
  * stored evidence — then record a human decision: approve, or request
  * changes (the task returns to `pending` and the next run resumes the same
  * session with the reviewer's notes). Integration requires an approved
- * review of the CURRENT task head.
+ * review of the CURRENT task head. A decision is written under the project
+ * lock; merely looking never waits for it.
  */
 import { schemaUrl } from "../contracts/common.ts";
-import type { Review, Task } from "../contracts/task.ts";
+import { Review, type Task } from "../contracts/task.ts";
 import { GrootV2Error } from "../errors.ts";
 import { newId, nowIso } from "../ids.ts";
 import { truncate } from "../runners/common.ts";
 import type { CoreContext } from "../runtime.ts";
 import { type Env, gitReadRaw, repositoryRoot, revParse } from "./git-ops.ts";
-import { withProjectLock } from "./lock.ts";
+import { tryWithProjectLock, withProjectLock } from "./lock.ts";
 import { matchesOwnership } from "./ownership.ts";
 import { blockedAfterReview } from "./run.ts";
 import { findSecrets, parseAddedLines } from "./secrets.ts";
@@ -31,6 +32,9 @@ import {
 import type { ReviewDecision } from "./types.ts";
 
 type ReviewFile = Review["files"][number];
+
+/** How long a view-only review waits for the project lock before returning unrecorded. */
+const VIEW_LOCK_WAIT_MS = 2000;
 
 const STATUS: Record<string, ReviewFile["status"]> = {
   A: "added",
@@ -102,7 +106,15 @@ async function summarize(
   env: Env,
 ): Promise<Pick<Review, "files" | "ownershipViolations" | "secretFindings">> {
   const range = [task.base.commit, head];
-  const quiet = ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff"];
+  // No external diff or textconv program runs: the diff is of code nobody has reviewed yet.
+  const quiet = [
+    "-c",
+    "core.quotePath=false",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+  ];
   // Raw (unredacted) reads: exact paths, and the secret scan must see real
   // content. Only locations and kinds leave this function.
   const [names, numstat, patch] = await Promise.all([
@@ -195,10 +207,15 @@ type ReviewContent = Pick<
   "files" | "ownershipViolations" | "secretFindings" | "acceptance"
 >;
 
-/** Save the review (reusing the id while base and head are unchanged) and point the task at it. */
-async function recordReview(
+interface Reviewable {
+  readonly task: Task;
+  readonly head: string;
+}
+
+/** The review document for the task's current change (same id while base and head are unchanged). */
+async function composeReview(
   root: string,
-  current: { task: Task; head: string },
+  current: Reviewable,
   content: ReviewContent,
   decision: ReviewDecision,
 ): Promise<Review> {
@@ -206,7 +223,7 @@ async function recordReview(
   const previous =
     task.review === null ? null : await readReview(root, task.review).catch(() => null);
   const same = previous !== null && previous.head === head && previous.base === task.base.commit;
-  const review = saveReview(root, {
+  return Review.parse({
     $schema: schemaUrl("review"),
     schemaVersion: 1,
     kind: "groot.review",
@@ -226,6 +243,17 @@ async function recordReview(
     reviewer: isDeciding(decision) ? "human" : same ? previous.reviewer : null,
     notes: decision.requestChanges?.trim() ?? (same ? previous.notes : null),
   });
+}
+
+/** Save the review and point the task at it (requested changes send it back to `pending`). */
+async function recordReview(
+  root: string,
+  current: Reviewable,
+  content: ReviewContent,
+  decision: ReviewDecision,
+): Promise<Review> {
+  const { task } = current;
+  const review = saveReview(root, await composeReview(root, current, content, decision));
   const sentBack = review.verdict === "changes-requested" && decision.requestChanges !== undefined;
   writeTask(
     root,
@@ -243,10 +271,35 @@ async function recordReview(
 }
 
 /**
+ * A view-only review: recorded when the project lock is free, otherwise
+ * (an integration holds it for minutes) returned unrecorded with a warning —
+ * looking at a change never waits for, or fails on, another operation.
+ */
+async function viewOnly(
+  ctx: CoreContext,
+  root: string,
+  read: Reviewable,
+  content: ReviewContent,
+  write: () => Promise<Review>,
+): Promise<Review> {
+  const recorded = await tryWithProjectLock(root, "review", write, VIEW_LOCK_WAIT_MS);
+  if (recorded.held) return recorded.value;
+  const review = await composeReview(root, read, content, {});
+  ctx.events.emit({
+    type: "task.warning",
+    level: "warn",
+    message: `${read.task.id}: review ${review.id} shows the current change but was not recorded (${recorded.reason}); run \`groot review ${read.task.id}\` again to record it`,
+    taskId: read.task.id,
+  });
+  return review;
+}
+
+/**
  * Build (or refresh) the task's review and record a decision when given. The
  * diff is summarized first; the review and the task are then written under
  * the project lock against a FRESH read — a task that changed meanwhile (a
- * new run, another decision) is refused instead of overwritten.
+ * new run, another decision) is refused instead of overwritten. A decision
+ * waits for the lock; a view-only review does not (see viewOnly).
  */
 export async function reviewTask(
   ctx: CoreContext,
@@ -261,7 +314,7 @@ export async function reviewTask(
     ...(await summarize(repo, read.task, read.head, ctx.env)),
     acceptance: await acceptanceSummary(repo, read.task),
   };
-  const review = await withProjectLock(repo, "review", async () => {
+  const write = async (): Promise<Review> => {
     const fresh = await reviewable(repo, id, decision, ctx.env);
     if (fresh.head !== read.head || fresh.task.updatedAt !== read.task.updatedAt) {
       throw new GrootV2Error(
@@ -273,7 +326,10 @@ export async function reviewTask(
       );
     }
     return recordReview(repo, fresh, content, decision);
-  });
+  };
+  const review = isDeciding(decision)
+    ? await withProjectLock(repo, "review", write)
+    : await viewOnly(ctx, repo, read, content, write);
   ctx.events.emit({
     type: "task.review",
     level: review.ownershipViolations.length + review.secretFindings.length > 0 ? "warn" : "info",

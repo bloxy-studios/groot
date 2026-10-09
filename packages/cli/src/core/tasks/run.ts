@@ -10,14 +10,16 @@
  *    worktree `.groot/worktrees/<id>` on `groot/task/<id>` from the base
  *    commit, and mark the task running (with a pid marker so a crashed run
  *    is detected — recovery.ts).
- * 3. Attempts (≤ limits.maxAttempts): run the agent; an attempt that moved
- *    git refs outside Groot's branches blocks the task; Groot commits the
+ * 3. Attempts (≤ limits.maxAttempts): run the agent; Groot commits the
  *    worktree itself; Groot runs the acceptance checks (evidence; before
- *    review the agent's code runs without credentials). All pass →
- *    `awaiting-review`. A failing check is fed back by resuming the SAME
- *    session when possible (plans.ts); a resume target the runner does not
- *    know is replaced by a fresh session without spending an attempt; out of
- *    attempts → `failed`.
+ *    review the agent's code runs without credential-like environment
+ *    variables in commands — but without an OS sandbox). The repository
+ *    guard (guard.ts) watches both windows: git refs, hooks, or config that
+ *    changed while the agent ran — or while Groot ran the agent's code in
+ *    the checks — block the task. All checks pass → `awaiting-review`. A
+ *    failing check is fed back by resuming the SAME session when possible
+ *    (plans.ts); a resume target the runner does not know is replaced by a
+ *    fresh session without spending an attempt; out of attempts → `failed`.
  *
  * Abort (SIGINT, MCP cancel) cancels the runner, records the attempt and the
  * task as `interrupted` (the session id is kept), and releases everything;
@@ -35,6 +37,7 @@ import type { CoreContext } from "../runtime.ts";
 import { runAcceptance } from "./acceptance.ts";
 import { type AttemptOutcome, runAttempt } from "./attempt.ts";
 import { commitAll, ensureWorktree, repositoryRoot } from "./git-ops.ts";
+import { watchRepository } from "./guard.ts";
 import { withProjectLock } from "./lock.ts";
 import { ownershipOverlap } from "./ownership.ts";
 import { type ContextSource, contextSource, firstPlan, freshPlan, retryPlan } from "./plans.ts";
@@ -58,8 +61,8 @@ export { lastSession, reconcile } from "./recovery.ts";
 const RUNNABLE: readonly TaskStatus[] = ["pending", "failed", "interrupted", "blocked"];
 /** Runner outcomes after which another attempt can help (others end the run). */
 const RETRYABLE: ReadonlySet<string> = new Set(["succeeded", "failed"]);
-/** Ref changes listed in a blocked reason (the rest are counted). */
-const REF_CHANGES_SHOWN = 5;
+/** Repository changes listed in a blocked reason (the rest are counted). */
+const CHANGES_SHOWN = 5;
 
 const LEVEL: Record<TaskStatus, "info" | "warn" | "error"> = {
   pending: "info",
@@ -265,20 +268,30 @@ function isBlocking(result: RunnerResult): boolean {
   );
 }
 
-function refsMovedReason(changes: readonly string[]): string {
-  const shown = changes.slice(0, REF_CHANGES_SHOWN).join("; ");
-  const more =
-    changes.length > REF_CHANGES_SHOWN ? `; ${changes.length - REF_CHANGES_SHOWN} more` : "";
+/** Blocked reason for repository changes the guard found (`during`: which window). */
+export function tamperedReason(
+  changes: readonly string[],
+  during: string,
+  next = "run the task again",
+): string {
+  const shown = changes.slice(0, CHANGES_SHOWN).join("; ");
+  const more = changes.length > CHANGES_SHOWN ? `; ${changes.length - CHANGES_SHOWN} more` : "";
   return redact(
-    `git refs outside the task branch changed while the agent ran (${shown}${more}) — groot cannot tell an agent's change from yours or another tool's: check \`git reflog\` for each, restore what should not have moved, then run the task again`,
+    `git refs or the git directory's hooks/config changed outside the task's worktree ${during} (${shown}${more}) — groot cannot tell that change from yours or another tool's: inspect each (\`git reflog <ref>\` for a ref, the file itself for a hook or config), restore what should not have changed, then ${next}`,
   );
 }
 
-/** The run ends right after the runner returned: refs moved, an interruption, an unusable runner. */
+/** The run ends right after the runner returned: the repository changed, an interruption, an unusable runner. */
 function afterRunner(scope: RunScope, task: Task, outcome: AttemptOutcome): Task | null {
   const { ctx, root } = scope;
-  if (outcome.refChanges.length > 0) {
-    return finish(ctx, root, task, "blocked", refsMovedReason(outcome.refChanges));
+  if (outcome.tampering.length > 0) {
+    return finish(
+      ctx,
+      root,
+      task,
+      "blocked",
+      tamperedReason(outcome.tampering, "while the agent ran"),
+    );
   }
   if (outcome.result.status === "interrupted" || ctx.signal.aborted) {
     return finishInterrupted(ctx, root, task);
@@ -308,25 +321,36 @@ async function commitAttempt(ctx: CoreContext, root: string, task: Task): Promis
   });
 }
 
-/** Commit what the runner left, then check it (pre-review: credential-free) and store the results. */
+interface CheckedAttempt {
+  readonly task: Task;
+  readonly acceptance: AcceptanceRecord[];
+  /** Repository changes while Groot ran the agent's code in the checks. */
+  readonly tampering: readonly string[];
+}
+
+/**
+ * Commit what the runner left, then check it — pre-review, under the
+ * repository guard (the agent's code runs unconfined) — and store the results.
+ */
 async function checkAttempt(
   scope: RunScope,
   task: Task,
   result: RunnerResult,
-): Promise<{ task: Task; acceptance: AcceptanceRecord[] }> {
+): Promise<CheckedAttempt> {
   const { ctx, root } = scope;
   await commitAttempt(ctx, root, task);
-  const acceptance = await runAcceptance(ctx, {
-    root,
-    cwd: task.worktree?.path ?? root,
-    task,
-    simulated: result.simulated,
-    reviewed: false,
-    secrets: scope.secrets,
-  });
-  writeAcceptance(root, task.id, task.attempts.length, acceptance);
-  const evidence = [...task.evidence, ...acceptance.flatMap((record) => record.evidence)];
-  return { task: writeTask(root, touch(task, { evidence })), acceptance };
+  const cwd = task.worktree?.path ?? root;
+  const watch = await watchRepository(ctx, root, cwd, task.id, "groot ran the acceptance checks");
+  const outcome = await runAcceptance(
+    ctx,
+    { root, cwd, task, simulated: result.simulated, reviewed: false, secrets: scope.secrets },
+    { tampering: () => watch.check() },
+  );
+  const tampering = [...new Set([...outcome.tampering, ...(await watch.finish())])];
+  writeAcceptance(root, task.id, task.attempts.length, outcome.records);
+  const evidence = [...task.evidence, ...outcome.records.flatMap((record) => record.evidence)];
+  const current = writeTask(root, touch(task, { evidence }));
+  return { task: current, acceptance: outcome.records, tampering };
 }
 
 async function attemptLoop(scope: RunScope, claimed: Task, priorStatus: TaskStatus): Promise<Task> {
@@ -346,6 +370,10 @@ async function attemptLoop(scope: RunScope, claimed: Task, priorStatus: TaskStat
     }
     const checked = await checkAttempt(scope, task, outcome.result);
     task = checked.task;
+    if (checked.tampering.length > 0) {
+      const during = "while groot ran the acceptance checks (the agent's code)";
+      return finish(ctx, root, task, "blocked", tamperedReason(checked.tampering, during));
+    }
     if (ctx.signal.aborted) {
       return finishInterrupted(ctx, root, task, " during the acceptance checks");
     }

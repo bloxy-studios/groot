@@ -2,13 +2,15 @@
  * Recovery and concurrency with a SIMULATED runner in real git repositories:
  * a runner orphaned by a killed Groot is stopped before the task runs again
  * (and only reported by show/list), a session that never existed or was
- * purged is replaced by a fresh one, corrupt documents are invalid (not
- * internal errors), a claim re-checks the task under the lock, a review
- * decision is written under the lock against a fresh read, and a fresh-start
- * retry keeps the coordinator's project context.
+ * purged is replaced by a fresh one (the simulator answers an unknown resume
+ * target the way Claude Code 2.1.293 does: stderr plus a result line), corrupt
+ * documents are invalid (not internal errors), a claim re-checks the task
+ * under the lock, a review decision is written under the lock against a fresh
+ * read while merely looking never waits for it, and a fresh-start retry keeps
+ * the coordinator's project context.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "../contracts/task.ts";
@@ -27,8 +29,16 @@ const TIMEOUT = 180_000;
 const GRACE = { interruptMs: 2000, terminateMs: 2000 };
 const DEAD_PID = 999_999;
 const NEVER_STARTED = "0b9c8d7e-6f5a-4b3c-9d2e-1f0a9b8c7d6e";
+/** Far below an integration's length: a view-only review must not wait for the lock. */
+const LOOK_MS = 15_000;
 
-afterAll(removeTempProjects);
+/** Temp directories this file creates outside tempProject(). */
+const scratch: string[] = [];
+
+afterAll(() => {
+  removeTempProjects();
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 /** Rewrite a task as left `running` by a Groot process that no longer exists. */
 function crash(project: TempProject, task: Task, runner?: { pgid: number; startedAt: number }) {
@@ -222,6 +232,7 @@ describe("corrupt documents", () => {
   test("an unparseable task or review is an invalid document, a missing one is not found", async () => {
     // Arrange
     const root = mkdtempSync(join(tmpdir(), "groot-task-store-"));
+    scratch.push(root);
     const id = "task_0000000001abcdef";
     mkdirSync(store.taskPaths.dir(root, id), { recursive: true });
     writeFileSync(store.taskPaths.file(root, id), "{ not json");
@@ -305,6 +316,60 @@ describe("races", () => {
       await expect(pending).rejects.toMatchObject({ id: "GROOT_E_TASK_STATE" });
       const stored = await store.readTask(project.root, task.id);
       expect(stored).toMatchObject({ statusReason: "concurrent edit", review: null });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a view-only review never waits for a busy lock: it returns the change unrecorded, with a warning",
+    async () => {
+      // Arrange — a finished task; the lock is held in this process, then by another one.
+      const project = await tempProject();
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const ctx = project.context();
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        accept: ["bun test"],
+      });
+      await runTask(ctx, project.root, task.id, { grace: GRACE });
+      const holder = Bun.spawn(["sleep", "120"], { stdout: "ignore" });
+      const lockFile = join(project.root, ".groot", "lock.json");
+
+      // Act
+      const timed = async () => {
+        const started = Date.now();
+        const review = await reviewTask(ctx, project.root, task.id);
+        return { review, ms: Date.now() - started };
+      };
+      const inProcess = await withProjectLock(project.root, "task integrate", timed);
+      writeFileSync(
+        lockFile,
+        JSON.stringify({
+          pid: holder.pid,
+          host: hostname(),
+          command: "task integrate",
+          operationId: null,
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+      const otherProcess = await timed();
+      const unrecorded = (await store.readTask(project.root, task.id)).review;
+      holder.kill();
+      rmSync(lockFile, { force: true });
+      const recorded = await reviewTask(ctx, project.root, task.id);
+
+      // Assert
+      for (const look of [inProcess, otherProcess]) {
+        expect(look.ms).toBeLessThan(LOOK_MS);
+        expect(look.review).toMatchObject({ verdict: "pending", taskId: task.id });
+        expect(look.review.files.map((file) => file.path)).toEqual(["src/math.ts"]);
+      }
+      const warnings = ctx.log.filter((event) => event.message.includes("was not recorded"));
+      expect(warnings).toHaveLength(2);
+      expect(unrecorded).toBeNull();
+      expect((await store.readTask(project.root, task.id)).review).toBe(recorded.id);
     },
     TIMEOUT,
   );

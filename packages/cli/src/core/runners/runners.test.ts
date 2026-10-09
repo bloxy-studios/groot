@@ -1,20 +1,10 @@
 /**
  * Runner adapters, pure parts: argv construction with containment flags,
- * child-env scrubbing, stream-json / JSONL parsing and outcome
- * classification, usage extraction, discovery text classification, and real
- * executable resolution (wrapper-shim skipping, Codex's native binary).
+ * stream-json / JSONL parsing and outcome classification, usage extraction,
+ * and discovery text classification. The child environment is tested in
+ * runners.env.test.ts, executable resolution in runners.resolve.test.ts.
  */
 import { describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { RunnerCapabilities } from "../contracts/task.ts";
 import {
   bashRules,
@@ -28,8 +18,6 @@ import { ClaudeStreamParser, claudeUsage } from "./claude-stream.ts";
 import { classifyCodexLogin, codexArgv, parseCodexHelp } from "./codex.ts";
 import { CodexStreamParser, classifyCodexText } from "./codex-stream.ts";
 import { assertSafeArg, buildCapabilities, flagBlock, parseVersion } from "./common.ts";
-import { credentialFreeEnv, isScrubbed, knownSecretsFromEnv, runnerEnv } from "./env.ts";
-import { codexNativeBehindLauncher, isWrapperShim, resolveExecutable } from "./resolve.ts";
 import type { SupervisedExit } from "./supervise.ts";
 import type { RunnerInvocation } from "./types.ts";
 
@@ -415,6 +403,68 @@ describe("Claude Code stream-json", () => {
     expect(result.error?.details).toMatchObject({ cause: "session-not-found" });
   });
 
+  test("an unknown resume target reported as a result line (2.1.293 stream-json) is not resumable, and its own session id is not adopted", () => {
+    // Arrange — print mode writes the message to stderr AND a result line carrying a fresh,
+    // never-persisted session id, then exits 1.
+    const message = `No conversation found with session ID: ${SESSION}`;
+    const result = (stderrTail: string) => {
+      const parser = new ClaudeStreamParser(CONTEXT);
+      feed(
+        parser,
+        lines({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          num_turns: 0,
+          stop_reason: null,
+          session_id: "7d2c4e1a-0b9f-4c3d-8e7f-6a5b4c3d2e1f",
+          total_cost_usd: 0,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          permission_denials: [],
+          errors: [message],
+        }),
+      );
+      return parser.finish(exitOf({ exitCode: 1, stderrTail }));
+    };
+
+    // Act
+    const both = result(`${message}\n`);
+    const streamOnly = result("");
+
+    // Assert
+    for (const outcome of [both, streamOnly]) {
+      expect(outcome.status).toBe("failed");
+      expect(outcome.error?.id).toBe("GROOT_E_NOT_RESUMABLE");
+      expect(outcome.error?.details).toMatchObject({ cause: "session-not-found" });
+      expect(outcome.error?.message).toContain(SESSION);
+      expect(outcome.sessionId).toBeNull();
+    }
+  });
+
+  test("only a session system/init announced is adopted; a result alone establishes none", () => {
+    // Arrange
+    const failure = {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "7d2c4e1a-0b9f-4c3d-8e7f-6a5b4c3d2e1f",
+      errors: ["boom"],
+    };
+    const bare = new ClaudeStreamParser(CONTEXT);
+    feed(bare, lines(failure));
+    const started = new ClaudeStreamParser(CONTEXT);
+    feed(started, lines({ type: "system", subtype: "init", session_id: SESSION }, failure));
+
+    // Act
+    const unestablished = bare.finish(exitOf({ exitCode: 1 }));
+    const established = started.finish(exitOf({ exitCode: 1 }));
+
+    // Assert
+    expect(unestablished.sessionId).toBeNull();
+    expect(established.sessionId).toBe(SESSION);
+    expect(established.error?.details).toMatchObject({ cause: "runner-error" });
+  });
+
   test("a sandbox that cannot start blocks the run (Groot requires it: failIfUnavailable)", () => {
     // Arrange — the stream-json path also writes an error result before exiting.
     const reason =
@@ -675,195 +725,5 @@ describe("discovery parsing", () => {
       notes: [],
     });
     expect(RunnerCapabilities.safeParse(caps).success).toBe(true);
-  });
-});
-
-describe("runner child environment", () => {
-  test("session, preload, and multiplexer variables are scrubbed; provider selectors are kept", () => {
-    // Arrange
-    const base = {
-      PATH: "/usr/bin",
-      CLAUDECODE: "1",
-      CLAUDE_CODE_SESSION_ID: "x",
-      CLAUDE_CODE_CHILD_SESSION: "1",
-      CLAUDE_CODE_ENTRYPOINT: "cli",
-      CLAUDE_CODE_EXECPATH: "/x",
-      CLAUDE_CODE_MESSAGING_SOCKET: "/s",
-      CLAUDE_CODE_SESSION_ATTENDED: "1",
-      CLAUDE_PID: "1",
-      CLAUDE_EFFORT: "max",
-      NODE_OPTIONS: "--require x",
-      CMUX_SURFACE_ID: "abc",
-      CLAUDE_CODE_USE_FOUNDRY: "1",
-      ANTHROPIC_FOUNDRY_BASE_URL: "https://example",
-    };
-
-    // Act
-    const claude = runnerEnv(base, "claude-code");
-    const codex = runnerEnv(base, "codex", {
-      prependPath: ["/vendor/path"],
-      extra: { CODEX_MANAGED_BY_BUN: "1" },
-    });
-
-    // Assert
-    for (const name of Object.keys(base).filter(isScrubbed)) expect(claude[name]).toBeUndefined();
-    expect(Object.keys(base).filter(isScrubbed)).toHaveLength(11);
-    expect(claude).toMatchObject({
-      CLAUDE_CODE_USE_FOUNDRY: "1",
-      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
-      DISABLE_AUTOUPDATER: "1",
-    });
-    expect(codex.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBeUndefined();
-    expect(codex.PATH).toBe("/vendor/path:/usr/bin");
-    expect(codex.CODEX_MANAGED_BY_BUN).toBe("1");
-  });
-
-  test("sensitive variable values become known secrets for log redaction", () => {
-    expect(
-      knownSecretsFromEnv({
-        ANTHROPIC_FOUNDRY_AUTH_TOKEN: "tok-1234567890",
-        HOME: "/Users/someone",
-        SHORT_TOKEN: "abc",
-      }),
-    ).toEqual(["tok-1234567890"]);
-  });
-
-  test("the credential-free env (unreviewed code) drops credentials and keeps what tests need", () => {
-    // Arrange
-    const kept = {
-      PATH: "/usr/bin",
-      HOME: "/Users/someone",
-      TMPDIR: "/tmp/x",
-      LANG: "en_US.UTF-8",
-      LC_ALL: "C",
-      CI: "1",
-      BUN_INSTALL: "/Users/someone/.bun",
-      USER: "someone",
-      TERM: "xterm-256color",
-      HTTPS_PROXY: "http://proxy.internal:3128",
-      GITHUB_ACTIONS: "true",
-    };
-    const dropped = {
-      MY_SERVICE_API_TOKEN: "tok-abcdef1234567890",
-      SHORT_TOKEN: "abc",
-      GH_TOKEN: "x",
-      DB_PASSWORD: "hunter22",
-      BUN_CONFIG_TOKEN: "registry-token",
-      AWS_ACCESS_KEY_ID: "AKIAEXAMPLE",
-      AWS_PROFILE: "prod",
-      GOOGLE_APPLICATION_CREDENTIALS: "/keys/sa.json",
-      AZURE_CLIENT_ID: "client",
-      ANTHROPIC_BASE_URL: "https://gateway.example",
-      OPENAI_ORG_ID: "org",
-      CLAUDE_CODE_USE_FOUNDRY: "1",
-      CODEX_HOME: "/Users/someone/.codex",
-      SSH_AUTH_SOCK: "/tmp/ssh-agent.sock",
-      KUBECONFIG: "/Users/someone/.kube/config",
-      DATABASE_URL: "postgres://app:s3cret@db.internal:5432/app",
-      CLAUDECODE: "1",
-      NODE_OPTIONS: "--require /tmp/preload.js",
-    };
-
-    // Act
-    const env = credentialFreeEnv({ ...kept, ...dropped });
-
-    // Assert
-    expect(env).toEqual(kept);
-  });
-});
-
-describe("executable resolution", () => {
-  function scratch(): string {
-    return realpathSync(mkdtempSync(join(tmpdir(), "groot-resolve-")));
-  }
-
-  function script(path: string, body: string): string {
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, body);
-    chmodSync(path, 0o755);
-    return path;
-  }
-
-  test("an explicit GROOT_CLAUDE_PATH is honored exactly", () => {
-    const dir = scratch();
-    const exe = script(join(dir, "my-claude"), "#!/bin/sh\nexit 0\n");
-    const resolution = resolveExecutable("claude-code", { GROOT_CLAUDE_PATH: exe, PATH: "" });
-    expect(resolution.executable).toMatchObject({ path: exe, kind: "override" });
-    expect(
-      resolveExecutable("claude-code", { GROOT_CLAUDE_PATH: join(dir, "missing"), PATH: "" })
-        .executable,
-    ).toBeNull();
-  });
-
-  test("cmux shims and exec-wrapper scripts on PATH are skipped (and noted) in favor of the real binary", () => {
-    // Arrange
-    const dir = scratch();
-    const shimDir = join(dir, "cmux-cli-shims", "ABC");
-    script(
-      join(shimDir, "claude"),
-      '#!/usr/bin/env bash\nexec "/Applications/cmux.app/x/cmux-claude-wrapper" "$@"\n',
-    );
-    const wrapperDir = join(dir, "wrapped");
-    script(join(wrapperDir, "claude"), '#!/bin/sh\nexec "$HOME/bin/claude-wrapper" "$@"\n');
-    const realDir = join(dir, "real");
-    const real = script(join(realDir, "claude"), "#!/bin/sh\necho real\n");
-
-    // Act
-    const resolution = resolveExecutable("claude-code", {
-      PATH: [shimDir, wrapperDir, realDir].join(":"),
-    });
-
-    // Assert
-    expect(resolution.executable?.path).toBe(real);
-    expect(resolution.notes.filter((note) => note.startsWith("skipped wrapper shim"))).toHaveLength(
-      2,
-    );
-    expect(isWrapperShim("/x/cmux-cli-shims/1/codex", "")).toBe(true);
-    expect(isWrapperShim("/usr/bin/claude", "#!/usr/bin/env node\nrequire('cli.js')")).toBe(false);
-  });
-
-  test("only wrappers on PATH → not found, with a hint to set the override", () => {
-    const dir = scratch();
-    const shimDir = join(dir, "cmux-cli-shims", "A");
-    script(join(shimDir, "codex"), '#!/bin/bash\nexec cmux-codex-wrapper "$@"\n');
-    const resolution = resolveExecutable("codex", { PATH: shimDir });
-    expect(resolution.executable).toBeNull();
-    expect(resolution.notes.join(" ")).toContain("GROOT_CODEX_PATH");
-  });
-
-  test("the Codex npm launcher resolves to the native vendor binary with its PATH prepend", () => {
-    // Arrange
-    const triples: Record<string, string> = {
-      "darwin-x64": "x86_64-apple-darwin",
-      "darwin-arm64": "aarch64-apple-darwin",
-      "linux-x64": "x86_64-unknown-linux-musl",
-      "linux-arm64": "aarch64-unknown-linux-musl",
-    };
-    const triple = triples[`${process.platform}-${process.arch}`];
-    if (triple === undefined) return;
-    const dir = scratch();
-    const modules = join(dir, "install", "global", "node_modules", "@openai");
-    const launcher = script(
-      join(modules, "codex", "bin", "codex.js"),
-      "#!/usr/bin/env node\n// launcher\n",
-    );
-    const vendor = join(modules, `codex-${process.platform}-${process.arch}`, "vendor", triple);
-    const native = script(join(vendor, "codex", "codex"), "#!/bin/sh\necho native\n");
-    mkdirSync(join(vendor, "path"), { recursive: true });
-    const binDir = join(dir, "bin");
-    mkdirSync(binDir, { recursive: true });
-    symlinkSync(launcher, join(binDir, "codex"));
-
-    // Act
-    const resolution = resolveExecutable("codex", { PATH: binDir });
-
-    // Assert
-    expect(codexNativeBehindLauncher(launcher)?.path).toBe(native);
-    expect(resolution.executable).toMatchObject({
-      path: native,
-      kind: "native",
-      prependPath: [join(vendor, "path")],
-    });
-    expect(resolution.notes.join(" ")).toContain("native Codex binary behind the npm launcher");
   });
 });

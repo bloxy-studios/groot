@@ -3,8 +3,9 @@
  * with explicit containment on EVERY run (start and resume), because user
  * defaults can be hazardous (e.g. `permissions.defaultMode:
  * bypassPermissions`), and headless defaults differ by provider. Every flag
- * below is listed by `claude --help` (2.1.293); a build without one of the
- * REQUIRED_FLAGS is refused at preflight.
+ * below is listed by `claude --help` (2.1.293) except `--max-turns`, which is
+ * documented in the CLI reference but hidden from that help; a build without
+ * one of the REQUIRED_FLAGS (all listed by its help) is refused at preflight.
  *
  *   --permission-mode acceptEdits     file edits auto-approved in the worktree;
  *                                     edits elsewhere would prompt…

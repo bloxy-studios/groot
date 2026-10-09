@@ -13,12 +13,19 @@
  *   v2 groot.json; without one the criterion is `blocked`, never a pass.
  *
  * Before review (`reviewed: false`) the checks execute code nobody has read
- * yet. Commands get a credential-free environment (runners/env.ts), and the
- * evidence states what was NOT restricted: there is no OS sandbox, so
- * network access and files under HOME stay reachable. Integration runs after
- * human approval, with the caller's environment. Everything stored —
- * evidence, logs, failure tails — is redacted with the run's env-derived
- * secrets.
+ * yet, and there is no OS sandbox: it can use the network and read and write
+ * any file the user can, outside the worktree too. What Groot does about it:
+ * - commands (the install and command criteria) get a credential-free
+ *   environment (runners/env.ts); the build/typecheck scripts a verify
+ *   criterion runs do NOT — the verification engine runs them with Groot's
+ *   own environment — and their evidence says so;
+ * - the caller's `tampering` check (the repository guard, guard.ts) runs
+ *   after every check: a change to git refs, hooks, or config stops the
+ *   remaining checks;
+ * - every piece of evidence states these limits.
+ * Integration runs after human approval, with the caller's environment.
+ * Everything stored — evidence, logs, failure tails — and every event
+ * emitted is redacted with the run's env-derived secrets.
  *
  * Evidence lives in the PROJECT's store (.groot/evidence), not the worktree:
  * worktrees are removed after integration, and verification evidence written
@@ -40,7 +47,7 @@ import { prettyJson } from "../json.ts";
 import { runProcess, type SpawnResult, tail } from "../process.ts";
 import { redact, redactValue } from "../redact.ts";
 import { credentialFreeEnv, isScrubbed } from "../runners/env.ts";
-import { type CoreContext, environmentInfo } from "../runtime.ts";
+import { type CoreContext, type EventInput, type EventSink, environmentInfo } from "../runtime.ts";
 import { statePaths } from "../state.ts";
 import { defaultContracts, registerBuiltInCheckers } from "../verify/checkers.ts";
 import { hasChecker, runVerification } from "../verify/engine.ts";
@@ -54,9 +61,19 @@ const TAIL_LINES = 40;
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const SIMULATED_LIMITATION = "the change under test was produced by a simulated runner";
 const UNREVIEWED_LIMITATION =
-  "ran before review without an OS sandbox: the agent's code had network access and could read files under HOME";
+  "ran before review without an OS sandbox: the agent's code could use the network and read and write any file the user can, outside the worktree too — groot checks only the repository's git refs, hooks, and config for changes";
 const CREDENTIAL_FREE_LIMITATION =
-  "ran before review with credential-like environment variables removed";
+  "ran before review with credential-like environment variables removed (recognized by name and URL shape; a credential named otherwise stays)";
+const FULL_ENV_LIMITATION =
+  "the scripts this check ran before review got groot's full environment, credentials included (the verification engine does not take the credential-free environment)";
+/**
+ * The verification engine's project-script checks (core/verify/checkers.ts
+ * scriptCheck): they run with Groot's process environment, not the
+ * context's. Every other checker uses the credential-free context env.
+ */
+const ENGINE_SCRIPT_TOOLS: ReadonlySet<string> = new Set(["build.typecheck", "build.build"]);
+const STOPPED_BY_TAMPERING =
+  "the repository changed outside the worktree while the checks ran (see the task's reason)";
 
 export interface AcceptanceRun {
   /** Project root — the evidence store. */
@@ -284,6 +301,15 @@ function artifactName(worktree: string, record: Evidence, path: string): string 
   return name === "" || name.startsWith("..") ? null : name;
 }
 
+/** Limitations an imported verification record carries beyond its own. */
+function importedLimitations(checked: Checked, record: Evidence): string[] {
+  const fullEnv =
+    !checked.run.reviewed &&
+    record.method.kind === "command" &&
+    ENGINE_SCRIPT_TOOLS.has(record.method.tool);
+  return [...checked.limitations, ...(fullEnv ? [FULL_ENV_LIMITATION] : [])];
+}
+
 /**
  * Move evidence produced inside a worktree into the project's store (same
  * id), redacted with the run's secrets and carrying the run's limitations;
@@ -305,7 +331,7 @@ function importEvidence(checked: Checked, record: Evidence): Evidence {
     ...redactValue(record, run.secrets),
     artifacts,
     simulated: record.simulated || run.simulated,
-    limitations: [...new Set([...record.limitations, ...checked.limitations])],
+    limitations: [...new Set([...record.limitations, ...importedLimitations(checked, record)])],
   });
   mkdirSync(to, { recursive: true });
   writeFileAtomic(join(to, "evidence.json"), prettyJson(imported));
@@ -367,6 +393,23 @@ function unregisteredRun(
   };
 }
 
+/**
+ * Events the verification engine emits carry its checks' output tails
+ * (`check.finished`); the CLI prints them and MCP forwards them, so they are
+ * redacted with the run's env-derived secrets like everything stored.
+ */
+function redactingEvents(events: EventSink, secrets: readonly string[]): EventSink {
+  return {
+    emit(event: EventInput): void {
+      events.emit({
+        ...event,
+        message: redact(event.message, secrets),
+        ...(event.data === undefined ? {} : { data: redactValue(event.data, secrets) }),
+      });
+    },
+  };
+}
+
 async function verifyChecked(
   ctx: CoreContext,
   checked: Checked,
@@ -381,7 +424,7 @@ async function verifyChecked(
   }
   ensureCheckers();
   const report = await runVerification(
-    { ...ctx, env: checked.env },
+    { ...ctx, env: checked.env, events: redactingEvents(ctx.events, run.secrets) },
     {
       root: run.cwd,
       blueprint: blueprint.doc,
@@ -454,33 +497,66 @@ function emitRecord(ctx: CoreContext, task: Task, title: string, record: Accepta
   });
 }
 
+export interface AcceptanceOptions {
+  /** "always": install even without criteria (integration — its verification needs them). */
+  readonly install?: "with-criteria" | "always";
+  /**
+   * Asked after every check: what changed in the repository that must not
+   * have (the repository guard). A non-empty answer stops the remaining checks.
+   */
+  readonly tampering?: () => Promise<readonly string[]>;
+}
+
+export interface AcceptanceOutcome {
+  readonly records: AcceptanceRecord[];
+  /** What stopped the checks (empty: none stopped them). */
+  readonly tampering: readonly string[];
+}
+
+/** Why the next criterion does not run (null: it runs). */
+function skipReason(
+  ctx: CoreContext,
+  installed: boolean,
+  tampering: readonly string[],
+): string | null {
+  if (ctx.signal.aborted) return "cancelled";
+  if (tampering.length > 0) return STOPPED_BY_TAMPERING;
+  return installed ? null : "the worktree's dependencies could not be installed";
+}
+
+const NOTHING_CHANGED = async (): Promise<readonly string[]> => [];
+
 /**
  * Install the worktree's dependencies, then run every acceptance criterion
- * in `run.cwd`. A task without criteria runs nothing — unless `install` is
- * "always" (integration: its verification needs the dependencies too).
+ * in `run.cwd`, asking `options.tampering` after each. A task without
+ * criteria runs nothing — unless `options.install` is "always".
  */
 export async function runAcceptance(
   ctx: CoreContext,
   run: AcceptanceRun,
-  install: "with-criteria" | "always" = "with-criteria",
-): Promise<AcceptanceRecord[]> {
-  if (run.task.acceptance.length === 0 && install === "with-criteria") return [];
+  options: AcceptanceOptions = {},
+): Promise<AcceptanceOutcome> {
+  if (run.task.acceptance.length === 0 && options.install !== "always") {
+    return { records: [], tampering: [] };
+  }
   const checked = await checkContext(ctx, run);
+  const changed = options.tampering ?? NOTHING_CHANGED;
   const records: AcceptanceRecord[] = [];
+  let tampering: readonly string[] = [];
   if (checked.install && !ctx.signal.aborted) {
     const install = await commandCheck(ctx, checked, INSTALL_CHECK);
     records.push(install);
     emitRecord(ctx, run.task, INSTALL_CHECK.title, install);
+    tampering = await changed();
   }
   const installed = records.every((record) => record.status === "pass");
   for (const criterion of run.task.acceptance) {
-    const record = ctx.signal.aborted
-      ? notRun(criterion.id, "cancelled")
-      : !installed
-        ? notRun(criterion.id, "the worktree's dependencies could not be installed")
-        : await runCriterion(ctx, checked, criterion);
+    const skip = skipReason(ctx, installed, tampering);
+    const record =
+      skip === null ? await runCriterion(ctx, checked, criterion) : notRun(criterion.id, skip);
     records.push(record);
     emitRecord(ctx, run.task, criterion.description, record);
+    if (skip === null) tampering = await changed();
   }
-  return records;
+  return { records, tampering };
 }

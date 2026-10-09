@@ -1,10 +1,13 @@
 /**
  * Task containment with a SIMULATED runner in real git repositories:
  * pre-review acceptance runs the agent's code without credentials (and its
- * evidence says so), env-derived secrets never reach evidence, acceptance
- * tails, or retry prompts, dependencies are installed into the worktree so
- * checks resolve the worktree's own workspace packages, and an attempt that
- * moves git refs outside its task branch is blocked before any check runs.
+ * evidence says what was not restricted), env-derived secrets never reach
+ * evidence, acceptance tails, retry prompts, or emitted events, dependencies
+ * are installed into the worktree so checks resolve the worktree's own
+ * workspace packages (whatever form the node_modules ignore pattern takes),
+ * an attempt that moves git refs outside its task branch is blocked before
+ * any check runs, and the agent's code moving refs or planting a hook during
+ * the checks blocks the task and stops the remaining checks.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -13,7 +16,7 @@ import type { Task } from "../contracts/task.ts";
 import { appFixture, blueprintFixture } from "../test-fixtures.ts";
 import { readEvidence } from "../verify/store.ts";
 import { createTask, runTask } from "./index.ts";
-import { taskPaths } from "./store.ts";
+import { latestAcceptance, taskPaths } from "./store.ts";
 import {
   FIXED_MATH,
   removeTempProjects,
@@ -46,6 +49,23 @@ const LEAK_TEST = `import { expect, test } from "bun:test";
 test("prints a credential", () => {
   console.log("value: ${TOKEN}");
   expect(1).toBe(2);
+});
+`;
+
+/** An agent-written test that moves another branch and plants a hook in the shared git directory. */
+const ESCAPE_TEST = `import { test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+test("looks harmless", () => {
+  spawnSync("git", ["update-ref", "refs/heads/release", "HEAD"]);
+  const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    .stdout.toString()
+    .trim();
+  mkdirSync(join(common, "hooks"), { recursive: true });
+  writeFileSync(join(common, "hooks", "post-checkout"), "#!/bin/sh\\nexit 0\\n");
+  chmodSync(join(common, "hooks", "post-checkout"), 0o755);
 });
 `;
 
@@ -107,8 +127,49 @@ describe("pre-review acceptance", () => {
       expect(seen).toEqual({ token: null, home: project.env.HOME ?? null, ci: "1" });
       const evidence = await evidenceOf(project, ran, "task.accept-1");
       expect(evidence.status).toBe("pass");
-      expect(evidence.limitations.join(" ")).toContain("before review");
-      expect(evidence.limitations.join(" ")).toContain("credential");
+      const limits = evidence.limitations.join(" ");
+      expect(limits).toContain("before review");
+      expect(limits).toContain("credential");
+      expect(limits).toContain("read and write any file");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the agent's code moving a ref or planting a hook blocks the task and stops the remaining checks",
+    async () => {
+      // Arrange — `release` sits on the first commit; the task starts from the second.
+      const project = await tempProject();
+      await project.git("branch", "release");
+      project.write("README.md", "# demo\n");
+      await project.git("add", "-A");
+      await project.git("commit", "-q", "-m", "second");
+      project.fakes.scenario({
+        steps: [
+          {
+            mode: "success",
+            edits: { "src/math.ts": FIXED_MATH, "src/escape.test.ts": ESCAPE_TEST },
+          },
+        ],
+      });
+      const ctx = project.context();
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        accept: ["bun test", "bun test src/math.test.ts"],
+      });
+
+      // Act
+      const ran = await runTask(ctx, project.root, task.id, { grace: GRACE });
+
+      // Assert
+      expect(ran.status).toBe("blocked");
+      expect(ran.statusReason).toContain("acceptance checks");
+      expect(ran.statusReason).toContain("refs/heads/release");
+      expect(ran.statusReason).toContain(".git/hooks/post-checkout added");
+      const records = (await latestAcceptance(project.root, ran)) ?? [];
+      expect(records.map((record) => record.status)).toEqual(["pass", "skipped"]);
+      expect(records[1]?.summary).toContain("repository changed");
+      expect(project.fakes.records()).toHaveLength(1);
     },
     TIMEOUT,
   );
@@ -184,12 +245,61 @@ describe("pre-review acceptance", () => {
     },
     TIMEOUT,
   );
+
+  test(
+    "verification events are redacted too; build evidence says its scripts got the full environment",
+    async () => {
+      // Arrange — a registered project whose build fails printing the credential's value.
+      const project = await tempProject();
+      project.write(
+        "package.json",
+        JSON.stringify({
+          name: "demo",
+          private: true,
+          scripts: { build: `echo build output: ${TOKEN}; exit 1` },
+        }),
+      );
+      project.write(
+        "groot.json",
+        JSON.stringify(blueprintFixture({ apps: [appFixture({ id: "demo", path: "." })] })),
+      );
+      await project.git("add", "-A");
+      await project.git("commit", "-q", "-m", "register");
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const ctx = project.context(undefined, { MY_SERVICE_API_TOKEN: TOKEN });
+      const task = await createTask(ctx, project.root, {
+        objective: "fix add",
+        acceptVerify: ["build"],
+        limits: { maxAttempts: 1 },
+      });
+
+      // Act
+      const ran = await runTask(ctx, project.root, task.id, { grace: GRACE });
+
+      // Assert
+      expect(ran.status).toBe("failed");
+      const finished = ctx.log.filter((event) => event.type === "check.finished");
+      expect(finished.map((event) => event.message).join("\n")).toContain("[REDACTED]");
+      for (const event of ctx.log) expect(JSON.stringify(event)).not.toContain(TOKEN);
+      const build = (await Promise.all(ran.evidence.map((id) => readEvidence(project.root, id))))
+        .filter((evidence) => evidence.method.tool === "build.build")
+        .flatMap((evidence) => evidence.limitations);
+      expect(build.join(" ")).toContain("full environment");
+    },
+    TIMEOUT,
+  );
 });
 
 describe("dependencies in task worktrees", () => {
-  /** A bun workspace: @demo/app tests @demo/lib; installed (bun.lock committed) in the main checkout. */
-  async function workspaceProject(): Promise<TempProject> {
+  /**
+   * A bun workspace: @demo/app tests @demo/lib; installed (bun.lock committed)
+   * in the main checkout — whose own unignored node_modules stay uncommitted.
+   */
+  async function workspaceProject(gitignore = "node_modules\n"): Promise<TempProject> {
     const project = await tempProject();
+    project.write(".gitignore", gitignore);
     project.write(
       "package.json",
       JSON.stringify({ name: "demo", private: true, type: "module", workspaces: ["packages/*"] }),
@@ -213,9 +323,50 @@ describe("dependencies in task worktrees", () => {
       'import { expect, test } from "bun:test";\nimport { where } from "@demo/lib";\n\ntest("resolves the changed lib", () => {\n  expect(where).toBe("worktree");\n});\n',
     );
     await bun(project, "install");
-    await project.git("add", "-A");
+    await project.git("add", "-A", "--", ".", ":(exclude,glob)**/node_modules/**");
     await project.git("commit", "-q", "-m", "workspace");
     return project;
+  }
+
+  for (const gitignore of ["node_modules/", "/node_modules/"]) {
+    test(
+      `a directory-only ignore pattern (${gitignore}) still gets the install; nested node_modules are never committed`,
+      async () => {
+        // Arrange — attempt 1 misses (its install leaves a workspace package's node_modules
+        // behind), attempt 2 fixes it and is committed over that leftover.
+        const project = await workspaceProject(`${gitignore}\n`);
+        project.fakes.scenario({
+          steps: [
+            {
+              mode: "success",
+              edits: { "packages/lib/index.ts": 'export const where = "elsewhere";\n' },
+            },
+            {
+              mode: "success",
+              edits: { "packages/lib/index.ts": 'export const where = "worktree";\n' },
+            },
+          ],
+        });
+        const ctx = project.context();
+        const task = await createTask(ctx, project.root, {
+          objective: "move lib",
+          accept: ["bun test where"],
+          limits: { maxAttempts: 2 },
+        });
+
+        // Act
+        const ran = await runTask(ctx, project.root, task.id, { grace: GRACE });
+
+        // Assert
+        expect(ran.status).toBe("awaiting-review");
+        expect(ran.attempts).toHaveLength(2);
+        const install = await evidenceOf(project, ran, "task.dependencies");
+        expect(install.status).toBe("pass");
+        const tracked = await project.git("ls-tree", "-r", "--name-only", `groot/task/${task.id}`);
+        expect(tracked).not.toContain("node_modules");
+      },
+      TIMEOUT,
+    );
   }
 
   test(

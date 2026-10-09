@@ -303,6 +303,49 @@ describe("groot task / groot review (process-level, simulated runner)", () => {
   );
 
   test(
+    "`review` while another process holds the project lock shows the change at once, unrecorded (warning in the envelope)",
+    async () => {
+      // Arrange — a reviewed-ready task; a live process holds the lock (an integration).
+      const project = await tempProject();
+      project.fakes.scenario({
+        steps: [{ mode: "success", edits: { "src/math.ts": FIXED_MATH } }],
+      });
+      const created = envelopeOf(
+        await runCli(project, ["task", "create", "fix add", "--accept", "bun test", "--json"]),
+      );
+      const id = created.data.id as string;
+      await runCli(project, ["task", "run", id, "--json"]);
+      const holder = Bun.spawn(["sleep", "120"], { stdout: "ignore" });
+      writeFileSync(
+        join(project.root, ".groot", "lock.json"),
+        JSON.stringify({
+          pid: holder.pid,
+          host: hostname(),
+          command: "task integrate",
+          operationId: null,
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+
+      // Act
+      const started = Date.now();
+      const looked = await runCli(project, ["review", id, "--json"]);
+      const elapsed = Date.now() - started;
+      holder.kill();
+      const shown = envelopeOf(await runCli(project, ["task", "show", id, "--json"]));
+
+      // Assert
+      expect(looked.exitCode).toBe(0);
+      const envelope = envelopeOf(looked);
+      expect(envelope.data).toMatchObject({ verdict: "pending", taskId: id });
+      expect(envelope.warnings.join("\n")).toContain("was not recorded");
+      expect(elapsed).toBeLessThan(20_000);
+      expect(shown.data.review).toBeNull();
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a task overlapping one that runs in another process is blocked (exit 7), nothing starts",
     async () => {
       // Arrange — task A is running in a live process (this test's) on this host.

@@ -45,6 +45,8 @@ export interface FakeStep {
   readonly retryNotice?: boolean;
   /** "success": work this long before finishing (makes concurrency observable). */
   readonly delayMs?: number;
+  /** "success": finish only once this file exists (a test decides when; at most 2 minutes). */
+  readonly waitForFile?: string;
 }
 
 export interface FakeScenario {
@@ -151,6 +153,12 @@ function armInterrupt(step: FakeStep, onInterrupt: () => Promise<never>): void {
     if (step.ignoreSigint === true) return;
     void onInterrupt();
   });
+}
+
+/** Poll for a file a test creates (bounded, so a broken test cannot hang the fake forever). */
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 120_000;
+  while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(50);
 }
 
 /** Block until signalled; `ready.jsonl` says when everything the step starts is running. */
@@ -309,6 +317,7 @@ async function claudeRun(step: FakeStep, sessionId: string): Promise<never> {
     });
   }
   if (step.delayMs !== undefined) await Bun.sleep(step.delayMs);
+  if (step.waitForFile !== undefined) await waitForFile(step.waitForFile);
   if (step.mode !== "success") {
     emit(claudeFailure(step, sessionId));
     return exit(1);
@@ -327,12 +336,35 @@ function knownSessions(): string[] {
   return existsSync(SESSIONS) ? readFileSync(SESSIONS, "utf8").split("\n").filter(Boolean) : [];
 }
 
-/** Real Claude refuses a resume target it has no transcript for (verified message). */
+/**
+ * Real Claude (2.1.293, print mode) refuses a resume target it has no
+ * transcript for: the message on stderr and — with stream-json — a result
+ * line carrying the message and its OWN fresh session id (never persisted),
+ * then exit 1. No `system/init` precedes it.
+ */
 async function rejectUnknownResume(spec: FakeScenario, stdin: () => Promise<string>) {
   const resume = flagValue("--resume");
   if (spec.sessions !== "known" || resume === null || knownSessions().includes(resume)) return;
   record(await stdin());
-  console.error(`No conversation found with session ID: ${resume}`);
+  const message = `No conversation found with session ID: ${resume}`;
+  console.error(message);
+  if (flagValue("--output-format") === "stream-json") {
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      duration_ms: 0,
+      duration_api_ms: 0,
+      is_error: true,
+      num_turns: 0,
+      stop_reason: null,
+      session_id: crypto.randomUUID(),
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [],
+      errors: [message],
+    });
+  }
   await exit(1);
 }
 

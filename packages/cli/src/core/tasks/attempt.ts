@@ -8,27 +8,22 @@
  *
  * While the runner process exists, runner.json records its process group, so
  * a later Groot can stop it if this one dies. The repository's git directory
- * is passed as a protected path, and every ref (plus both HEADs) is compared
- * before and after: refs outside Groot's own branches and remote-tracking
- * refs must not move.
+ * is passed as a protected path, and the repository guard (guard.ts) compares
+ * every ref, both HEADs, and the git directory's hooks and config before and
+ * after: what the agent must not change is reported as the attempt's
+ * tampering.
  */
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import type { Attempt, Task } from "../contracts/task.ts";
-import { toErrorInfo } from "../errors.ts";
 import { nowIso } from "../ids.ts";
 import { redactValue } from "../redact.ts";
 import { RUNNER_LABEL, unavailableUsage } from "../runners/common.ts";
 import { getRunner } from "../runners/index.ts";
 import type { RunnerEvent, RunnerInvocation, RunnerResult } from "../runners/types.ts";
 import type { CoreContext } from "../runtime.ts";
-import {
-  gitCommonDir,
-  type RefSnapshot,
-  refChanges,
-  refSnapshot,
-  statusEntries,
-} from "./git-ops.ts";
+import { gitCommonDir } from "./git-ops.ts";
+import { watchRepository } from "./guard.ts";
 import type { AttemptPlan } from "./plans.ts";
 import { allowedCommands, taskRules } from "./prompt.ts";
 import {
@@ -45,15 +40,11 @@ import type { RunTaskOptions } from "./types.ts";
 export interface AttemptOutcome {
   readonly task: Task;
   readonly result: RunnerResult;
-  /** Refs that changed during the attempt but must not ("name before → after"). */
-  readonly refChanges: readonly string[];
+  /** What changed in the repository during the attempt but must not have (refs, git directory). */
+  readonly tampering: readonly string[];
 }
 
 const INFO_KINDS: ReadonlySet<RunnerEvent["kind"]> = new Set(["session", "tool", "result"]);
-
-/** Groot's own branches move with parallel tasks and integrations; remote refs with fetches. */
-const mayMove = (name: string): boolean =>
-  name.startsWith("refs/heads/groot/") || name.startsWith("refs/remotes/");
 
 async function forwardEvents(
   ctx: CoreContext,
@@ -79,24 +70,6 @@ function usageText(result: RunnerResult): string {
     parts.push(`${usage.inputTokens} in / ${usage.outputTokens ?? 0} out tokens`);
   if (usage.turns !== null) parts.push(`${usage.turns} turns`);
   return parts.length === 0 ? "" : ` · ${parts.join(" · ")}`;
-}
-
-/** Warn when the main checkout changed during the run (sandbox escape or a concurrent edit). */
-function compareMainCheckout(
-  ctx: CoreContext,
-  taskId: string,
-  before: readonly string[],
-  after: readonly string[],
-): void {
-  const changed = after.filter((entry) => !before.includes(entry));
-  if (changed.length === 0) return;
-  ctx.events.emit({
-    type: "task.warning",
-    level: "warn",
-    message: `${taskId}: the main checkout changed while the runner worked (possible sandbox escape or a concurrent edit): ${changed.slice(0, 5).join(", ")}`,
-    taskId,
-    data: { changed },
-  });
 }
 
 /** Persist the attempt as running (with the session id it will use) before anything starts. */
@@ -233,8 +206,7 @@ export async function runAttempt(
   const protectedPath = await gitCommonDir(root, ctx.env);
   const run = { plan, preassigned, worktree: worktree.path, protectedPath };
   const spec = invocation(ctx, root, task, run, options);
-  const checkout = await statusEntries(root, ctx.env);
-  const refs: RefSnapshot = await refSnapshot(root, worktree.path, ctx.env);
+  const watch = await watchRepository(ctx, root, worktree.path, task.id, "the runner worked");
   const started = recordStart(ctx, root, task, plan, preassigned);
 
   const handle = getRunner(task.runner).start(spec);
@@ -243,10 +215,5 @@ export async function runAttempt(
   await forwarding;
   writeMarker(root, task.id); // the runner's group is gone (swept)
   const current = recordFinish(ctx, root, started.task, started.attempt, result);
-  compareMainCheckout(ctx, task.id, checkout, await statusEntries(root, ctx.env));
-  const changes = await refSnapshot(root, worktree.path, ctx.env).then(
-    (after) => refChanges(refs, after, mayMove),
-    (error: unknown) => [`(refs unreadable after the attempt: ${toErrorInfo(error).message})`],
-  );
-  return { task: current, result, refChanges: changes };
+  return { task: current, result, tampering: await watch.finish() };
 }

@@ -4,10 +4,11 @@
  * review → review (files, ownership, secrets, acceptance) → approve →
  * integrate (fresh worktree, merge, fresh checks, fast-forward only when the
  * main checkout is clean) → completed. Also: requested changes resume the
- * same session; ownership violations are reported.
+ * same session; ownership violations are reported; integrating one task does
+ * not block another whose agent is mid-run.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Evidence } from "../contracts/evidence.ts";
 import { Review, Task } from "../contracts/task.ts";
@@ -172,6 +173,46 @@ describe("task lifecycle (simulated runner, real git)", () => {
       // Assert
       expect(done.status).toBe("completed");
       expect(readFileSync(join(project.root, "src/math.ts"), "utf8")).toBe(FIXED_MATH);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "integrating one task while another task's agent works does not block that task (groot's own move)",
+    async () => {
+      // Arrange — B's agent works until the test says so; A is fixed meanwhile.
+      const project = await tempProject();
+      const go = join(project.fakes.dir, "go-b");
+      project.fakes.scenario({
+        steps: [
+          { mode: "success", edits: { "src/other.ts": "export const x = 1;\n" }, waitForFile: go },
+          { mode: "success", edits: { "src/math.ts": FIXED_MATH } },
+        ],
+      });
+      const ctx = project.context();
+      const b = await createTask(ctx, project.root, {
+        objective: "add other",
+        ownership: ["src/other.ts"],
+      });
+      const a = await createTask(ctx, project.root, {
+        objective: "fix add",
+        ownership: ["src/math.ts"],
+        accept: ["bun test"],
+      });
+      const runningB = runTask(ctx, project.root, b.id, { grace: GRACE });
+      while (project.fakes.records().length === 0) await Bun.sleep(50);
+
+      // Act — A runs, is approved, and fast-forwards main while B's agent is mid-run.
+      await runTask(ctx, project.root, a.id, { grace: GRACE });
+      await reviewTask(ctx, project.root, a.id, { approve: true });
+      const integratedA = await integrateTask(ctx, project.root, a.id);
+      writeFileSync(go, "");
+      const doneB = await runningB;
+
+      // Assert
+      expect(integratedA.status).toBe("completed");
+      expect(doneB.status).toBe("awaiting-review");
+      expect(doneB.statusReason).not.toContain("refs/heads/main");
     },
     TIMEOUT,
   );

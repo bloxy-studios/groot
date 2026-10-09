@@ -11,9 +11,14 @@
  *   `is_error: true`, so `subtype` alone is never trusted.
  * - `total_cost_usd` is Claude Code's client-side ESTIMATE (and cumulative
  *   across a resumed session); it is labelled as such in usage.source.
- * - A run can end with no `result` at all (SIGINT while a tool starts, an
- *   unknown `--resume` target: "No conversation found", a sandbox that
- *   cannot start under `failIfUnavailable`).
+ * - A run can end with no `result` at all (SIGINT while a tool starts).
+ * - Failures before the session starts — an unknown `--resume` target ("No
+ *   conversation found with session ID: …"), a sandbox that cannot start
+ *   under `failIfUnavailable` — print the message on stderr AND (2.1.293,
+ *   stream-json) a `result` line with `errors: [message]` and a FRESH
+ *   `session_id` that was never persisted. So a session counts as
+ *   established only once `system/init` announced it; a result alone never
+ *   names a resumable session.
  * - `system/init` lists the tools the session really has; anything beyond
  *   Groot's `--tools` list is recorded as a warning note.
  */
@@ -95,6 +100,7 @@ function toolSummary(block: Record<string, unknown>): string {
 
 /** Stateful line parser for one Claude run. */
 export class ClaudeStreamParser implements StreamParser {
+  /** The session `system/init` announced (null: none was established). */
   sessionId: string | null = null;
   model: string | null = null;
   version: string | null = null;
@@ -127,8 +133,8 @@ export class ClaudeStreamParser implements StreamParser {
       case "user":
         return event("tool", "user", "tool result");
       case "result":
+        // Its session_id is NOT adopted: before init it names a session that never existed.
         this.final = parseFinal(doc);
-        this.sessionId = asString(doc.session_id) ?? this.sessionId;
         return event(
           "result",
           "result",
@@ -354,11 +360,12 @@ function sandboxUnavailable(text: string): Outcome {
 
 /** A `--resume` target Claude Code has no conversation for (it never started, or was purged). */
 function sessionNotFound(text: string): Outcome {
+  const line = text.split("\n").find((entry) => SESSION_NOT_FOUND.test(entry)) ?? text;
   return {
     status: "failed",
     error: errorInfo(
       "GROOT_E_NOT_RESUMABLE",
-      `Claude Code has no conversation to resume: ${truncate(text, 300)}`,
+      `Claude Code has no conversation to resume: ${truncate(line, 300)}`,
       {
         hint: "Groot starts a fresh session with the task prompt instead.",
         details: { cause: "session-not-found" },
@@ -454,6 +461,9 @@ function claudeOutcome(
   if (isCleanSuccess(final, exit)) return { status: "succeeded", error: null };
   const reported = [...final.errors, exit.stderrTail].join("\n");
   if (SANDBOX_UNAVAILABLE.test(reported)) return sandboxUnavailable(reported);
+  if (state.sessionId === null && SESSION_NOT_FOUND.test(reported)) {
+    return sessionNotFound(reported);
+  }
   if (final.subtype === "error_max_budget_usd" || final.terminalReason === "budget_exhausted") {
     return {
       status: "budget-exceeded",
