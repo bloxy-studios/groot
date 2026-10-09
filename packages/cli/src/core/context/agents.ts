@@ -20,7 +20,8 @@ export const ROOT_WARN_BYTES = 16_384;
 const MAX_SCRIPTS_PER_APP = 8;
 
 function cell(value: string | number | null): string {
-  return value === null || value === "" ? "—" : String(value).replace(/\|/g, "\\|");
+  if (value === null || value === "") return "—";
+  return String(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
 function code(value: string | null): string {
