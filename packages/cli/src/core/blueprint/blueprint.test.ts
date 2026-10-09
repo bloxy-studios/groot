@@ -4,6 +4,8 @@
  * adoption blueprint, and lock helpers.
  */
 import { describe, expect, test } from "bun:test";
+import { chmodSync } from "node:fs";
+import { join } from "node:path";
 import { BlueprintV2, type ManifestV1 } from "../contracts/blueprint.ts";
 import { GrootLock } from "../contracts/lock.ts";
 import { json, makeProject, V1_MANIFEST } from "../discovery/test-projects.ts";
@@ -28,6 +30,9 @@ import {
 } from "./index.ts";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
+
+/** chmod 000 makes a file unreadable only on POSIX and only for a non-root user. */
+const CAN_REVOKE_READ = process.platform !== "win32" && process.getuid?.() !== 0;
 
 async function errorOf(promise: Promise<unknown>): Promise<GrootV2Error> {
   try {
@@ -125,6 +130,24 @@ describe("readManifest", () => {
     const issues = (error.details?.issues ?? []) as { path: string }[];
     expect(issues.map((issue) => issue.path)).toContain(path);
   });
+
+  test.skipIf(!CAN_REVOKE_READ)(
+    "a groot.json that cannot be read → GROOT_E_INVALID_DOCUMENT naming the cause, never a raw fs error",
+    async () => {
+      // Arrange
+      const root = makeProject({ "groot.json": json(V1_MANIFEST) });
+      chmodSync(join(root, "groot.json"), 0o000);
+
+      // Act
+      const error = await errorOf(readManifest(root));
+
+      // Assert
+      expect(error.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(error.message).toContain("could not be read (EACCES)");
+      expect(error.hint).toContain("readable");
+      expect(error.details).toMatchObject({ path: "groot.json", issues: [{ path: "" }] });
+    },
+  );
 });
 
 describe("serializeBlueprint", () => {

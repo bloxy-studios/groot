@@ -1,14 +1,17 @@
 /**
  * Registration: whether (and how) the project is registered with Groot, read
  * through core/blueprint readManifest — so discovery and every planner agree
- * on what counts as a valid groot.json. A broken or too-new groot.json is a
- * registration *state* here (invalid / unsupported-version), not a crash:
- * `groot inspect` must keep working on exactly the projects that need help.
+ * on what counts as a valid groot.json. A broken, unreadable, looping, or
+ * too-new groot.json is a registration *state* here (invalid /
+ * unsupported-version) whose error states the reason and the next step, not
+ * a crash: `groot inspect` must keep working on exactly the projects that
+ * need help.
  *
  * Contradictions between desired state (groot.json) and the disk are
  * reported, never reconciled: a recorded scaffold/app whose package.json is
  * missing, or whose framework dependency is absent.
  */
+import { unreadableHint } from "../blueprint/document.ts";
 import { type ManifestRead, readManifest } from "../blueprint/manifest.ts";
 import { UnitPath } from "../contracts/common.ts";
 import type { ProjectUnit, Registration } from "../contracts/project.ts";
@@ -25,6 +28,17 @@ export interface RegistrationFindings {
 }
 
 const MANIFEST_PATH = "groot.json";
+
+/**
+ * Why groot.json is unusable, followed by what to do about it. A symlink that
+ * leaves the project or loops gets the reader's next step — the boundary
+ * error's own hint is about writes.
+ */
+function registrationError(error: GrootV2Error): string {
+  const next =
+    error.id === "GROOT_E_PATH_OUTSIDE_PROJECT" ? unreadableHint(MANIFEST_PATH) : error.hint;
+  return next === undefined || next === "" ? error.message : `${error.message} ${next}`;
+}
 
 export async function observeRegistration(root: string): Promise<RegistrationFindings> {
   try {
@@ -54,7 +68,7 @@ export async function observeRegistration(root: string): Promise<RegistrationFin
         status,
         manifestPath: MANIFEST_PATH,
         version: typeof version === "number" && Number.isInteger(version) ? version : null,
-        error: error.message,
+        error: registrationError(error),
       },
       manifest: null,
     };

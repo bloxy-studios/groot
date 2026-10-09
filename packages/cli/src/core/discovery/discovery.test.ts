@@ -6,7 +6,7 @@
  * env value may ever appear in one.
  */
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectObservation } from "../contracts/project.ts";
 import { createContext } from "../runtime.ts";
@@ -27,6 +27,9 @@ import {
 } from "./test-projects.ts";
 
 const TIMEOUT = 60_000;
+const POSIX = process.platform !== "win32";
+/** chmod 000 makes a file unreadable only for a non-root user. */
+const CAN_REVOKE_READ = POSIX && process.getuid?.() !== 0;
 
 async function observe(root: string): Promise<ProjectObservation> {
   const observation = await inspect(createContext({ cwd: root }), ".");
@@ -217,6 +220,48 @@ describe("registration and blueprint contradictions", () => {
       expect(v3.registration.error).toContain("this CLI reads versions 1 and 2");
       expect(invalid.registration).toMatchObject({ status: "invalid", version: null });
       expect(invalid.registration.error).toContain("not valid JSON");
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(!POSIX)(
+    "an unreadable, self-looping, or directory groot.json is the state invalid, with a reason and a next step",
+    async () => {
+      // Arrange
+      const unreadable = bunMonorepo({ "groot.json": json({ version: 2 }) });
+      chmodSync(join(unreadable, "groot.json"), 0o000);
+      const looping = bunMonorepo();
+      symlinkSync("groot.json", join(looping, "groot.json"));
+      const directory = bunMonorepo();
+      mkdirSync(join(directory, "groot.json"));
+
+      // Act
+      const observations = {
+        looping: await observe(looping),
+        directory: await observe(directory),
+        ...(CAN_REVOKE_READ ? { unreadable: await observe(unreadable) } : {}),
+      };
+
+      // Assert
+      const errors = Object.fromEntries(
+        Object.entries(observations).map(([label, observation]) => {
+          expect(observation.registration).toMatchObject({
+            status: "invalid",
+            manifestPath: "groot.json",
+            version: null,
+          });
+          expect(observation.support.level).toBe("certified");
+          return [label, observation.registration.error ?? ""];
+        }),
+      );
+      expect(errors.looping).toContain("loops");
+      expect(errors.looping).toContain("restore it from version control");
+      expect(errors.directory).toContain("expected a regular file");
+      expect(errors.directory).toContain("restore it from version control");
+      if (CAN_REVOKE_READ) {
+        expect(errors.unreadable).toContain("could not be read (EACCES)");
+        expect(errors.unreadable).toContain("readable");
+      }
     },
     TIMEOUT,
   );

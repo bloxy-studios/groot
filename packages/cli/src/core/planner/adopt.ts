@@ -199,9 +199,10 @@ async function assertAdoptable(observation: ProjectObservation): Promise<void> {
   }
   if (registration.status === "invalid" || registration.status === "unsupported-version") {
     await readManifest(observation.root); // rethrows the precise GROOT_E_INVALID_DOCUMENT / GROOT_E_UNSUPPORTED_SCHEMA
+    const reason = (registration.error ?? "invalid").replace(/\.$/, "");
     throw new GrootV2Error(
       "GROOT_E_INVALID_DOCUMENT",
-      `groot.json in ${observation.root} could not be read: ${registration.error ?? "invalid"}.`,
+      `groot.json in ${observation.root} could not be read: ${reason}.`,
       {
         details: { registration },
       },

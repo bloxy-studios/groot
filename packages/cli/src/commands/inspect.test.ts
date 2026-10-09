@@ -5,11 +5,15 @@
  * inspect; env values never reach stdout or stderr.
  */
 import { describe, expect, test } from "bun:test";
+import { chmodSync } from "node:fs";
+import { join } from "node:path";
 import { normalizeArgv } from "../cli-compat.ts";
 import { ResultEnvelope } from "../core/contracts/envelope.ts";
 import { ProjectObservation } from "../core/contracts/project.ts";
 import {
+  bunMonorepo,
   customHonoApp,
+  json,
   makeProject,
   pnpmWorkspace,
   runCli,
@@ -17,6 +21,9 @@ import {
 } from "../core/discovery/test-projects.ts";
 
 const TIMEOUT = 90_000;
+
+/** chmod 000 makes a file unreadable only on POSIX and only for a non-root user. */
+const CAN_REVOKE_READ = process.platform !== "win32" && process.getuid?.() !== 0;
 
 /** stdout must be exactly one JSON document — the envelope. */
 function envelopeOf(stdout: string): ResultEnvelope {
@@ -93,6 +100,28 @@ describe("groot inspect (process-level)", () => {
       expect(run.stdout).toContain("entry server/main.ts");
       expect(run.stdout).toContain("API_SECRET");
       for (const secret of SECRET_VALUES) expect(run.stdout).not.toContain(secret);
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(!CAN_REVOKE_READ)(
+    "an unreadable groot.json is reported (registration invalid), not a crash: exit 0",
+    async () => {
+      // Arrange
+      const root = bunMonorepo({ "groot.json": json({ version: 2 }) });
+      chmodSync(join(root, "groot.json"), 0o000);
+
+      // Act
+      const run = await runCli(root, ["inspect", "--json"]);
+      const human = await runCli(root, ["inspect"]);
+
+      // Assert
+      expect(run.exitCode).toBe(0);
+      const registration = ProjectObservation.parse(envelopeOf(run.stdout).data).registration;
+      expect(registration).toMatchObject({ status: "invalid", manifestPath: "groot.json" });
+      expect(registration.error).toContain("could not be read (EACCES)");
+      expect(human.exitCode).toBe(0);
+      expect(human.stdout).toContain("invalid — groot.json is invalid");
     },
     TIMEOUT,
   );
