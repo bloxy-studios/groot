@@ -114,7 +114,7 @@ export const AUTH_DESCRIPTOR: RecipeDescriptor = {
       id: "auth.flow",
       profile: "product-flow",
       description:
-        "sign-up, sessions, and per-user notes against the running app; unauthenticated, tampered-cookie, cross-user, cross-origin, and signed-out requests are rejected",
+        "sign-up, sessions, and per-user notes against the running app; unauthenticated, tampered-cookie, cross-user, cross-origin, Origin-less (CSRF), and signed-out requests are rejected",
       checker: "auth.flow",
       capability: "auth",
       needs: NEEDS_BUN,

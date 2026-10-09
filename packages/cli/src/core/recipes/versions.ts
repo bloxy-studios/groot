@@ -3,11 +3,13 @@
  * record.
  *
  * Pins come from the 2026-10-07 prototype (Bun + Hono + Drizzle on bun:sqlite
- * + Better Auth) and were re-checked against the npm registry on 2026-10-08:
- * each is the current `latest`, none is deprecated, none has required peers.
- * Bumping a pin means regenerating the static migrations (data/migration.ts)
- * and the Better Auth schema with the new tools, then re-running the
- * certification suite (recipes.e2e.test.ts with GROOT_RECIPE_E2E=1).
+ * + Better Auth). Checked against the npm registry on 2026-10-08: each was
+ * the `latest` dist-tag then, none deprecated, none with required peers
+ * (drizzle-orm 0.45.4 has since become `latest`, published
+ * 2026-10-08T10:50:41Z). Pins move only deliberately: bumping one means
+ * regenerating the static migrations (core/recipes/migrations.ts) and the
+ * Better Auth schema with the new tools, then re-running the certification
+ * suite (recipes.e2e.test.ts with GROOT_RECIPE_E2E=1).
  */
 import type { RecipeDescriptor, SupportLevel } from "../contracts/capability.ts";
 
@@ -35,6 +37,6 @@ export const RECIPE_SUPPORT: SupportLevel = "certified";
 /** What certification was performed, against which versions and platform. */
 export const CERTIFICATION: RecipeDescriptor["certification"] = {
   evidence:
-    "GROOT_RECIPE_E2E=1 bun test src/core/recipes/recipes.e2e.test.ts: (a) fresh single app from create-hono 0.19.5, (b) Bun workspace with apps/api from create-hono 0.19.5, (c) adopted custom layout (server/main.ts, port 4310, custom scripts, dirty tree) — planned with the PlanBuilder, materialized, bun install, then structural, build, runtime, and product-flow (24-step auth flow) all pass; drizzle-kit reports no schema drift afterwards. macOS x64, Bun 1.4.0; Linux and Windows not yet certified.",
+    "GROOT_RECIPE_E2E=1 bun test src/core/recipes/recipes.e2e.test.ts: (a) fresh single app from create-hono 0.19.5, (b) Bun workspace with apps/api from create-hono 0.19.5, (c) adopted custom layout (server/main.ts, port 4310, custom scripts, dirty tree) — planned with the PlanBuilder, materialized, bun install, then structural, build (the entry plus each recipe's own modules), runtime, and product-flow (26-step auth flow, Better Auth's Origin-less CSRF refusal included) all pass; drizzle-kit reports no schema drift afterwards. macOS x64, Bun 1.4.0; Linux and Windows not yet certified.",
   checkedAt: "2026-10-08",
 };

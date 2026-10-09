@@ -1,11 +1,11 @@
 /**
- * Test-only plan materializer (never imported by runtime code). The real
- * executor (core/executor) is built in parallel; recipe tests and the
- * certification suite need to apply recipe plans now, so this applies exactly
- * the action types recipes emit — file.write, precomputed and deferred
- * file.edit, deps.add, env.secret — in plan order, after checking each step's
- * expectation (a stale plan is an error here, as it is in the executor).
- * Anything else is refused rather than half-applied.
+ * Test-only plan materializer (never imported by runtime code). It applies
+ * exactly the action types recipes emit — file.write, precomputed and
+ * deferred file.edit, deps.add, env.secret — in plan order, after checking
+ * each step's expectation (a stale plan is an error here, as it is in the
+ * executor), with the executor's own semantics where they matter (env.secret
+ * reads assignments with the executor's predicate). Anything else is refused
+ * rather than half-applied.
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,6 +17,7 @@ import type {
   PlannedAction,
   SecretAction,
 } from "../../contracts/plan.ts";
+import { hasEnvAssignment } from "../../executor/secrets.ts";
 import { hashFile } from "../../fs/hash.ts";
 import { joinRel, resolveInProject } from "../../fs/paths.ts";
 import { addEnvEntries, applyEdit } from "../../transforms/index.ts";
@@ -67,20 +68,15 @@ async function applyDeps(root: string, action: DepsAction): Promise<void> {
 }
 
 /**
- * Generates the secret locally. A name that already has a value is left
- * untouched; an empty `NAME=` placeholder line is filled in place.
+ * Generates the secret locally, exactly as the executor's env.secret step
+ * does (core/executor/steps-files.ts): any assignment of the name — even an
+ * empty `NAME=` — is left as it stands; otherwise the variable is appended.
  */
 function applySecret(root: string, action: SecretAction): string | null {
   const current = read(root, action.path);
-  const assigned = new RegExp(`^\\s*(?:export\\s+)?${action.name}\\s*=\\s*\\S`, "m");
-  if (current !== null && assigned.test(current)) return null;
+  if (current !== null && hasEnvAssignment(current, action.name)) return null;
   const value = randomBytes(32).toString("base64url");
-  const empty = new RegExp(`^(\\s*(?:export\\s+)?${action.name}\\s*=)\\s*$`, "m");
-  const next =
-    current !== null && empty.test(current)
-      ? current.replace(empty, (_line, prefix: string) => `${prefix}${value}`)
-      : addEnvEntries(current, [{ name: action.name, value, comment: null }]);
-  write(root, action.path, next);
+  write(root, action.path, addEnvEntries(current, [{ name: action.name, value, comment: null }]));
   return value;
 }
 

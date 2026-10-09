@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { OperationPlan } from "../contracts/plan.ts";
 import { GrootV2Error } from "../errors.ts";
 import { fixtureFact, unitFixture } from "../test-fixtures.ts";
+import { removeRegion } from "../transforms/index.ts";
 import { authBetterAuth } from "./auth/recipe.ts";
 import { dataDrizzleSqlite } from "./data/recipe.ts";
 import { materializePlan } from "./testing/apply.ts";
@@ -22,7 +23,7 @@ import {
   removeScratchDirs,
   singleApp,
 } from "./testing/fixtures.ts";
-import { observeUnit } from "./testing/plan.ts";
+import { observeUnit, type PlannedRecipes } from "./testing/plan.ts";
 import { commitAll } from "./testing/projects.ts";
 import type { Recipe } from "./types.ts";
 
@@ -101,6 +102,192 @@ describe("entry anchors", () => {
       expect(error.id).toBe("GROOT_E_CONFLICT");
       expect(error.message).toContain("continues with chained calls");
       expect(error.hint).toContain("const app = new Hono();");
+    },
+    TIMEOUT,
+  );
+
+  test.each([
+    [
+      "semicolons",
+      'import { Hono } from "hono";\nimport { logger } from "hono/logger";\n\nconst app = new Hono()\n  // request logging first\n  .use(logger());\n\nexport default app;\n',
+    ],
+    [
+      "no semicolons",
+      "import { Hono } from 'hono'\nimport { logger } from 'hono/logger'\n\nconst app = new Hono()\n  // request logging first\n  .use(logger())\n\nexport default app\n",
+    ],
+  ])(
+    "a comment line inside the declaration's chain (%s) → conflict, the chain is never split",
+    async (_style, entry) => {
+      // Arrange
+      const fx = await singleApp(writeEntry(entry));
+      // Act
+      const error = await planError(fx);
+      // Assert
+      expect(error.id).toBe("GROOT_E_CONFLICT");
+      expect(error.message).toContain("declaration on line 4 continues with chained calls");
+      expect(error.details).toMatchObject({ path: "src/index.ts", conflict: "transform" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a JSDoc with an apostrophe inside the declaration's chain → conflict",
+    async () => {
+      // Arrange
+      const fx = await singleApp(
+        writeEntry(
+          "import { Hono } from \"hono\";\n\nconst app = new Hono()\n  /**\n   * Don't drop the logger: it's the audit trail.\n   */\n  .use(async (_c, next) => next());\n\nexport default app;\n",
+        ),
+      );
+      // Act
+      const error = await planError(fx);
+      // Assert
+      expect(error.id).toBe("GROOT_E_CONFLICT");
+      expect(error.message).toContain("continues with chained calls");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a JSDoc with an apostrophe inside a multi-line declaration never gets a region inside it",
+    async () => {
+      // Arrange
+      const entry =
+        "import { Hono } from \"hono\";\n\nconst app = new Hono<{\n  /** The request's id (don't trust the client's). */\n  Variables: { id: string };\n}>();\n\nexport default app;\n";
+      const fx = await singleApp(writeEntry(entry));
+      // Act
+      let planned: PlannedRecipes;
+      try {
+        planned = await planBoth(fx);
+      } catch (error) {
+        // Assert (refused): the statement couldn't be read the same way the transform reads it.
+        expect(error).toBeInstanceOf(GrootV2Error);
+        expect((error as GrootV2Error).id).toBe("GROOT_E_CONFLICT");
+        expect((error as GrootV2Error).details).toMatchObject({
+          path: "src/index.ts",
+          reason: "region placement",
+        });
+        return;
+      }
+      // Assert (planned): mounted right after `}>();` — never inside the type argument.
+      await materializePlan(fx.root, planned.plan);
+      const mounted = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(mounted).toContain("}>();\n// groot:begin auth.routes");
+      expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(mounted)).not.toThrow();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "closing brackets in a regular expression inside the Hono options never get a region inside the declaration",
+    async () => {
+      // Arrange
+      const entry =
+        'import { Hono } from "hono";\n\nconst app = new Hono({\n  getPath: (req) => {\n    const path = new URL(req.url).pathname.replace(/[)}\\]]+$/, "")\n    return path\n  },\n});\n\napp.get("/", (c) => c.text("hi"));\n\nexport default app;\n';
+      const fx = await singleApp(writeEntry(entry));
+      // Act
+      let planned: PlannedRecipes;
+      try {
+        planned = await planBoth(fx);
+      } catch (error) {
+        // Assert (refused): the transform reads that statement differently, so it's never guessed.
+        expect(error).toBeInstanceOf(GrootV2Error);
+        expect((error as GrootV2Error).id).toBe("GROOT_E_CONFLICT");
+        expect((error as GrootV2Error).details).toMatchObject({
+          path: "src/index.ts",
+          conflict: "transform",
+        });
+        return;
+      }
+      // Assert (planned): mounted after the declaration's closing line, never inside getPath.
+      await materializePlan(fx.root, planned.plan);
+      const mounted = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(mounted).toContain("  },\n});\n// groot:begin auth.routes");
+      expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(mounted)).not.toThrow();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a statement the recipe and the transform both misread can't put a region inside a function: the entry must keep it top-level",
+    async () => {
+      // Arrange — `/` after `)` reads as a division to both, so the regex's closers end the statement early.
+      const fx = await singleApp(
+        writeEntry(
+          'import { Hono } from "hono";\n\nconst app = new Hono({\n  getPath: (req) => {\n    if (req.url) /[)}\\]]+$/.test(req.url)\n    return new URL(req.url).pathname\n  },\n});\n\nexport default app;\n',
+        ),
+      );
+      // Act
+      const error = await planError(fx);
+      // Assert
+      expect(error.id).toBe("GROOT_E_CONFLICT");
+      expect(error.details).toMatchObject({
+        path: "src/index.ts",
+        conflict: "transform",
+        reason: "region not at top level",
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a regular expression in the Hono options with balanced brackets is mounted after the declaration",
+    async () => {
+      // Arrange — Hono's documented getPath example.
+      const entry =
+        'import { Hono } from "hono";\n\nconst app = new Hono({\n  getPath: (req) => req.url.replace(/^https?:\\/\\/[^/]+(\\/[^?]*)/, "$1"),\n});\n\nexport default app;\n';
+      const fx = await singleApp(writeEntry(entry));
+      const { plan } = await planBoth(fx);
+      // Act
+      await materializePlan(fx.root, plan);
+      // Assert
+      const mounted = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(mounted).toContain('"$1"),\n});\n// groot:begin auth.routes');
+      expect(removeRegion(removeRegion(mounted, "auth.imports", "e"), "auth.routes", "e")).toBe(
+        entry,
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    'a formatter\'s multi-line `import {\\n  Hono,\\n} from "hono"` is anchored on its closing line',
+    async () => {
+      // Arrange
+      const entry =
+        'import {\n  Hono,\n  type Context,\n} from "hono";\n\nconst app = new Hono();\n\napp.get("/", (c: Context) => c.text("hi"));\n\nexport default app;\n';
+      const fx = await singleApp(writeEntry(entry));
+      const { plan } = await planBoth(fx);
+      // Act
+      await materializePlan(fx.root, plan);
+      // Assert
+      const mounted = readFileSync(join(fx.root, "src/index.ts"), "utf8");
+      expect(mounted).toContain('} from "hono";\n// groot:begin auth.imports');
+      expect(mounted).toContain('import { authRoutes } from "./http/auth-routes";\n');
+      expect(mounted).toContain("const app = new Hono();\n// groot:begin auth.routes");
+      expect(removeRegion(removeRegion(mounted, "auth.imports", "e"), "auth.routes", "e")).toBe(
+        entry,
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    'two multi-line imports closing on `} from "hono"` → conflict naming both lines',
+    async () => {
+      // Arrange
+      const fx = await singleApp(
+        writeEntry(
+          'import type {\n  Context,\n} from "hono";\nimport {\n  Hono,\n} from "hono";\n\nconst app = new Hono();\nexport default app;\n',
+        ),
+      );
+      // Act
+      const error = await planError(fx);
+      // Assert
+      expect(error.id).toBe("GROOT_E_CONFLICT");
+      expect(error.message).toContain(
+        'found 2 candidates for the closing `} from "hono"` line of the multi-line Hono import (lines 3, 6)',
+      );
     },
     TIMEOUT,
   );
@@ -212,6 +399,62 @@ describe("existing human files and scripts", () => {
     TIMEOUT,
   );
 
+  test.each([
+    ["an empty value", "BETTER_AUTH_SECRET=\n"],
+    ["empty quotes", 'BETTER_AUTH_SECRET=""\n'],
+    ["an exported blank", "export BETTER_AUTH_SECRET=   \n"],
+    // Bun reads `#` as a comment in an unquoted value, and backticks as quotes.
+    ["only a comment", "BETTER_AUTH_SECRET= # generate with openssl rand -base64 32\n"],
+    ["empty quotes and a comment", 'BETTER_AUTH_SECRET="" # set me\n'],
+    ["empty backticks", "BETTER_AUTH_SECRET=``\n"],
+    [
+      "a later blank assignment",
+      "BETTER_AUTH_SECRET=an-earlier-value-0123456789abcdef\nBETTER_AUTH_SECRET=\n",
+    ],
+  ])(
+    "a BETTER_AUTH_SECRET placeholder with %s → conflict: no plan promises a secret the executor won't write",
+    async (_case, line) => {
+      // Arrange
+      const fx = await singleApp();
+      writeFileSync(join(fx.root, ".env.local"), `FEATURE_FLAG=on\n${line}`);
+      // Act
+      const error = await planError(fx);
+      // Assert
+      expect(error.id).toBe("GROOT_E_CONFLICT");
+      expect(error.details).toMatchObject({
+        path: ".env.local",
+        conflict: "empty-env-value",
+        name: "BETTER_AUTH_SECRET",
+      });
+      expect(error.hint).toContain("openssl rand -base64 32");
+    },
+    TIMEOUT,
+  );
+
+  test.each([
+    [
+      "a quoted value with # in it",
+      'BETTER_AUTH_SECRET="value#with-hash-0123456789abcdef" # mine\n',
+    ],
+    // The executor never reads `NAME: value` as an assignment; a step would append one that wins.
+    ["a `NAME: value` assignment", "BETTER_AUTH_SECRET: colon-style-value-0123456789abcdef\n"],
+    ["a reference Bun expands at startup", "BETTER_AUTH_SECRET=$SHARED_AUTH_SECRET\n"],
+  ])(
+    "a BETTER_AUTH_SECRET Bun loads from %s is kept: no env.secret step overrides it",
+    async (_case, line) => {
+      // Arrange
+      const fx = await singleApp();
+      writeFileSync(join(fx.root, ".env.local"), `FEATURE_FLAG=on\n${line}`);
+      // Act
+      const { plan, contributions } = await planBoth(fx);
+      // Assert
+      expect(plan.actions.some((action) => action.type === "env.secret")).toBe(false);
+      const kept = contributions[1]?.decisions.find((decision) => decision.topic === "auth.secret");
+      expect(kept?.value).toBe("kept the existing BETTER_AUTH_SECRET in .env.local");
+    },
+    TIMEOUT,
+  );
+
   test(
     "a recorded entry that doesn't exist → conflict instead of a blind edit",
     async () => {
@@ -266,6 +509,31 @@ describe("compatibility and requirements", () => {
     expect(onNode).toEqual([
       ". runs on Node.js; data.drizzle-sqlite needs the Bun runtime (bun:sqlite)",
     ]);
+  });
+
+  test("an entry directory that can't be written safely into scripts and literals is refused; spaces are fine", () => {
+    // Arrange
+    const app = {
+      id: "api",
+      path: ".",
+      kind: "api",
+      framework: "hono",
+      packageName: "api",
+      port: 3000,
+      origin: "adopted",
+      entry: null,
+    } as const;
+    const reasons = (entry: string): string[] =>
+      dataDrizzleSqlite.compatibility({ app: { ...app, entry }, unit: undefined }, {} as never);
+    // Act + Assert
+    expect(reasons("it's/main.ts")).toEqual([
+      `api's entry directory "it's" has characters data.drizzle-sqlite can't write safely into package.json scripts, TypeScript string literals, and drizzle-kit's schema glob (letters, digits, spaces, and . _ - @ + are fine)`,
+    ]);
+    expect(reasons("src/[v1]/index.ts")).toHaveLength(1);
+    expect(reasons("src/$HOME/index.ts")).toHaveLength(1);
+    expect(reasons('src/"q"/index.ts')).toHaveLength(1);
+    expect(reasons("my server/main.ts")).toEqual([]);
+    expect(reasons("index.ts")).toEqual([]);
   });
 
   test(
