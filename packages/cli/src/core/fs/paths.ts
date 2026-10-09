@@ -37,6 +37,22 @@ interface HopBudget {
 }
 
 /**
+ * The real location of an existing entry that is not a symlink. Bun's
+ * realpath can fail with EACCES on an entry it may not read (a chmod 000
+ * file on macOS) although its location is known: it is the entry's name in
+ * its real parent directory.
+ */
+function realLocation(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(realLocation(parent), basename(path));
+  }
+}
+
+/**
  * The real location `abs` (an absolute path without `.`/`..` segments)
  * refers to, or null when symlinks loop (or chain past MAX_SYMLINK_HOPS). A
  * dangling link is followed by its link text, relative to the link's own
@@ -64,7 +80,7 @@ function realTargetOf(abs: string, budget: HopBudget = { hops: 0 }): string | nu
       return target === null ? null : realTargetOf(join(target, ...tail), budget);
     }
   }
-  return join(realpathSync(current), ...tail);
+  return join(realLocation(current), ...tail);
 }
 
 /**

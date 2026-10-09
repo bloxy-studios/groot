@@ -54,6 +54,20 @@ describe("project boundary", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")(
+    "resolves an existing file it may not read (chmod 000) without a raw errno error",
+    () => {
+      const root = scratch();
+      writeFileSync(join(root, "locked.txt"), "x");
+      chmodSync(join(root, "locked.txt"), 0o000);
+      try {
+        expect(resolveInProject(root, "locked.txt")).toBe(join(root, "locked.txt"));
+      } finally {
+        chmodSync(join(root, "locked.txt"), 0o644);
+      }
+    },
+  );
+
   test("refuses a path whose symlinked parent points outside the project", () => {
     const root = scratch();
     const outside = scratch();
