@@ -35,8 +35,7 @@
     "src",
     "!src/**/*.test.ts",
     "!src/**/testing/**",
-    "!src/**/test-support.ts",
-    "!src/**/test-fixtures.ts"
+    "!src/**/test-*.ts"
   ],
   "scripts": {
     "dev": "bun run src/index.ts",
