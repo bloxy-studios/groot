@@ -222,6 +222,102 @@ describe("planAdopt — ports", () => {
     },
     TIMEOUT,
   );
+
+  test(
+    "the app's port comes from the command that runs its entry, not from a tool its dev script starts",
+    async () => {
+      // Arrange: Hono APIs whose entry declares port 3000 (or none), and a Next app with a codegen step.
+      const honoEntry = (port: string) =>
+        `import { Hono } from "hono";\n\nconst app = new Hono();\nexport default ${port};\n`;
+      const hono = (scripts: Record<string, string>, entry: string) =>
+        makeProject({
+          "package.json": json({
+            name: "api",
+            private: true,
+            packageManager: "bun@1.3.14",
+            scripts,
+            dependencies: { hono: "^4.6.0" },
+            devDependencies: { "@types/bun": "^1.3.14", "drizzle-kit": "^0.31.0" },
+          }),
+          "bun.lock": BUN_LOCK,
+          "src/index.ts": entry,
+        });
+      const withPort = honoEntry("{ port: 3000, fetch: app.fetch }");
+      const projects = {
+        studioViaBunRun: hono(
+          {
+            dev: "bun run db:studio & bun --hot src/index.ts",
+            "db:studio": "drizzle-kit studio --port 4983",
+          },
+          withPort,
+        ),
+        studioInDev: hono(
+          { dev: "drizzle-kit studio --port 4983 & bun --hot src/index.ts" },
+          withPort,
+        ),
+        unknownSidecar: hono({ dev: "mock-api --port 4010 & bun --hot src/index.ts" }, withPort),
+        entryFromDevApi: hono(
+          { "dev:api": "PORT=4000 bun --watch src/index.ts" },
+          honoEntry("app"),
+        ),
+        codegenThenNext: makeProject({
+          "package.json": json({
+            name: "site",
+            private: true,
+            packageManager: "bun@1.3.14",
+            scripts: { dev: "bun scripts/gen.ts && next dev -p 3001" },
+            dependencies: { next: "^16.0.0", react: "^19.0.0" },
+          }),
+          "bun.lock": BUN_LOCK,
+          "scripts/gen.ts": 'await Bun.write("src/routes.gen.ts", "export {};\\n");\n',
+          "app/page.tsx": "export default function Page() {\n  return null;\n}\n",
+        }),
+      };
+
+      // Act
+      const results = Object.fromEntries(
+        await Promise.all(
+          Object.entries(projects).map(async ([label, root]) => {
+            const ctx = createContext({ cwd: root });
+            const plan = await planAdopt(ctx, ".", { now: NOW });
+            const unit = (await inspect(ctx, ".")).units[0];
+            const recorded = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}"))
+              .apps[0];
+            const ports = unit?.ports.map((port) => [port.value, port.confidence, port.source]);
+            return [label, { port: recorded?.port, ports }] as const;
+          }),
+        ),
+      );
+
+      // Assert
+      expect(results).toEqual({
+        studioViaBunRun: {
+          port: 3000,
+          ports: [
+            [3000, "medium", "src/index.ts"],
+            [4983, "low", "package.json#scripts.db:studio"],
+          ],
+        },
+        studioInDev: {
+          port: 3000,
+          ports: [
+            [3000, "medium", "src/index.ts"],
+            [4983, "low", "package.json#scripts.dev"],
+          ],
+        },
+        unknownSidecar: {
+          port: 3000,
+          ports: [
+            [3000, "medium", "src/index.ts"],
+            [4010, "medium", "package.json#scripts.dev"],
+          ],
+        },
+        entryFromDevApi: { port: 4000, ports: [[4000, "high", "package.json#scripts.dev:api"]] },
+        codegenThenNext: { port: 3001, ports: [[3001, "medium", "package.json#scripts.dev"]] },
+      });
+    },
+    TIMEOUT,
+  );
 });
 
 /** Apply the plan's two writes by hand, then run the structural checks `groot verify` runs. */

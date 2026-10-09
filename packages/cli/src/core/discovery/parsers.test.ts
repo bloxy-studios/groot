@@ -27,6 +27,7 @@ describe("script entries", () => {
     ["NODE_ENV=production node -r dotenv/config ./dist/../src/x.js", null, "node"],
     ["cross-env PORT=4000 node --env-file .env src/app.js", "src/app.js", "node"],
     ["bunx tsx watch src/main.ts", "src/main.ts", "tsx"],
+    ["bun x --bun tsx watch src/main.ts", "src/main.ts", "tsx"],
   ])("%s → %s", (script, file, runner) => {
     // Arrange
     const scripts = { dev: script };
@@ -101,9 +102,9 @@ describe("ports", () => {
 
     // Assert
     expect(ports).toEqual([
-      { port: 3000, script: "dev", app: true },
-      { port: 8080, script: "start", app: true },
-      { port: 4173, script: "preview", app: false },
+      { port: 3000, script: "dev", app: true, runs: [] },
+      { port: 8080, script: "start", app: true, runs: ["src/index.ts"] },
+      { port: 4173, script: "preview", app: false, runs: [] },
     ]);
   });
 
@@ -124,11 +125,60 @@ describe("ports", () => {
 
     // Assert
     expect(ports).toEqual([
-      { port: 4000, script: "server", app: true },
-      { port: 8787, script: "start:prod", app: true },
-      { port: 4983, script: "db:studio", app: false },
-      { port: 3001, script: "dev:email", app: false },
-      { port: 6006, script: "storybook", app: false },
+      { port: 4000, script: "server", app: true, runs: ["src/index.ts"] },
+      { port: 8787, script: "start:prod", app: true, runs: ["src/index.ts"] },
+      { port: 3001, script: "dev:email", app: false, runs: [] },
+      { port: 4983, script: "db:studio", app: false, runs: [] },
+      { port: 6006, script: "storybook", app: false, runs: [] },
+    ]);
+  });
+
+  test("a tool's CLI never declares the app's port, even when the app's own dev script starts it", () => {
+    // Arrange: directly, through bunx or `bun x`, or as a `bun run` of a tool-only script.
+    const scripts = {
+      dev: "bun run db:studio & storybook dev -p 6006 & bun x prisma studio -p 5555 & bun --hot src/index.ts",
+      start: "PORT=4984 bun run db:studio",
+      "db:studio": "drizzle-kit studio --port 4983",
+    };
+
+    // Act
+    const ports = scriptPorts(scripts);
+
+    // Assert
+    expect(ports).toEqual([
+      { port: 6006, script: "dev", app: false, runs: [] },
+      { port: 5555, script: "dev", app: false, runs: [] },
+      { port: 4983, script: "db:studio", app: false, runs: [] },
+      { port: 4984, script: "start", app: false, runs: [] },
+    ]);
+  });
+
+  test("a command running a source file declares the app's port in any dev/start/serve-style script", () => {
+    // Arrange: the entry comes from dev:api, so its port is the app's; dev:* tools stay tools.
+    const scripts = {
+      "dev:web": "next dev -p 3001",
+      "dev:email": "email dev --port 3002",
+      "dev:api": "PORT=4000 bun --watch src/server.ts",
+    };
+
+    // Act
+    const ports = scriptPorts(scripts);
+
+    // Assert
+    expect(ports).toEqual([
+      { port: 4000, script: "dev:api", app: true, runs: ["src/server.ts"] },
+      { port: 3002, script: "dev:email", app: false, runs: [] },
+      { port: 3001, script: "dev:web", app: false, runs: [] },
+    ]);
+  });
+
+  test("`PORT=N bun run <script>`: the port belongs to what that script runs", () => {
+    // Arrange
+    const scripts = { dev: "PORT=4100 bun run server", server: "bun --watch src/index.ts" };
+
+    // Act / Assert
+    expect(scriptPorts(scripts)).toEqual([
+      { port: 4100, script: "dev", app: true, runs: ["src/index.ts"] },
     ]);
   });
 

@@ -36,9 +36,11 @@ export const DEFAULT_NAMESPACE = "@repo";
 const CONFIDENCE_RANK: Record<Confidence, number> = { certain: 3, high: 2, medium: 1, low: 0 };
 
 /**
- * The least confidence a port needs to be recorded as the app's: the scripts
- * that run the app (high) and its entry source (medium) qualify; a port only
- * a tool's script declares (low — a database studio, storybook) never does.
+ * The least confidence a port needs to be recorded as the app's: the commands
+ * that run the app (high), its entry source (medium), and another command of
+ * the app's scripts when they also run the entry (medium, ranked after the
+ * entry's own) qualify; a port only a tool declares (low — a database studio,
+ * storybook, wherever it is started) never does.
  */
 const MIN_APP_PORT_CONFIDENCE: Confidence = "medium";
 

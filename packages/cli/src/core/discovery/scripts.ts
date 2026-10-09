@@ -7,10 +7,13 @@
  * - entry: which file does the dev/start script run? (`bun --watch src/index.ts`,
  *   `bun run --hot src/index.ts`, `tsx watch src/server.ts`, `bun run dev:api` → …)
  * - ports: `--port N`, `-p N`, `PORT=N` in scripts; `.listen(N)`, `port: N`,
- *   `PORT ?? N`, `Number(process.env.PORT) || N` in the entry source. Only
- *   the scripts that run the app (dev/start/serve and what they `bun run`)
- *   declare the app's port; a port any other script declares belongs to that
- *   tool (a database studio, storybook, an email or preview server);
+ *   `PORT ?? N`, `Number(process.env.PORT) || N` in the entry source. A port
+ *   is the app's when the command declaring it runs the app: a command that
+ *   runs a source file in a dev/start/serve-style script (where the entry
+ *   comes from), or any other command in dev/start/serve and what they
+ *   `bun run` — except a known tool's CLI (a database studio, storybook, an
+ *   email preview, a test UI, a container). Every other port belongs to its
+ *   tool, wherever it is started;
  * - runtime: does a script run a source file with bun, or with node/tsx?
  */
 import { basename } from "node:path";
@@ -34,8 +37,10 @@ export interface EntryCandidate {
 export interface ScriptPort {
   readonly port: number;
   readonly script: string;
-  /** Declared by a script that runs the app itself — not by a tool's script. */
+  /** Declared by a command that runs the app itself — not by a tool's. */
   readonly app: boolean;
+  /** Source files the declaring command runs, directly or through `bun run <script>`. */
+  readonly runs: readonly string[];
 }
 
 export interface RuntimeSignals {
@@ -84,6 +89,39 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/;
 /** The scripts that run the app itself. */
 const ENTRY_SCRIPTS = ["dev", "start", "serve"];
 const MAX_SCRIPT_DEPTH = 3;
+/**
+ * CLIs that start a tool beside the app — a database studio, a component
+ * workshop, an email preview, a test UI, a container, a mock server. The port
+ * such a command declares is the tool's, never the app's, even when the app's
+ * own dev script starts it.
+ */
+const TOOL_CLIS: ReadonlySet<string> = new Set([
+  "drizzle-kit",
+  "prisma",
+  "storybook",
+  "start-storybook",
+  "ladle",
+  "histoire",
+  "email",
+  "react-email",
+  "jsx-email",
+  "maildev",
+  "mailpit",
+  "mailhog",
+  "vitest",
+  "jest",
+  "playwright",
+  "cypress",
+  "docker",
+  "docker-compose",
+  "podman",
+  "json-server",
+  "prism",
+  "inngest-cli",
+  "firebase",
+  "supabase",
+  "webpack-bundle-analyzer",
+]);
 
 export function toPort(text: string | undefined): number | null {
   if (text === undefined || !/^\d{1,5}$/.test(text)) return null;
@@ -150,7 +188,9 @@ export function parseCommand(tokens: readonly string[]): Invocation | null {
   let runner = basename(first);
   index++;
   const launcherFlags: string[] = [];
-  if (LAUNCHERS.has(runner)) {
+  const bunX = runner === "bun" && tokens[index] === "x"; // `bun x <tool>` is bunx
+  if (LAUNCHERS.has(runner) || bunX) {
+    if (bunX) index++;
     while ((tokens[index] ?? "").startsWith("-")) launcherFlags.push(tokens[index++] as string);
     const tool = tokens[index];
     if (tool === undefined) return null;
@@ -192,8 +232,11 @@ export function normalizeSourcePath(target: string): string | null {
   return path;
 }
 
-function scriptsInOrder(scripts: Readonly<Record<string, string>>, first: string[]): string[] {
-  const named = first.filter((name) => name in scripts);
+type Scripts = Readonly<Record<string, string>>;
+
+/** `first` (those present), then the `<name>:…`/`<name>-…` variants of them by name. */
+function scriptsInOrder(scripts: Scripts, first: readonly string[]): string[] {
+  const named = first.filter((name) => Object.hasOwn(scripts, name));
   const prefixed = Object.keys(scripts)
     .filter(
       (name) => !named.includes(name) && first.some((p) => new RegExp(`^${p}[:-]`).test(name)),
@@ -208,19 +251,27 @@ function invocations(script: string): Invocation[] {
     .filter((entry): entry is Invocation => entry !== null);
 }
 
+/** The script a command runs with `bun run <script>` (or `bun <script>`), or null. */
+function scriptTarget(scripts: Scripts, invocation: Invocation): string | null {
+  if (invocation.runner !== "bun") return null;
+  const target = runTarget(invocation);
+  if (target === null || normalizeSourcePath(target) !== null) return null;
+  return Object.hasOwn(scripts, target) ? target : null;
+}
+
 /** Files the dev/start/serve scripts run, in priority order (follows `bun run <script>`). */
-export function entryCandidates(scripts: Readonly<Record<string, string>>): EntryCandidate[] {
+export function entryCandidates(scripts: Scripts): EntryCandidate[] {
   const found: EntryCandidate[] = [];
   const visit = (name: string, origin: string, depth: number): void => {
     for (const invocation of invocations(scripts[name] ?? "")) {
       const target = runTarget(invocation);
-      if (target === null) continue;
-      const file = normalizeSourcePath(target);
+      const file = target === null ? null : normalizeSourcePath(target);
       if (file !== null) {
         found.push({ file, script: origin, runner: invocation.runner });
-      } else if (invocation.runner === "bun" && target in scripts && depth < MAX_SCRIPT_DEPTH) {
-        visit(target, origin, depth + 1);
+        continue;
       }
+      const script = scriptTarget(scripts, invocation);
+      if (script !== null && depth < MAX_SCRIPT_DEPTH) visit(script, origin, depth + 1);
     }
   };
   for (const name of scriptsInOrder(scripts, ENTRY_SCRIPTS)) visit(name, name, 0);
@@ -240,44 +291,65 @@ function flagPort(args: readonly string[]): number | null {
   return null;
 }
 
-/**
- * The scripts that run the app, in priority order: dev, start, and serve, and
- * the scripts they run with `bun run <script>`. Other `dev:*`-style scripts
- * often start a tool (`dev:email`, `dev:db`), so on their own they don't count.
- */
-function appScripts(scripts: Readonly<Record<string, string>>): string[] {
-  const found = new Set<string>();
+/** `names` (those present) and every script they run with `bun run <script>`, in visit order. */
+function reachableScripts(scripts: Scripts, names: readonly string[]): string[] {
+  const found: string[] = [];
   const visit = (name: string, depth: number): void => {
-    if (found.has(name)) return;
-    found.add(name);
+    if (found.includes(name) || !Object.hasOwn(scripts, name)) return;
+    found.push(name);
     if (depth >= MAX_SCRIPT_DEPTH) return;
     for (const invocation of invocations(scripts[name] ?? "")) {
-      const target = runTarget(invocation);
-      if (invocation.runner === "bun" && target !== null && Object.hasOwn(scripts, target)) {
-        visit(target, depth + 1);
-      }
+      const script = scriptTarget(scripts, invocation);
+      if (script !== null) visit(script, depth + 1);
     }
   };
-  for (const name of ENTRY_SCRIPTS) if (Object.hasOwn(scripts, name)) visit(name, 0);
-  return [...found];
+  for (const name of names) visit(name, 0);
+  return found;
+}
+
+/** Source files a command runs: its own target file, or what the script it `bun run`s runs. */
+function filesRun(scripts: Scripts, invocation: Invocation, depth = 0): string[] {
+  const target = runTarget(invocation);
+  const file = target === null ? null : normalizeSourcePath(target);
+  if (file !== null) return [file];
+  const script = scriptTarget(scripts, invocation);
+  if (script === null || depth >= MAX_SCRIPT_DEPTH) return [];
+  return invocations(scripts[script] ?? "").flatMap((next) => filesRun(scripts, next, depth + 1));
+}
+
+/** Does the command start only tools — a tool's CLI, or `bun run` of a script starting nothing else? */
+function startsOnlyTools(scripts: Scripts, invocation: Invocation, depth = 0): boolean {
+  if (TOOL_CLIS.has(invocation.runner)) return true;
+  const script = scriptTarget(scripts, invocation);
+  if (script === null || depth >= MAX_SCRIPT_DEPTH) return false;
+  const commands = invocations(scripts[script] ?? "");
+  return commands.length > 0 && commands.every((next) => startsOnlyTools(scripts, next, depth + 1));
 }
 
 /**
- * Ports declared in scripts (first owner wins): those of the scripts that run
- * the app first, then every other script's by name — a database studio,
- * storybook, or preview server declares its own port, not the app's.
+ * Ports declared in scripts (first owner wins), the app's scripts first:
+ * dev/start/serve and what they `bun run`, then their `dev:*`-style variants,
+ * then every other script by name. A port is the app's (`app`) when its
+ * command runs the app: one running a source file anywhere the entry may
+ * come from, or any other command in dev/start/serve and what they `bun run`
+ * — never a tool's CLI. `dev:*` scripts often start a tool (`dev:email`,
+ * `dev:db`), so there only a command running a source file counts.
  */
-export function scriptPorts(scripts: Readonly<Record<string, string>>): ScriptPort[] {
-  const app = appScripts(scripts);
+export function scriptPorts(scripts: Scripts): ScriptPort[] {
+  const main = reachableScripts(scripts, ENTRY_SCRIPTS);
+  const entry = reachableScripts(scripts, scriptsInOrder(scripts, ENTRY_SCRIPTS));
   const others = Object.keys(scripts)
-    .filter((name) => !app.includes(name))
+    .filter((name) => !entry.includes(name))
     .sort();
   const ports: ScriptPort[] = [];
-  for (const script of [...app, ...others]) {
+  for (const script of [...entry, ...others]) {
     for (const invocation of invocations(scripts[script] ?? "")) {
+      const runs = filesRun(scripts, invocation);
+      const app =
+        !startsOnlyTools(scripts, invocation) && (runs.length > 0 ? entry : main).includes(script);
       for (const port of [invocation.envPort, flagPort(invocation.args)]) {
-        if (port !== null && !ports.some((entry) => entry.port === port)) {
-          ports.push({ port, script, app: app.includes(script) });
+        if (port !== null && !ports.some((known) => known.port === port)) {
+          ports.push({ port, script, app, runs });
         }
       }
     }
