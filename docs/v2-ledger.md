@@ -29,8 +29,8 @@
 
 | Item | Status | Depends on | Support | Evidence required |
 | --- | --- | --- | --- | --- |
-| Typed persistence: Drizzle + bun:sqlite on Hono/Bun | in progress | recipe contract, executor | prototype passed live flow | fresh single + monorepo + adopted: install, build, migrate, runtime |
-| Authentication: Better Auth (email/password) on Hono/Bun | in progress | data recipe | prototype passed 24-step flow | sign-up, session, protected write, isolation, unauthorized 401, sign-out |
+| Typed persistence: Drizzle + bun:sqlite on Hono/Bun | in progress | recipe contract, executor | prototype passed live flow | fresh single + monorepo + adopted: install, build (`data.build` bundles the entry with `db/client.ts` and `db/migrate.ts`, so a data-only app's modules are checked), migrate, runtime; the SQLite database and its `-wal`/`-shm`/`-journal` files kept out of git |
+| Authentication: Better Auth (email/password) on Hono/Bun | in progress | data recipe | Groot certification flow passed (`GROOT_RECIPE_E2E`, local, not yet in CI): 26 steps — the prototype's 24, with g3 tightened to the 403 Better Auth's CSRF guard gives a cookie-bearing POST without `Origin` and g4 asserting the session survives, plus the owner's delete (j1/j2) | sign-up, session, protected write, isolation, unauthorized 401, Origin-less cookie POST 403 (CSRF), sign-out |
 | Installed-agent runner: Claude Code | in progress | tasks, worktrees | — | real task: edit → acceptance → review → integration |
 | Installed-agent runner: Codex | in progress (adapter) | runner contract | blocked locally (CLI/config mismatch, quota) | real task on a working Codex install |
 | Task dependencies, worktrees, review, fresh integration checks | in progress | runners | — | DAG blocking, ownership overlap, integration re-verify |
