@@ -1,7 +1,8 @@
 /**
  * Building blocks shared by migration (v1 → v2) and adoption: stable app ids,
  * content-derived decision ids, the per-app structural verification
- * contracts, and the final contract check every generated blueprint passes.
+ * contracts (with the gaps they are known to fail on), and the final
+ * contract check every generated blueprint passes.
  *
  * Decision ids are derived from the decision's content instead of random
  * bytes so that the same inputs always produce byte-identical documents —
@@ -12,7 +13,9 @@ import { type BlueprintApp, BlueprintV2 } from "../contracts/blueprint.ts";
 import type { VerificationContract } from "../contracts/common.ts";
 import { GrootV2Error } from "../errors.ts";
 import { sha256Of } from "../fs/hash.ts";
+import { joinRel } from "../fs/paths.ts";
 import { canonicalJson } from "../json.ts";
+import { portCollisions } from "../ports.ts";
 import { defaultContracts } from "../verify/checkers.ts";
 import { zodIssues } from "./document.ts";
 
@@ -47,15 +50,53 @@ export function decisionId(seed: unknown): string {
 }
 
 /**
+ * Structural checks a blueprint recorded from the project as it is will fail
+ * as soon as it is written, keyed by contract id, with the reason: an app
+ * without an observed package name fails structural.package.<id>, and apps
+ * recorded with the same dev port fail structural.blueprint. Pure — derived
+ * from the blueprint alone.
+ */
+export function knownStructuralGaps(blueprint: BlueprintV2): Map<string, string> {
+  const gaps = new Map<string, string>();
+  const collisions = [...portCollisions(blueprint)].map(
+    ([port, paths]) => `dev port ${port} is declared by ${paths.join(" and ")}`,
+  );
+  if (collisions.length > 0) gaps.set("structural.blueprint", collisions.join("; "));
+  for (const app of blueprint.apps) {
+    if (app.packageName !== null) continue;
+    gaps.set(
+      `structural.package.${app.id}`,
+      `no package name was observed in ${joinRel(app.path, "package.json")}`,
+    );
+  }
+  return gaps;
+}
+
+/** `contract`, its description noting the gap it was known to fail on when recorded. */
+export function withKnownGap(
+  contract: VerificationContract,
+  gap: string | undefined,
+): VerificationContract {
+  return gap === undefined
+    ? contract
+    : { ...contract, description: `${contract.description} — known gap when recorded: ${gap}` };
+}
+
+/**
  * Per-app structural contracts, taken from the verification engine's own
- * defaults so ids and descriptions match (the engine dedupes by id).
+ * defaults so ids match (the engine dedupes by id, the blueprint's entry
+ * first) — and descriptions too, except that a check already known to fail
+ * says so, so `groot verify` reports it as announced.
  */
 export function structuralPackageContracts(
   draft: BlueprintV2,
   apps: readonly BlueprintApp[],
 ): VerificationContract[] {
-  const contracts = defaultContracts({ ...draft, apps: [...apps] });
-  return contracts.filter((contract) => contract.checker === "structural.package");
+  const blueprint = { ...draft, apps: [...apps] };
+  const gaps = knownStructuralGaps(blueprint);
+  return defaultContracts(blueprint)
+    .filter((contract) => contract.checker === "structural.package")
+    .map((contract) => withKnownGap(contract, gaps.get(contract.id)));
 }
 
 /** Validate a blueprint Groot generated; a failure is a Groot bug, never user error. */

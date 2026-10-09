@@ -7,7 +7,10 @@
  * - entry: which file does the dev/start script run? (`bun --watch src/index.ts`,
  *   `bun run --hot src/index.ts`, `tsx watch src/server.ts`, `bun run dev:api` → …)
  * - ports: `--port N`, `-p N`, `PORT=N` in scripts; `.listen(N)`, `port: N`,
- *   `PORT ?? N`, `Number(process.env.PORT) || N` in the entry source;
+ *   `PORT ?? N`, `Number(process.env.PORT) || N` in the entry source. Only
+ *   the scripts that run the app (dev/start/serve and what they `bun run`)
+ *   declare the app's port; a port any other script declares belongs to that
+ *   tool (a database studio, storybook, an email or preview server);
  * - runtime: does a script run a source file with bun, or with node/tsx?
  */
 import { basename } from "node:path";
@@ -31,6 +34,8 @@ export interface EntryCandidate {
 export interface ScriptPort {
   readonly port: number;
   readonly script: string;
+  /** Declared by a script that runs the app itself — not by a tool's script. */
+  readonly app: boolean;
 }
 
 export interface RuntimeSignals {
@@ -76,8 +81,8 @@ const VALUE_FLAGS = new Set([
 ]);
 const NODEMON_VALUE_FLAGS = new Set(["-w", "--watch", "-e", "--ext", "-x", "--exec", "-i"]);
 const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/;
+/** The scripts that run the app itself. */
 const ENTRY_SCRIPTS = ["dev", "start", "serve"];
-const PORT_SCRIPTS = ["dev", "start", "serve", "preview"];
 const MAX_SCRIPT_DEPTH = 3;
 
 export function toPort(text: string | undefined): number | null {
@@ -235,20 +240,44 @@ function flagPort(args: readonly string[]): number | null {
   return null;
 }
 
-/** Ports declared in scripts (dev/start/serve/preview first, then the rest by name). */
+/**
+ * The scripts that run the app, in priority order: dev, start, and serve, and
+ * the scripts they run with `bun run <script>`. Other `dev:*`-style scripts
+ * often start a tool (`dev:email`, `dev:db`), so on their own they don't count.
+ */
+function appScripts(scripts: Readonly<Record<string, string>>): string[] {
+  const found = new Set<string>();
+  const visit = (name: string, depth: number): void => {
+    if (found.has(name)) return;
+    found.add(name);
+    if (depth >= MAX_SCRIPT_DEPTH) return;
+    for (const invocation of invocations(scripts[name] ?? "")) {
+      const target = runTarget(invocation);
+      if (invocation.runner === "bun" && target !== null && Object.hasOwn(scripts, target)) {
+        visit(target, depth + 1);
+      }
+    }
+  };
+  for (const name of ENTRY_SCRIPTS) if (Object.hasOwn(scripts, name)) visit(name, 0);
+  return [...found];
+}
+
+/**
+ * Ports declared in scripts (first owner wins): those of the scripts that run
+ * the app first, then every other script's by name — a database studio,
+ * storybook, or preview server declares its own port, not the app's.
+ */
 export function scriptPorts(scripts: Readonly<Record<string, string>>): ScriptPort[] {
-  const ordered = [
-    ...PORT_SCRIPTS.filter((name) => name in scripts),
-    ...Object.keys(scripts)
-      .filter((name) => !PORT_SCRIPTS.includes(name))
-      .sort(),
-  ];
+  const app = appScripts(scripts);
+  const others = Object.keys(scripts)
+    .filter((name) => !app.includes(name))
+    .sort();
   const ports: ScriptPort[] = [];
-  for (const script of ordered) {
+  for (const script of [...app, ...others]) {
     for (const invocation of invocations(scripts[script] ?? "")) {
       for (const port of [invocation.envPort, flagPort(invocation.args)]) {
         if (port !== null && !ports.some((entry) => entry.port === port)) {
-          ports.push({ port, script });
+          ports.push({ port, script, app: app.includes(script) });
         }
       }
     }

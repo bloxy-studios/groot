@@ -4,27 +4,34 @@
  * uncommitted work, states every inference, and refuses precisely.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
 import { emptyLock } from "../blueprint/lock.ts";
 import { serializeBlueprint, serializeLock } from "../blueprint/serialize.ts";
 import { BlueprintV2 } from "../contracts/blueprint.ts";
+import { GrootLock } from "../contracts/lock.ts";
 import { OperationPlan } from "../contracts/plan.ts";
 import { inspect } from "../discovery/index.ts";
 import {
+  BUN_LOCK,
   bunMonorepo,
   customHonoApp,
   json,
+  makeProject,
   pnpmWorkspace,
   SECRET_VALUES,
+  V1_MANIFEST,
   v1Workspace,
 } from "../discovery/test-projects.ts";
 import { GrootV2Error } from "../errors.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { createContext } from "../runtime.ts";
 import { blueprintFixture } from "../test-fixtures.ts";
+import { defaultContracts, registerBuiltInCheckers } from "../verify/checkers.ts";
+import { runVerification } from "../verify/engine.ts";
 import { planAdopt } from "./adopt.ts";
+import { planMigrate } from "./migrate.ts";
 
 const TIMEOUT = 60_000;
 const NOW = new Date("2026-10-08T12:00:00.000Z");
@@ -157,6 +164,183 @@ describe("planAdopt — bun monorepo (b)", () => {
       expect(
         plan.ownership.filter((rule) => rule.owner === "human").map((rule) => rule.path),
       ).toEqual(["apps/api", "apps/web", "packages/typescript-config", "packages/ui"]);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("planAdopt — ports", () => {
+  test(
+    "a tool's port (database studio, storybook) is never recorded as the app's port",
+    async () => {
+      // Arrange: the API's port is in its entry; the web app's dev port is next's default.
+      const api = makeProject({
+        "package.json": json({
+          name: "api",
+          private: true,
+          packageManager: "bun@1.3.14",
+          scripts: {
+            dev: "bun run --hot src/index.ts",
+            "db:studio": "drizzle-kit studio --port 4983",
+          },
+          dependencies: { hono: "^4.6.0", "drizzle-orm": "^0.45.3" },
+          devDependencies: { "@types/bun": "^1.3.14", "drizzle-kit": "^0.31.0" },
+        }),
+        "bun.lock": BUN_LOCK,
+        "src/index.ts":
+          'import { Hono } from "hono";\n\nconst app = new Hono();\nexport default { port: 3000, fetch: app.fetch };\n',
+      });
+      const web = makeProject({
+        "package.json": json({
+          name: "site",
+          private: true,
+          packageManager: "bun@1.3.14",
+          scripts: { dev: "next dev", build: "next build", storybook: "storybook dev -p 6006" },
+          dependencies: { next: "^16.0.0", react: "^19.0.0" },
+          devDependencies: { storybook: "^9.0.0" },
+        }),
+        "bun.lock": BUN_LOCK,
+        "app/page.tsx": "export default function Page() {\n  return null;\n}\n",
+      });
+
+      // Act
+      const [apiPlan, webPlan] = await Promise.all(
+        [api, web].map((root) => planAdopt(createContext({ cwd: root }), ".", { now: NOW })),
+      );
+      const apiUnit = (await inspect(createContext({ cwd: api }), ".")).units[0];
+
+      // Assert
+      const appOf = (plan: OperationPlan) =>
+        BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}")).apps[0];
+      expect(appOf(apiPlan as OperationPlan)?.port).toBe(3000);
+      expect(appOf(webPlan as OperationPlan)?.port).toBeNull();
+      expect(apiUnit?.ports.map((port) => [port.value, port.confidence, port.source])).toEqual([
+        [3000, "medium", "src/index.ts"],
+        [4983, "low", "package.json#scripts.db:studio"],
+      ]);
+      expect((webPlan as OperationPlan).assumptions.join("\n")).not.toContain("6006");
+    },
+    TIMEOUT,
+  );
+});
+
+/** Apply the plan's two writes by hand, then run the structural checks `groot verify` runs. */
+async function structuralFailuresAfterApply(root: string, plan: OperationPlan): Promise<string[]> {
+  for (const action of writes(plan)) writeFileSync(join(root, action.path), action.content);
+  const blueprint = BlueprintV2.parse(JSON.parse(readFileSync(join(root, "groot.json"), "utf8")));
+  const lock = GrootLock.parse(JSON.parse(readFileSync(join(root, "groot.lock.json"), "utf8")));
+  const report = await runVerification(createContext({ cwd: root }), {
+    root,
+    blueprint,
+    observation: null,
+    lock,
+    profiles: ["structural"],
+    extra: defaultContracts(blueprint),
+  });
+  return report.evidence
+    .filter((entry) => entry.status === "fail")
+    .map((entry) => entry.check)
+    .sort();
+}
+
+/** Checks the plan announces as known gaps: noted on the check and stated as an assumption. */
+function announcedGaps(plan: OperationPlan): string[] {
+  const noted = plan.verification
+    .filter((contract) => contract.description.includes("known gap"))
+    .map((contract) => contract.id)
+    .sort();
+  for (const id of noted) expect(plan.assumptions.join("\n")).toContain(`Known gap: ${id} `);
+  return noted;
+}
+
+describe("planAdopt — structural checks it already knows will fail", () => {
+  registerBuiltInCheckers();
+
+  test(
+    "a project as discovered passes every structural check its adoption plan declares",
+    async () => {
+      // Arrange
+      const root = bunMonorepo();
+      const plan = await planAdopt(createContext({ cwd: root }), ".", { now: NOW });
+
+      // Act
+      const failed = await structuralFailuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual([]);
+      expect(failed).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a nameless package and a shared dev port: the plan announces exactly the checks that fail",
+    async () => {
+      // Arrange
+      const root = bunMonorepo({
+        "apps/web/package.json": json({
+          name: "web",
+          private: true,
+          scripts: { dev: "next dev --port 3000" },
+          dependencies: { next: "^16.0.0", react: "^19.0.0" },
+        }),
+        "apps/admin/package.json": json({
+          private: true,
+          scripts: { dev: "next dev --port 3000" },
+          dependencies: { next: "^16.0.0", react: "^19.0.0" },
+        }),
+        "apps/admin/app/page.tsx": "export default function Page() {\n  return null;\n}\n",
+      });
+
+      // Act
+      const plan = await planAdopt(createContext({ cwd: root }), ".", { now: NOW });
+      const blueprint = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}"));
+      const failed = await structuralFailuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual(["structural.blueprint", "structural.package.admin"]);
+      expect(failed).toEqual(["structural.blueprint", "structural.package.admin"]);
+      const assumptions = plan.assumptions.join("\n");
+      expect(assumptions).toContain("dev port 3000 is declared by apps/admin and apps/web");
+      expect(assumptions).toContain("no package name was observed in apps/admin/package.json");
+      const recorded = blueprint.verification.find(
+        (contract) => contract.id === "structural.package.admin",
+      );
+      expect(recorded?.description).toContain("known gap");
+      expect(recorded).toEqual(
+        plan.verification.find((contract) => contract.id === "structural.package.admin"),
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "migration shares the helpers: a scaffold missing on disk is stated, not silently recorded",
+    async () => {
+      // Arrange
+      const root = v1Workspace({
+        ...V1_MANIFEST,
+        scaffolds: [
+          ...V1_MANIFEST.scaffolds,
+          {
+            slot: "mobile",
+            framework: "expo",
+            path: "apps/mobile",
+            generator: "create-expo-app@4",
+            port: 8081,
+          },
+        ],
+      });
+
+      // Act
+      const plan = await planMigrate(createContext({ cwd: root }), ".", { now: NOW });
+
+      // Assert
+      const assumptions = plan.assumptions.join("\n");
+      expect(assumptions).toContain(
+        "groot.json records scaffold 3 (expo) at apps/mobile, but apps/mobile/package.json is missing",
+      );
+      expect(announcedGaps(plan)).toEqual(["structural.package.mobile"]);
     },
     TIMEOUT,
   );

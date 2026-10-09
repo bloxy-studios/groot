@@ -35,6 +35,13 @@ export const DEFAULT_NAMESPACE = "@repo";
 
 const CONFIDENCE_RANK: Record<Confidence, number> = { certain: 3, high: 2, medium: 1, low: 0 };
 
+/**
+ * The least confidence a port needs to be recorded as the app's: the scripts
+ * that run the app (high) and its entry source (medium) qualify; a port only
+ * a tool's script declares (low — a database studio, storybook) never does.
+ */
+const MIN_APP_PORT_CONFIDENCE: Confidence = "medium";
+
 export interface AdoptionOptions {
   /** Clock for the adoption decision (defaults to now). */
   readonly now?: Date;
@@ -45,13 +52,16 @@ function appIdBase(unit: ProjectUnit): string {
   return slugify(basename(unit.path)) || "app";
 }
 
-/** The most confident observed port; ties keep discovery's order (dev script first). */
+/**
+ * The most confident observed app port; ties keep discovery's order (dev
+ * script first). null when only tools declare ports.
+ */
 export function preferredPort(unit: ProjectUnit): number | null {
   let best: ProjectUnit["ports"][number] | null = null;
   for (const port of unit.ports) {
-    if (best === null || CONFIDENCE_RANK[port.confidence] > CONFIDENCE_RANK[best.confidence]) {
-      best = port;
-    }
+    const rank = CONFIDENCE_RANK[port.confidence];
+    if (rank < CONFIDENCE_RANK[MIN_APP_PORT_CONFIDENCE]) continue;
+    if (best === null || rank > CONFIDENCE_RANK[best.confidence]) best = port;
   }
   return best?.value ?? null;
 }

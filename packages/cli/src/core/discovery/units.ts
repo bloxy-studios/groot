@@ -10,7 +10,9 @@
  * - entry: the file the dev/start scripts run, then module/main, then the
  *   conventional server entries — always relative to the unit directory and
  *   only when the file exists inside the project.
- * - ports: scripts (high) and the entry source (medium).
+ * - ports, most likely the app's first: the scripts that run the app (high),
+ *   the entry source (medium), then ports other scripts declare for their own
+ *   tools — a database studio, storybook, a preview server (low).
  */
 import type { Confidence, PackageManager, Sha256 } from "../contracts/common.ts";
 import type { ProjectUnit } from "../contracts/project.ts";
@@ -187,28 +189,39 @@ function unitPorts(
   manifest: UnitManifest,
   entry: EntrySource | null,
 ): ObservedFact<number>[] {
-  const ports = scriptPorts(manifest.fields.scripts).map(({ port, script }) =>
-    ctx.fact({
-      value: port,
-      source: `${manifest.path}#scripts.${script}`,
-      method: "manifest",
-      confidence: "high",
-      fingerprint: manifest.sha256,
-    }),
-  );
-  if (entry === null) return ports;
-  for (const port of sourcePorts(entry.file.text)) {
-    if (ports.some((existing) => existing.value === port)) continue;
-    ports.push(
-      ctx.fact({
-        value: port,
-        source: entry.path,
-        method: "source-scan",
-        confidence: "medium",
-        fingerprint: entry.file.sha256,
-      }),
-    );
+  const declared = scriptPorts(manifest.fields.scripts);
+  const ports: ObservedFact<number>[] = [];
+  const add = (port: ObservedFact<number>): void => {
+    if (!ports.some((existing) => existing.value === port.value)) ports.push(port);
+  };
+  const fromScripts = (app: boolean): void => {
+    for (const { port, script } of declared.filter((entry) => entry.app === app)) {
+      add(
+        ctx.fact({
+          value: port,
+          source: `${manifest.path}#scripts.${script}`,
+          method: "manifest",
+          confidence: app ? "high" : "low",
+          fingerprint: manifest.sha256,
+        }),
+      );
+    }
+  };
+  fromScripts(true);
+  if (entry !== null) {
+    for (const port of sourcePorts(entry.file.text)) {
+      add(
+        ctx.fact({
+          value: port,
+          source: entry.path,
+          method: "source-scan",
+          confidence: "medium",
+          fingerprint: entry.file.sha256,
+        }),
+      );
+    }
   }
+  fromScripts(false);
   return ports;
 }
 

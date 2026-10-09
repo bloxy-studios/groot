@@ -7,7 +7,8 @@
  * never edited), and uncommitted work — staged, unstaged, untracked — is
  * preserved untouched and listed in the plan. Every inference that went into
  * the blueprint without certainty is spelled out as an assumption, so the
- * human (or agent) reviewing the plan sees exactly what Groot guessed.
+ * human (or agent) reviewing the plan sees exactly what Groot guessed — and
+ * so is every structural check already known to fail right after apply.
  *
  * Refusals are precise: an already-registered project is a conflict (see
  * `groot status`), a v1 workspace needs `groot migrate`, a broken groot.json
@@ -15,6 +16,7 @@
  * reasons and next step.
  */
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
+import { knownStructuralGaps, withKnownGap } from "../blueprint/apps.ts";
 import { emptyLock } from "../blueprint/lock.ts";
 import { MANIFEST_FILE, readManifest } from "../blueprint/manifest.ts";
 import { serializeBlueprint, serializeLock } from "../blueprint/serialize.ts";
@@ -90,7 +92,11 @@ export function registrationOwnership(builder: PlanBuilder, observation: Project
   }
 }
 
-/** Assumptions every registration plan states: dirty work preserved, local state self-ignoring. */
+/**
+ * Assumptions every registration plan states: dirty work preserved, local
+ * state self-ignoring, and every way the disk contradicts the groot.json
+ * being carried over (it is recorded as-is, never reconciled silently).
+ */
 export function registrationAssumptions(
   builder: PlanBuilder,
   observation: ProjectObservation,
@@ -107,12 +113,32 @@ export function registrationAssumptions(
   builder.assume(
     "Local operation state goes to .groot/, which ignores itself; the project's .gitignore is not edited.",
   );
+  for (const contradiction of observation.contradictions) {
+    if (contradiction.topic !== "blueprint") continue;
+    builder.assume(
+      `Recorded as groot.json has it although the disk disagrees: ${contradiction.explanation}.`,
+    );
+  }
 }
 
-/** Structural checks that prove the registration (blueprint, env, ownership, each app's package). */
+/**
+ * Structural checks that prove the registration (blueprint, env, ownership,
+ * each app's package). A check already known to fail right after apply — a
+ * package without a name, apps recorded with the same dev port — is declared
+ * with the gap noted on it and stated as an assumption, so `groot verify`
+ * reports nothing the plan did not announce.
+ */
 export function registrationVerification(builder: PlanBuilder, blueprint: BlueprintV2): void {
+  const gaps = knownStructuralGaps(blueprint);
+  const recorded = new Map(blueprint.verification.map((contract) => [contract.id, contract]));
   for (const contract of defaultContracts(blueprint)) {
-    if (contract.profile === "structural") builder.verify(contract);
+    if (contract.profile !== "structural") continue;
+    builder.verify(recorded.get(contract.id) ?? withKnownGap(contract, gaps.get(contract.id)));
+  }
+  for (const [id, gap] of gaps) {
+    builder.assume(
+      `Known gap: ${id} will fail right after apply — ${gap}. Registration records the project as it is and changes nothing to fix it.`,
+    );
   }
 }
 

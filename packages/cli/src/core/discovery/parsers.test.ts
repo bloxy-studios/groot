@@ -101,9 +101,34 @@ describe("ports", () => {
 
     // Assert
     expect(ports).toEqual([
-      { port: 3000, script: "dev" },
-      { port: 8080, script: "start" },
-      { port: 4173, script: "preview" },
+      { port: 3000, script: "dev", app: true },
+      { port: 8080, script: "start", app: true },
+      { port: 4173, script: "preview", app: false },
+    ]);
+  });
+
+  test("only dev/start/serve and what they `bun run` declare the app's port; a tool's is its own", () => {
+    // Arrange
+    const scripts = {
+      dev: "bun run server",
+      server: "bun --watch src/index.ts --port 4000",
+      start: "bun run start:prod",
+      "start:prod": "PORT=8787 bun src/index.ts",
+      "dev:email": "email dev --port 3001",
+      "db:studio": "drizzle-kit studio --port 4983",
+      storybook: "storybook dev -p 6006",
+    };
+
+    // Act
+    const ports = scriptPorts(scripts);
+
+    // Assert
+    expect(ports).toEqual([
+      { port: 4000, script: "server", app: true },
+      { port: 8787, script: "start:prod", app: true },
+      { port: 4983, script: "db:studio", app: false },
+      { port: 3001, script: "dev:email", app: false },
+      { port: 6006, script: "storybook", app: false },
     ]);
   });
 
