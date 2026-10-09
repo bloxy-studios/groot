@@ -5,9 +5,11 @@
  * write nothing.
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { planToManifest } from "../engine/plan.ts";
 import { MANIFEST_SCHEMA_URL, MANIFEST_VERSION, type PlannedScaffold } from "../engine/types.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
@@ -134,4 +136,39 @@ describe("groot add --dry-run --json (process-level)", () => {
     expect(exitCode).toBe(2);
     expect(stderr).toContain("already filled");
   });
+});
+
+describe("groot add on a v2 workspace with an unreadable groot.lock.json (process-level)", () => {
+  test("exit 2 naming the lock before anything grows — no stack trace, groot.json untouched", async () => {
+    const root = await workspace([WEB_NEXT]);
+    const blueprint = planToManifest({
+      name: "grown",
+      targetDir: root,
+      createdWith: TEST_CREATED_WITH,
+      conventions: { packagesNamespace: "@repo" },
+      scaffolds: [WEB_NEXT],
+      options: {
+        install: false,
+        git: false,
+        dirConflict: "error",
+        keepFailed: false,
+        verbose: false,
+      },
+    });
+    await writeFile(join(root, "groot.json"), `${JSON.stringify(blueprint, null, 2)}\n`);
+    // Two branches that each grew the workspace, merged without resolving the lock.
+    await writeFile(
+      join(root, "groot.lock.json"),
+      "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n",
+    );
+    const manifest = await readFile(join(root, "groot.json"), "utf8");
+
+    const { stderr, exitCode } = await runAdd(root, ["elysia", "--no-install"]);
+
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("groot.lock.json");
+    expect(stderr).not.toContain("SyntaxError");
+    expect(existsSync(join(root, "apps/api"))).toBe(false);
+    expect(await readFile(join(root, "groot.json"), "utf8")).toBe(manifest);
+  }, 60_000);
 });

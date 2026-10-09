@@ -17,7 +17,9 @@
  * `source: "unresolved"` with null fields (the lock stays honest about it).
  * A registry that answers definitively — no such package, no matching
  * version — is GROOT_E_NOT_FOUND, because a pin that matches nothing is a
- * real defect to surface, not a transient condition to paper over.
+ * real defect to surface, not a transient condition to paper over. (`init`
+ * and `add` report it as the generator failure it is for them — exit 4, see
+ * engine/locks.ts.)
  */
 import { z } from "zod";
 import type { GeneratorLock } from "../contracts/lock.ts";

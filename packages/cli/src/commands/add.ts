@@ -17,7 +17,7 @@ import {
   resolveAddScaffold,
 } from "../engine/add.ts";
 import { EXIT, GrootError } from "../engine/errors.ts";
-import { resolveGenerators } from "../engine/locks.ts";
+import { assertLockReadable, resolveGenerators } from "../engine/locks.ts";
 import { loadManifest } from "../engine/manifest.ts";
 import { describeScaffold, planToManifest } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
@@ -55,6 +55,8 @@ async function runAdd(args: {
     keepFailed: args.keepFailed,
     verbose: args.verbose,
   });
+  // Stitch updates groot.lock.json last — refuse an unreadable one now, before anything grows.
+  await assertLockReadable(plan);
 
   // In --json mode all diagnostics go to stderr so stdout stays pure
   // machine-readable output (docs/cli-spec.md#output-contract).
