@@ -91,7 +91,7 @@ bunx create-expo-app@4 apps/mobile --template default@sdk-57 --no-install --yes
 
 ```
 apps/api/
-├── src/index.ts       # new Elysia().get("/", …).listen(3001)  ← port patched from default 3000
+├── src/index.ts       # new Elysia().get("/", …).listen(Number(process.env.PORT ?? 3001))  ← PORT wins; default patched from 3000
 ├── package.json       # dev: bun --watch src/index.ts · build: bun build … · start · test: bun test
 ├── tsconfig.json      # strict: true
 └── README.md
@@ -112,7 +112,7 @@ bunx create-hono@0.19 apps/api --template bun --pm bun
 - Templates are fetched from `honojs/starter` pinned to a tag matching create-hono's own major.minor — deterministic per CLI version. Sets `package.json#name` to the directory basename.
 - Never git-inits. ⚠️ **Non-empty target → interactive confirm with no bypass flag** — groot must always target a freshly created directory.
 - Generates: `src/index.ts` (`export default app`), `package.json` (`dev: bun run --hot src/index.ts`, `hono ^4.12`), `tsconfig.json`.
-- groot post-patch: Bun serves default-export apps on port 3000 → rewrite to `export default { port: 3001, fetch: app.fetch }`; add `build`/`start` scripts mirroring the Elysia layout.
+- groot post-patch: Bun serves default-export apps on port 3000 → rewrite to `export default { port: Number(process.env.PORT ?? 3001), fetch: app.fetch }` (PORT still wins — `groot verify` starts the app on an ephemeral port through it); add `build`/`start` scripts mirroring the Elysia layout. Doctor reads the configured number from either this form or an older bare `port: 3001`.
 - Sources: <https://github.com/honojs/create-hono>, <https://github.com/honojs/starter/tree/main/templates/bun>.
 
 ## 7. Backend: Convex — files written directly, `_generated` stubs vendored
@@ -248,7 +248,7 @@ bunx fastify-cli@8 generate api --lang=ts --esm
 - `--lang=ts --esm` pins the ESM TypeScript template (`templates/app-ts-esm`): an @fastify/autoload app plugin (`src/app.ts`, `forceESM: true`) with `src/plugins/` + `src/routes/` and a node:test suite. Ships `__gitignore`, renamed to `.gitignore` on copy (generify's `__` → `.` convention, verified in generify 4.2.0). Its tsconfig sets `outDir: dist`, `allowImportingTsExtensions` + `rewriteRelativeImportExtensions` — so groot's server entry can import `./app.ts` directly while `tsc` still emits clean JS.
 - **The template serves through the Node-centric `fastify start` wrapper** — groot instead overlays `src/server.ts` (modeled on fastify-cli's own eject template: register the app plugin, listen on :3001) and the stitch stage swaps the scripts wholesale for the bun set: `dev: bun --watch src/server.ts`, `start`, `build: tsc` (→ `dist/`, turbo-cached), `test: bun test`, `typecheck`. The rewrite is marker-gated on the template's own dev script; hand-rolled scripts are never clobbered. Template devDependencies stay as-is (ts-node/c8/concurrently go unused under bun — harmless, and removing them would couple groot to template internals).
 - **@fastify/autoload ≥ 6 detects bun natively** (`'Bun' in globalThis`, `lib/runtime.js`) and loads the `.ts` plugins/routes with no compile step or env var. Bun's node:test shim runs the template's test suite (`test`/`t.after`/`node:assert` verified locally on bun 1.3.14).
-- **Port 3001**, shared with elysia/hono per the same-slot rule; the port lives in groot's `src/server.ts` (doctor watches the `port: 3001 }` marker there).
+- **Port 3001**, shared with elysia/hono per the same-slot rule; the port lives in groot's `src/server.ts` as `listen({ port: Number(process.env.PORT ?? 3001) })` (doctor compares the configured number, so `30011` never passes for `3001`).
 - Sources: <https://github.com/fastify/fastify-cli> (generate.js, args.js, templates/), <https://www.npmjs.com/package/fastify-cli> (published 8.0.0 bundle), <https://github.com/fastify/fastify-autoload> (lib/runtime.js bun detection).
 
 ## 16. Mobile: React Native (bare) — `@react-native-community/cli init`

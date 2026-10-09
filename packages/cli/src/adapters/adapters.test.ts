@@ -773,12 +773,12 @@ describe("fastify (scaffold-flows.md#15)", () => {
     // Registers the generated autoload app plugin — .ts import rides the
     // template tsconfig's allowImportingTsExtensions.
     expect(server).toContain('import app from "./app.ts"');
-    // The ` }` bound is the doctor's drift marker (see fastifyAdapter.doctor).
-    expect(server).toContain("port: 3001 }");
+    // PORT wins (verification runs apps on ephemeral ports); the plan's port is the default.
+    expect(server).toContain("listen({ port: Number(process.env.PORT ?? 3001) })");
     // The overlay must stay inside the generated dependency set — eject's
     // close-with-grace is NOT a dependency of the generated app.
     expect(server).not.toContain("close-with-grace");
-    expect(fastifyServerTs(4000)).toContain("port: 4000 }");
+    expect(fastifyServerTs(4000)).toContain("port: Number(process.env.PORT ?? 4000) }");
   });
 });
 
@@ -804,7 +804,7 @@ describe("elysia (direct-write — scaffold-flows.md#5)", () => {
       "apps/api/tsconfig.json",
     ]);
     const indexTs = files.find((f) => f.path.endsWith("src/index.ts"));
-    expect(indexTs?.contents).toContain(".listen(3001)");
+    expect(indexTs?.contents).toContain(".listen(Number(process.env.PORT ?? 3001))");
     const packageJson = JSON.parse(
       files.find((f) => f.path.endsWith("package.json"))?.contents ?? "{}",
     );
@@ -969,4 +969,54 @@ describe("supabase (package shell + official init — scaffold-flows.md#17)", ()
     checks = (await supabaseAdapter.doctor?.({ workspaceRoot: root, scaffold })) ?? [];
     expect(checks.map((c) => c.status)).toEqual(["pass", "pass"]);
   });
+});
+
+describe("API scaffolds honor PORT; doctor compares the configured port number", () => {
+  const scaffoldFor = (framework: "elysia" | "hono" | "fastify"): PlannedScaffold => ({
+    slot: "api",
+    framework,
+    path: "apps/api",
+    generator: null,
+    port: 3001,
+  });
+  const cases = [
+    {
+      adapter: elysiaAdapter,
+      framework: "elysia",
+      file: "src/index.ts",
+      source: (value: string) => `const app = new Elysia().listen(${value});\n`,
+    },
+    {
+      adapter: honoAdapter,
+      framework: "hono",
+      file: "src/index.ts",
+      source: (value: string) => `export default {\n  port: ${value},\n  fetch: app.fetch,\n}\n`,
+    },
+    {
+      adapter: fastifyAdapter,
+      framework: "fastify",
+      file: "src/server.ts",
+      source: (value: string) => `await server.listen({ port: ${value} });\n`,
+    },
+  ] as const;
+
+  for (const { adapter, framework, file, source } of cases) {
+    test(`${framework}: the PORT form and the legacy literal pass; another port (even 30011) warns`, async () => {
+      const root = await mkdtemp(join(tmpdir(), `groot-${framework}-port-`));
+      await mkdir(join(root, "apps/api/src"), { recursive: true });
+      const status = async (value: string): Promise<string | undefined> => {
+        await writeFile(join(root, "apps/api", file), source(value));
+        const checks = await adapter.doctor?.({
+          workspaceRoot: root,
+          scaffold: scaffoldFor(framework),
+        });
+        return checks?.find((check) => check.name === "apps/api dev port")?.status;
+      };
+      expect(await status("Number(process.env.PORT ?? 3001)")).toBe("pass");
+      expect(await status("3001")).toBe("pass");
+      expect(await status("Number(process.env.PORT ?? 30011)")).toBe("warn");
+      expect(await status("30011")).toBe("warn");
+      expect(await status("4000")).toBe("warn");
+    });
+  }
 });

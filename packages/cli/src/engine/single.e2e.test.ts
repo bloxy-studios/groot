@@ -46,7 +46,9 @@ describe.skipIf(!e2e)("single-app topology (real create-hono)", () => {
 
     const pkg = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8"));
     expect(pkg).toMatchObject({ name: "svc", private: true });
-    expect(await readFile(join(targetDir, "src/index.ts"), "utf8")).toContain("port: 3001");
+    expect(await readFile(join(targetDir, "src/index.ts"), "utf8")).toContain(
+      "port: Number(process.env.PORT ?? 3001)",
+    );
     const blueprint = BlueprintV2.parse(
       JSON.parse(await readFile(join(targetDir, "groot.json"), "utf8")),
     );

@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { apiPortSource } from "../adapters/elysia.ts";
 import { ADAPTERS } from "../adapters/index.ts";
 import { backendEnvLines } from "./env-names.ts";
 import { EXIT, GrootError } from "./errors.ts";
@@ -95,7 +96,8 @@ export async function stitchLockfileHygiene(plan: Plan): Promise<string[]> {
 
 /**
  * Hono's bun template exports the app directly, which Bun serves on port 3000 —
- * colliding with Next.js. Rewrite each hono scaffold to its assigned port —
+ * colliding with Next.js. Rewrite each hono scaffold to read PORT (how verify
+ * runs it on an ephemeral port), defaulting to its assigned port —
  * `groot add --path` can grow a second one. (Elysia's port is written correctly
  * at generation time; Next/Vite/Metro keep their defaults.)
  */
@@ -117,7 +119,7 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
     }
     const rewritten = source.replace(
       marker,
-      `export default {\n  port: ${hono.port},\n  fetch: app.fetch,\n}`,
+      `export default {\n  port: ${apiPortSource(hono.port)},\n  fetch: app.fetch,\n}`,
     );
     await writeFile(path, rewritten, "utf8");
     notes.push(`${hono.path}/src/index.ts → dev port ${hono.port}`);

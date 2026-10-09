@@ -36,7 +36,7 @@ import type {
   GeneratorCommand,
   ScaffoldAdapter,
 } from "../engine/adapter.ts";
-import { apiPortCheck } from "./elysia.ts";
+import { apiPortCheck, apiPortSource, portPattern } from "./elysia.ts";
 
 /**
  * Bun-native server entry groot overlays next to the generated app plugin.
@@ -60,7 +60,7 @@ const server = Fastify({ logger: true });
 await server.register(app);
 
 try {
-  await server.listen({ port: ${port} });
+  await server.listen({ port: ${apiPortSource(port)} });
 } catch (err) {
   server.log.error(err);
   process.exit(1);
@@ -94,9 +94,11 @@ export const fastifyAdapter: ScaffoldAdapter = {
     return [{ path: `${ctx.scaffold.path}/src/server.ts`, contents: fastifyServerTs(port) }];
   },
   async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
-    // The ` }` bound keeps the includes-based check from matching a longer
-    // port (`port: 3001 }` never matches inside `port: 30011 }`).
-    const portCheck = await apiPortCheck(ctx, `port: ${ctx.scaffold.port} }`, "src/server.ts");
+    const portCheck = await apiPortCheck(
+      ctx,
+      portPattern(String.raw`listen\(\{\s*port:`, String.raw`\}`),
+      "src/server.ts",
+    );
     const appPresent = existsSync(join(ctx.workspaceRoot, ctx.scaffold.path, "src/app.ts"));
     return [
       portCheck,

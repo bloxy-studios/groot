@@ -586,7 +586,9 @@ describe("executeAdd (offline, real adapters)", () => {
       onStep: (label) => steps.push(label),
     });
 
-    expect(await readFile(join(root, "apps/api/src/index.ts"), "utf8")).toContain(".listen(3001)");
+    expect(await readFile(join(root, "apps/api/src/index.ts"), "utf8")).toContain(
+      ".listen(Number(process.env.PORT ?? 3001))",
+    );
     const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
     expect(manifest.scaffolds).toHaveLength(2);
     expect(manifest.createdWith).toBe(TEST_CREATED_WITH);

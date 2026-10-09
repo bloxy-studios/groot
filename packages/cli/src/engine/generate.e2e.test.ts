@@ -78,7 +78,7 @@ describe.skipIf(!e2e)("full pipeline (real generators — flagship + electron de
 
       // Elysia files written with the assigned port.
       const api = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
-      expect(api).toContain(".listen(3001)");
+      expect(api).toContain(".listen(Number(process.env.PORT ?? 3001))");
 
       // Convex: vendored _generated stubs + tsconfig in place.
       expect(existsSync(join(root, "packages/backend/convex/_generated/api.d.ts"))).toBe(true);
@@ -182,7 +182,7 @@ describe.skipIf(!e2e)("full pipeline (real generators — sveltekit + hono + add
       expect(honoPkg.dependencies.hono).toBeDefined();
       // Stitch rewrites Bun's default-export port so the API doesn't collide with web.
       const honoIndex = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
-      expect(honoIndex).toContain("port: 3001");
+      expect(honoIndex).toContain("port: Number(process.env.PORT ?? 3001)");
 
       // Grow a SECOND web scaffold via --path: the REAL tanstack create.
       // sveltekit(5173) + hono(3001) + tanstack(3000) → no port collisions.
@@ -289,7 +289,7 @@ describe.skipIf(!e2e)(
         const elysia = await addOnce("elysia");
         expect(elysia.warnings).toEqual([]);
         const api = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
-        expect(api).toContain(".listen(3001)");
+        expect(api).toContain(".listen(Number(process.env.PORT ?? 3001))");
 
         await addOnce("convex");
         // The full (idempotent) stitch after adding convex wires the EXISTING web app.
@@ -453,7 +453,7 @@ describe.skipIf(!e2e)(
         expect(existsSync(join(root, "apps/api/.git"))).toBe(false);
         // groot's bun-native server entry overlays the template.
         const server = await readFile(join(root, "apps/api/src/server.ts"), "utf8");
-        expect(server).toContain("port: 3001 }");
+        expect(server).toContain("port: Number(process.env.PORT ?? 3001) }");
         // `npm init -y` named the package from the basename; stitch keeps "api".
         const apiPkg = JSON.parse(await readFile(join(root, "apps/api/package.json"), "utf8"));
         expect(apiPkg.name).toBe("api");

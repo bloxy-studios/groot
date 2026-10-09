@@ -88,8 +88,8 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `apps/web` (React Router) | 5173 | Vite default (kept) — shared with SvelteKit, like elysia/hono on 3001 |
 | `apps/web` (Nuxt) | 3000 | `nuxt dev` built-in default (kept) — shared with Next/TanStack |
 | `apps/web` (Vite) | 5173 | Vite default (kept) — shared with SvelteKit/React Router |
-| `apps/api` (Elysia / Hono) | 3001 | Written into source (`.listen(3001)` / `export default { port: 3001, fetch }`) — these templates have no port flag |
-| `apps/api` (Fastify) | 3001 | Written into groot's `src/server.ts` overlay (`listen({ port: 3001 })`) — shared with Elysia/Hono per the same-slot rule |
+| `apps/api` (Elysia / Hono) | 3001 | Written into source as `Number(process.env.PORT ?? 3001)` (`.listen(…)` / `export default { port: …, fetch }`) — these templates have no port flag; `PORT` overrides it, which is how `groot verify` runs the app on an ephemeral port |
+| `apps/api` (Fastify) | 3001 | Written into groot's `src/server.ts` overlay (`listen({ port: Number(process.env.PORT ?? 3001) })`) — shared with Elysia/Hono per the same-slot rule; `PORT` overrides it |
 | `apps/mobile` (Expo / Metro) | 8081 | Metro default (kept) |
 | `apps/mobile` (React Native bare) | 8081 | Metro default (kept) — shared with Expo per the same-slot rule; the stitch adds monorepo watchFolders/module resolution |
 | `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |

@@ -195,7 +195,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
 
     // Hono port rewritten to the plan's assignment.
     const honoIndex = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
-    expect(honoIndex).toContain("port: 3001");
+    expect(honoIndex).toContain("port: Number(process.env.PORT ?? 3001)");
     expect(honoIndex).toContain("fetch: app.fetch");
     expect(honoIndex).not.toContain("export default app\n");
 
