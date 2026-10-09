@@ -16,6 +16,7 @@ import {
 import { ResultEnvelope } from "../core/contracts/envelope.ts";
 import type { VerificationReport } from "../core/contracts/evidence.ts";
 import { spawnCli, waitFor } from "../core/executor/test-support.ts";
+import { appFixture } from "../core/test-fixtures.ts";
 import { verifyResult } from "./verify.ts";
 
 const PROCESS_TIMEOUT = 180_000;
@@ -55,6 +56,47 @@ describe("groot verify exit mapping", () => {
     const passed = verifyResult(report([evidence("a", "pass"), evidence("b", "skipped")]));
     expect(passed).toMatchObject({ ok: true, exitCode: 0, blocked: [] });
   });
+});
+
+describe("groot verify --unit (process-level)", () => {
+  test(
+    "runs one app's checks plus the project-wide ones; a path that is no app is a usage error",
+    async () => {
+      // Arrange
+      const root = registeredProject(["a", "b"], {
+        apps: [
+          appFixture({ id: "a", path: "apps/a", port: 3001 }),
+          appFixture({ id: "b", path: "apps/b", port: 3002 }),
+        ],
+      });
+
+      // Act
+      const scoped = spawnCli(root, [
+        "verify",
+        "--unit",
+        "./apps/a/",
+        "--profile",
+        "structural",
+        "--json",
+      ]);
+      const unknown = spawnCli(root, ["verify", "--unit", "apps/zzz", "--json"]);
+      const [run, refused] = await Promise.all([scoped.done, unknown.done]);
+
+      // Assert
+      expect(run.exitCode).toBe(0);
+      const report = ResultEnvelope.parse(JSON.parse(run.stdout)).data as VerificationReport;
+      const checks = report.evidence.map((entry) => entry.check);
+      expect(checks).toContain("structural.package.a");
+      expect(checks).toContain("structural.blueprint");
+      expect(checks).not.toContain("structural.package.b");
+      expect(refused.exitCode).toBe(2);
+      const envelope = ResultEnvelope.parse(JSON.parse(refused.stdout));
+      expect(envelope.error?.id).toBe("GROOT_E_USAGE");
+      expect(envelope.error?.message).toContain("apps/zzz");
+      expect(envelope.error?.hint).toContain("apps/a, apps/b");
+    },
+    PROCESS_TIMEOUT,
+  );
 });
 
 describe.skipIf(process.platform === "win32")("SIGINT during verification (process-level)", () => {

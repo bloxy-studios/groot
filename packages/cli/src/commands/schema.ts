@@ -21,7 +21,7 @@ export const V2_COMMANDS: readonly { name: string; summary: string }[] = [
   },
   { name: "adopt", summary: "Register an existing project (previewable; preserves layout)" },
   { name: "migrate", summary: "Explicit groot.json v1 → v2 migration (previewable)" },
-  { name: "plan", summary: "Resolve an init/add/context-sync change into a concrete plan" },
+  { name: "plan", summary: "Resolve an add/context-sync change into a concrete plan" },
   { name: "apply", summary: "Execute a plan with journaled checkpoints" },
   { name: "verify", summary: "Run structural/build/runtime/product-flow checks → evidence" },
   { name: "evidence", summary: "List or show stored evidence (addressable, redacted)" },

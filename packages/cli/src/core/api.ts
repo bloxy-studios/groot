@@ -4,15 +4,17 @@
  * policy enforcement, execution, verification, context, and tasks behave
  * identically no matter who asks.
  */
+import { posix } from "node:path";
 import { readLock, readManifest } from "./blueprint/index.ts";
 import { bootstrapCore } from "./bootstrap.ts";
 import { listCapabilities } from "./capabilities/registry.ts";
 import { planContextSync } from "./context/sync.ts";
 import { buildTaskContext } from "./context/task-context.ts";
 import type { BlueprintV2, Policy } from "./contracts/blueprint.ts";
-import type { Sha256 } from "./contracts/common.ts";
+import type { Sha256, VerificationProfile } from "./contracts/common.ts";
 import { schemaUrl } from "./contracts/common.ts";
 import { ERROR_IDS } from "./contracts/envelope.ts";
+import type { VerificationReport } from "./contracts/evidence.ts";
 import { CONTRACTS } from "./contracts/index.ts";
 import type { GrootLock } from "./contracts/lock.ts";
 import { OperationPlan } from "./contracts/plan.ts";
@@ -33,7 +35,7 @@ import { findProjectRoot } from "./executor/root.ts";
 import type { GrootApi } from "./mcp/api.ts";
 import { planAddCapability } from "./planner/add-capability.ts";
 import { PlanBuilder } from "./planner/builder.ts";
-import { createdWith, GROOT_VERSION } from "./runtime.ts";
+import { type CoreContext, createdWith, GROOT_VERSION } from "./runtime.ts";
 import { statePaths } from "./state.ts";
 import * as tasks from "./tasks/index.ts";
 import { defaultContracts } from "./verify/checkers.ts";
@@ -91,6 +93,43 @@ export async function requireRegistered(root: string): Promise<RegisteredProject
  */
 export async function projectPolicy(root: string): Promise<Policy> {
   return (await loadProjectPolicy(root)).policy;
+}
+
+export interface VerifyOptions {
+  readonly profiles: readonly VerificationProfile[];
+  readonly capability: string | null;
+  /** One app's path (`groot verify --unit`): its checks plus the project-wide ones. */
+  readonly unit?: string | null;
+}
+
+/** The blueprint app path `unit` names ("./apps/api/" → "apps/api"), or GROOT_E_USAGE. */
+function unitPath(blueprint: BlueprintV2, unit: string): string {
+  const path = posix.normalize(unit).replace(/\/+$/, "") || ".";
+  const app = blueprint.apps.find((entry) => entry.path === path);
+  if (app !== undefined) return app.path;
+  throw new GrootV2Error("GROOT_E_USAGE", `No app at "${unit}" in groot.json.`, {
+    hint: `Apps: ${blueprint.apps.map((entry) => entry.path).join(", ")}.`,
+  });
+}
+
+/** Run the project's verification contracts (blueprint + defaults) and record evidence. */
+export async function verifyProject(
+  ctx: CoreContext,
+  root: string,
+  options: VerifyOptions,
+): Promise<VerificationReport> {
+  const project = await requireRegistered(root);
+  const unit = options.unit == null ? null : unitPath(project.blueprint, options.unit);
+  return runVerification(ctx, {
+    root,
+    blueprint: project.blueprint,
+    observation: await inspect(ctx, root),
+    lock: project.lock,
+    profiles: options.profiles,
+    capability: options.capability,
+    unit,
+    extra: defaultContracts(project.blueprint),
+  });
 }
 
 export function createApi(): GrootApi {
@@ -187,7 +226,15 @@ export function createApi(): GrootApi {
       });
       const plan = builder.build();
       await savePlan(root, plan);
-      return { plan, changes: result.changes, warnings: result.warnings };
+      return {
+        plan,
+        changes: result.changes,
+        // Every surface reports a skipped conflict: the plan leaves that file alone.
+        warnings: [
+          ...result.warnings,
+          ...result.conflicts.map((change) => `skipped ${change.path}: ${change.reason}`),
+        ],
+      };
     },
 
     async getPlan(root, planId) {
@@ -234,17 +281,8 @@ export function createApi(): GrootApi {
       return readOperation(root, operationId);
     },
 
-    async verify(ctx, root, options) {
-      const project = await requireRegistered(root);
-      return runVerification(ctx, {
-        root,
-        blueprint: project.blueprint,
-        observation: await inspect(ctx, root),
-        lock: project.lock,
-        profiles: options.profiles,
-        capability: options.capability,
-        extra: defaultContracts(project.blueprint),
-      });
+    verify(ctx, root, options) {
+      return verifyProject(ctx, root, options);
     },
 
     getEvidence(root, id) {
