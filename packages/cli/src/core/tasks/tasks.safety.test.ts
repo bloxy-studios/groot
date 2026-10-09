@@ -247,7 +247,7 @@ describe("pre-review acceptance", () => {
   );
 
   test(
-    "verification events are redacted too; build evidence says its scripts got the full environment",
+    "verification events are redacted too; build evidence states its scripts ran credential-free",
     async () => {
       // Arrange — a registered project whose build fails printing the credential's value.
       const project = await tempProject();
@@ -286,7 +286,8 @@ describe("pre-review acceptance", () => {
       const build = (await Promise.all(ran.evidence.map((id) => readEvidence(project.root, id))))
         .filter((evidence) => evidence.method.tool === "build.build")
         .flatMap((evidence) => evidence.limitations);
-      expect(build.join(" ")).toContain("full environment");
+      expect(build.join(" ")).toContain("credential-like environment variables removed");
+      expect(build.join(" ")).not.toContain("full environment");
     },
     TIMEOUT,
   );

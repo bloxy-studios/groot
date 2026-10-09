@@ -310,11 +310,20 @@ function importEvidence(checked: Checked, record: Evidence): Evidence {
     writeFileAtomic(join(to, name), content);
     return [{ ...artifact, sha256: sha256Of(content), bytes: Buffer.byteLength(content) }];
   });
+  // A pre-review check that ran code (project scripts, a live server) ran it
+  // with the credential-free context env, like the command criteria.
+  const ranCode = !run.reviewed && record.method.kind !== "static";
   const imported = Evidence.parse({
     ...redactValue(record, run.secrets),
     artifacts,
     simulated: record.simulated || run.simulated,
-    limitations: [...new Set([...record.limitations, ...checked.limitations])],
+    limitations: [
+      ...new Set([
+        ...record.limitations,
+        ...checked.limitations,
+        ...(ranCode ? [CREDENTIAL_FREE_LIMITATION] : []),
+      ]),
+    ],
   });
   mkdirSync(to, { recursive: true });
   writeFileAtomic(join(to, "evidence.json"), prettyJson(imported));
