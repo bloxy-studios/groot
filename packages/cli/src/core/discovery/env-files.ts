@@ -1,10 +1,15 @@
 /**
  * Environment files: discovery reports which `.env*` files a unit has and
  * the variable NAMES they assign — never values. The parser keeps only the
- * name capture of each assignment; values are skipped (including multi-line
- * quoted values, whose continuation lines must not be mistaken for
- * assignments), so nothing secret can reach an observation, a plan, or
- * agent context through discovery.
+ * name capture of each assignment; values are skipped, so nothing secret can
+ * reach an observation, a plan, or agent context through discovery.
+ *
+ * Lines inside a value are never mistaken for assignments: a quoted value
+ * spanning lines is skipped through its closing quote (whatever its key looks
+ * like), an armored block (`-----BEGIN …` through `-----END …`, e.g. a PEM key
+ * pasted without quotes) is skipped whole, and a line whose "value" starts
+ * with another `=` (a base64 padding tail such as `kQ29uZg==`) is not an
+ * assignment.
  */
 import { hasPublicPrefix } from "../env.ts";
 import type { ProjectFs } from "./fs.ts";
@@ -22,7 +27,12 @@ export interface EnvFindings {
 
 /** `.env` and `.env.<anything>` (not `.envrc`, a direnv shell script). */
 const ENV_FILE = /^\.env(?:\..+)?$/;
-const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
+/** A dotenv assignment line; dotenv also accepts `.` and `-` in keys. */
+const ASSIGNMENT = /^\s*(?:export\s+)?([\w.-]+)\s*=\s*(.*)$/;
+/** The only keys reported as variable names. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ARMOR_BEGIN = "-----BEGIN ";
+const ARMOR_END = "-----END ";
 const MAX_ENV_BYTES = 256 * 1024;
 
 /** The quote a value opens without closing on the same line, if any. */
@@ -50,20 +60,39 @@ function closesQuote(line: string, quote: string): boolean {
   return false;
 }
 
+/** Does unquoted text (inline ` # comment` ignored) open an armored block it does not close? */
+function opensArmor(text: string): boolean {
+  const code = text.replace(/(?:^|\s)#.*$/, "");
+  const begin = code.lastIndexOf(ARMOR_BEGIN);
+  return begin !== -1 && !code.includes(ARMOR_END, begin);
+}
+
 /** Variable names assigned in dotenv text, in first-appearance order. */
 export function envNames(text: string): string[] {
   const names: string[] = [];
   let pendingQuote: string | null = null;
+  let inArmor = false;
   for (const line of text.split(/\r?\n/)) {
     if (pendingQuote !== null) {
       if (closesQuote(line, pendingQuote)) pendingQuote = null;
       continue;
     }
+    if (inArmor) {
+      if (line.includes(ARMOR_END)) inArmor = opensArmor(line); // a chained block may open here
+      continue;
+    }
     const match = ASSIGNMENT.exec(line);
-    if (match === null) continue;
+    if (match === null) {
+      inArmor = opensArmor(line);
+      continue;
+    }
     const name = match[1] as string;
+    const value = match[2] as string;
+    pendingQuote = openQuote(value);
+    // A quoted value is self-contained (or tracked above); only bare text opens a block.
+    if (!/^["'`]/.test(value)) inArmor = opensArmor(value);
+    if (!IDENTIFIER.test(name) || value.startsWith("=")) continue;
     if (!names.includes(name)) names.push(name);
-    pendingQuote = openQuote(match[2] as string);
   }
   return names;
 }

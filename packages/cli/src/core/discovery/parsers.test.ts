@@ -178,6 +178,75 @@ describe("dotenv names", () => {
     expect(names).toEqual(["TOKEN", "EMPTY", "PRIVATE_KEY", "AFTER"]);
     expect(JSON.stringify(names)).not.toContain("abc");
   });
+
+  test("key material in an unquoted PEM or other armored block never becomes a name", () => {
+    // Arrange: base64 lines ending in padding look like `name=` assignments.
+    const text = [
+      "PRIVATE_KEY=-----BEGIN PRIVATE KEY-----",
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7",
+      "kSECRETfragmentXYZ==",
+      "qSECRETtail=",
+      "-----END PRIVATE KEY-----",
+      "CERT_NAME=web",
+      "-----BEGIN CERTIFICATE-----",
+      "cSECRETcert=",
+      "-----END CERTIFICATE-----",
+      "INLINE_PEM=-----BEGIN KEY-----abc-----END KEY-----",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act
+    const names = envNames(text);
+
+    // Assert
+    expect(names).toEqual(["PRIVATE_KEY", "CERT_NAME", "INLINE_PEM", "AFTER"]);
+    expect(names.join("\n")).not.toContain("SECRET");
+  });
+
+  test("a BEGIN marker in a comment or a closed quoted value does not hide later names", () => {
+    // Arrange
+    const text = [
+      "# paste the key as one line: -----BEGIN PRIVATE KEY----- …",
+      'ONE_LINE_KEY="-----BEGIN PRIVATE KEY-----\\nabc\\n"',
+      "NOTE=see docs # format: -----BEGIN CERTIFICATE-----",
+      "-----END CERTIFICATE-----",
+      "-----BEGIN CERTIFICATE-----",
+      "aSECRET=",
+      "-----END CERTIFICATE----- -----BEGIN CERTIFICATE-----",
+      "bSECRET=",
+      "-----END CERTIFICATE-----",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act / Assert
+    expect(envNames(text)).toEqual(["ONE_LINE_KEY", "NOTE", "AFTER"]);
+  });
+
+  test("a base64 padding tail outside any block is not an assignment", () => {
+    // Arrange: an unquoted, line-wrapped base64 value ends in a padded line.
+    const text = ["BLOB=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", "bSECRETpadding==", "AFTER=1"].join(
+      "\n",
+    );
+
+    // Act / Assert
+    expect(envNames(text)).toEqual(["BLOB", "AFTER"]);
+  });
+
+  test("a quoted value spanning lines is skipped whole, whatever its key looks like", () => {
+    // Arrange: dotenv accepts keys with dashes and dots; groot reports only identifiers.
+    const text = [
+      'my-key="first line',
+      "qSECRETinside=value",
+      'last line"',
+      "app.token='a",
+      "tSECRETinside=1",
+      "'",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act / Assert
+    expect(envNames(text)).toEqual(["AFTER"]);
+  });
 });
 
 describe("pnpm-workspace.yaml", () => {
