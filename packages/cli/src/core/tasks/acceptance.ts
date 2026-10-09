@@ -15,10 +15,10 @@
  * Before review (`reviewed: false`) the checks execute code nobody has read
  * yet, and there is no OS sandbox: it can use the network and read and write
  * any file the user can, outside the worktree too. What Groot does about it:
- * - commands (the install and command criteria) get a credential-free
- *   environment (runners/env.ts); the build/typecheck scripts a verify
- *   criterion runs do NOT — the verification engine runs them with Groot's
- *   own environment — and their evidence says so;
+ * - commands (the install and command criteria) and the build/typecheck
+ *   scripts a verify criterion runs get a credential-free environment
+ *   (runners/env.ts; the verification engine runs project scripts with the
+ *   context's env);
  * - the caller's `tampering` check (the repository guard, guard.ts) runs
  *   after every check: a change to git refs, hooks, or config stops the
  *   remaining checks;
