@@ -264,6 +264,16 @@ describe("pnpm-workspace.yaml", () => {
     expect(parsePnpmWorkspace('packages: ["apps/*", "libs/**"]\n')).toEqual(["apps/*", "libs/**"]);
     expect(parsePnpmWorkspace("catalog:\n  react: ^19\n")).toBeNull();
   });
+
+  test("block list with zero indentation, ended by the next top-level key", () => {
+    // Arrange: YAML allows a mapping's sequence at the key's own indentation.
+    const text =
+      "packages:\n- apps/*\n- 'packages/*' # shared\n\n- tools/cli\nonlyBuiltDependencies:\n- esbuild\n";
+
+    // Act / Assert
+    expect(parsePnpmWorkspace(text)).toEqual(["apps/*", "packages/*", "tools/cli"]);
+    expect(parsePnpmWorkspace("packages:\n- apps/*\n...\n- ignored/*\n")).toEqual(["apps/*"]);
+  });
 });
 
 describe("small classifiers", () => {
