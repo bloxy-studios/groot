@@ -7,7 +7,8 @@
  * never edited), and uncommitted work — staged, unstaged, untracked — is
  * preserved untouched and listed in the plan. Every inference that went into
  * the blueprint without certainty is spelled out as an assumption, so the
- * human (or agent) reviewing the plan sees exactly what Groot guessed.
+ * human (or agent) reviewing the plan sees exactly what Groot guessed — and
+ * so is every structural check already known to fail right after apply.
  *
  * Refusals are precise: an already-registered project is a conflict (see
  * `groot status`), a v1 workspace needs `groot migrate`, a broken groot.json
@@ -15,6 +16,7 @@
  * reasons and next step.
  */
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
+import { knownGapOf, knownStructuralGaps, withKnownGap } from "../blueprint/apps.ts";
 import { emptyLock } from "../blueprint/lock.ts";
 import { MANIFEST_FILE, readManifest } from "../blueprint/manifest.ts";
 import { serializeBlueprint, serializeLock } from "../blueprint/serialize.ts";
@@ -90,7 +92,11 @@ export function registrationOwnership(builder: PlanBuilder, observation: Project
   }
 }
 
-/** Assumptions every registration plan states: dirty work preserved, local state self-ignoring. */
+/**
+ * Assumptions every registration plan states: dirty work preserved, local
+ * state self-ignoring, and every way the disk contradicts the groot.json
+ * being carried over (it is recorded as-is, never reconciled silently).
+ */
 export function registrationAssumptions(
   builder: PlanBuilder,
   observation: ProjectObservation,
@@ -107,12 +113,36 @@ export function registrationAssumptions(
   builder.assume(
     "Local operation state goes to .groot/, which ignores itself; the project's .gitignore is not edited.",
   );
+  for (const contradiction of observation.contradictions) {
+    if (contradiction.topic !== "blueprint") continue;
+    builder.assume(
+      `Recorded as groot.json has it although the disk disagrees: ${contradiction.explanation}.`,
+    );
+  }
 }
 
-/** Structural checks that prove the registration (blueprint, env, ownership, each app's package). */
+/**
+ * Structural checks that prove the registration (blueprint, env, ownership,
+ * each app's package), declared as the blueprint records them. A check
+ * already known to fail right after apply — an app whose directory or
+ * package.json is missing, a package without a name, apps recorded with the
+ * same dev port — carries its gap in the groot.json being written (the
+ * blueprint builders note it from the observation), and every noted gap is
+ * also stated as an assumption: the plan, groot.json, and `groot verify` after
+ * apply name the same known failures.
+ */
 export function registrationVerification(builder: PlanBuilder, blueprint: BlueprintV2): void {
+  const gaps = knownStructuralGaps(blueprint); // for a structural check the blueprint does not record
+  const recorded = new Map(blueprint.verification.map((contract) => [contract.id, contract]));
   for (const contract of defaultContracts(blueprint)) {
-    if (contract.profile === "structural") builder.verify(contract);
+    if (contract.profile !== "structural") continue;
+    const declared = recorded.get(contract.id) ?? withKnownGap(contract, gaps.get(contract.id));
+    builder.verify(declared);
+    const gap = knownGapOf(declared);
+    if (gap === null) continue;
+    builder.assume(
+      `Known gap: ${contract.id} will fail right after apply — ${gap}. Registration records the project as it is and changes nothing to fix it.`,
+    );
   }
 }
 
@@ -199,9 +229,10 @@ async function assertAdoptable(observation: ProjectObservation): Promise<void> {
   }
   if (registration.status === "invalid" || registration.status === "unsupported-version") {
     await readManifest(observation.root); // rethrows the precise GROOT_E_INVALID_DOCUMENT / GROOT_E_UNSUPPORTED_SCHEMA
+    const reason = (registration.error ?? "invalid").replace(/\.$/, "");
     throw new GrootV2Error(
       "GROOT_E_INVALID_DOCUMENT",
-      `groot.json in ${observation.root} could not be read: ${registration.error ?? "invalid"}.`,
+      `groot.json in ${observation.root} could not be read: ${reason}.`,
       {
         details: { registration },
       },

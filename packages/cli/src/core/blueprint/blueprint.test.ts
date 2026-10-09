@@ -4,6 +4,8 @@
  * adoption blueprint, and lock helpers.
  */
 import { describe, expect, test } from "bun:test";
+import { chmodSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { BlueprintV2, type ManifestV1 } from "../contracts/blueprint.ts";
 import { GrootLock } from "../contracts/lock.ts";
 import { json, makeProject, V1_MANIFEST } from "../discovery/test-projects.ts";
@@ -26,8 +28,12 @@ import {
   serializeBlueprint,
   serializeLock,
 } from "./index.ts";
+import { missingRecordedApp } from "./presence.ts";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
+
+/** chmod 000 makes a file unreadable only on POSIX and only for a non-root user. */
+const CAN_REVOKE_READ = process.platform !== "win32" && process.getuid?.() !== 0;
 
 async function errorOf(promise: Promise<unknown>): Promise<GrootV2Error> {
   try {
@@ -125,6 +131,90 @@ describe("readManifest", () => {
     const issues = (error.details?.issues ?? []) as { path: string }[];
     expect(issues.map((issue) => issue.path)).toContain(path);
   });
+
+  test.skipIf(!CAN_REVOKE_READ)(
+    "a groot.json that cannot be read → GROOT_E_INVALID_DOCUMENT naming the cause, never a raw fs error",
+    async () => {
+      // Arrange
+      const root = makeProject({ "groot.json": json(V1_MANIFEST) });
+      chmodSync(join(root, "groot.json"), 0o000);
+
+      // Act
+      const error = await errorOf(readManifest(root));
+
+      // Assert
+      expect(error.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(error.message).toContain("could not be read (EACCES)");
+      expect(error.hint).toContain("readable");
+      expect(error.details).toMatchObject({ path: "groot.json", issues: [{ path: "" }] });
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a groot.json symlink that leads nowhere is invalid (the executor would never replace it), not absent",
+    async () => {
+      // Arrange: a dangling link, and a link through a regular file (ENOTDIR).
+      const dangling = makeProject({});
+      symlinkSync("missing.json", join(dangling, "groot.json"));
+      const throughFile = makeProject({ "package.json": json({ name: "x" }) });
+      symlinkSync("package.json/x", join(throughFile, "groot.json"));
+
+      // Act
+      const errors = {
+        dangling: await errorOf(readManifest(dangling)),
+        throughFile: await errorOf(readManifest(throughFile)),
+      };
+
+      // Assert
+      for (const [code, error] of [
+        ["ENOENT", errors.dangling],
+        ["ENOTDIR", errors.throughFile],
+      ] as const) {
+        expect(error.id).toBe("GROOT_E_INVALID_DOCUMENT");
+        expect(error.message).toContain(`is a symlink whose target does not exist (${code})`);
+        expect(error.hint).toContain("symlinks");
+      }
+    },
+  );
+
+  test("nothing at all is absent: a missing root, a root that is a file, no groot.json", async () => {
+    // Arrange
+    const project = makeProject({ "file.txt": "x" });
+
+    // Act
+    const reads = await Promise.all([
+      readManifest(join(project, "no-such-dir")),
+      readManifest(join(project, "file.txt")),
+      readManifest(project),
+    ]);
+
+    // Assert
+    expect(reads).toEqual([{ state: "absent" }, { state: "absent" }, { state: "absent" }]);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a groot.json symlink that loops or leaves the project gets the reader's next step, not the write-side hint",
+    async () => {
+      // Arrange
+      const looping = makeProject({});
+      symlinkSync("groot.json", join(looping, "groot.json"));
+      const outside = makeProject({});
+      symlinkSync(
+        join(makeProject({ "x.json": json(V1_MANIFEST) }), "x.json"),
+        join(outside, "groot.json"),
+      );
+
+      // Act
+      const errors = [await errorOf(readManifest(looping)), await errorOf(readManifest(outside))];
+
+      // Assert
+      for (const error of errors) {
+        expect(error.id).toBe("GROOT_E_PATH_OUTSIDE_PROJECT");
+        expect(error.hint).toContain("Make groot.json a readable regular file inside the project");
+        expect(error.hint).not.toContain("only writes");
+      }
+    },
+  );
 });
 
 describe("serializeBlueprint", () => {
@@ -257,6 +347,50 @@ describe("migrateV1ToV2", () => {
       "structural.package.web",
       "structural.package.api",
       "structural.package.backend",
+    ]);
+  });
+
+  test("checks discovery already knows will fail are recorded with their gap — and only those", () => {
+    // Arrange: apps/api is missing; packages/backend has no package.json; apps/web's
+    // package.json exists but declares another framework (not a structural failure).
+    const reported = {
+      ...observationFixture([
+        unitFixture({ path: "apps/web", packageName: "web", entry: fixtureFact(null) }),
+      ]),
+      contradictions: [
+        missingRecordedApp("scaffold 1 (hono)", "apps/api", "apps/api"),
+        missingRecordedApp(
+          "scaffold 2 (convex)",
+          "packages/backend",
+          "packages/backend/package.json",
+        ),
+        {
+          topic: "blueprint",
+          explanation:
+            "groot.json records scaffold 0 (next) at apps/web, but apps/web/package.json declares none of next",
+          sources: ["groot.json", "apps/web/package.json"],
+        },
+      ],
+    };
+
+    // Act
+    const doc = migrateV1ToV2(v1(), reported, NOW);
+
+    // Assert
+    expect(doc.verification.map((contract) => [contract.id, contract.description])).toEqual([
+      [
+        "structural.blueprint",
+        "groot.json is valid and its apps exist — known gap when recorded: api: apps/api is missing",
+      ],
+      ["structural.package.web", "apps/web is a named package"],
+      [
+        "structural.package.api",
+        "apps/api is a named package — known gap when recorded: apps/api is missing",
+      ],
+      [
+        "structural.package.backend",
+        "packages/backend is a named package — known gap when recorded: packages/backend/package.json is missing",
+      ],
     ]);
   });
 
@@ -426,4 +560,21 @@ describe("lock helpers", () => {
     expect(newer.id).toBe("GROOT_E_UNSUPPORTED_SCHEMA");
     expect(invalid.id).toBe("GROOT_E_INVALID_DOCUMENT");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "readLock: a groot.lock.json symlink that leads nowhere is invalid, not absent",
+    async () => {
+      // Arrange
+      const root = makeProject({});
+      symlinkSync("elsewhere/groot.lock.json", join(root, "groot.lock.json"));
+
+      // Act
+      const error = await errorOf(readLock(root));
+
+      // Assert
+      expect(error.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(error.message).toContain("groot.lock.json is invalid");
+      expect(error.hint).toContain("Make groot.lock.json a readable regular file");
+    },
+  );
 });

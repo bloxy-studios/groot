@@ -4,27 +4,34 @@
  * uncommitted work, states every inference, and refuses precisely.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { blueprintFromObservation } from "../blueprint/adopt.ts";
 import { emptyLock } from "../blueprint/lock.ts";
 import { serializeBlueprint, serializeLock } from "../blueprint/serialize.ts";
 import { BlueprintV2 } from "../contracts/blueprint.ts";
+import { GrootLock } from "../contracts/lock.ts";
 import { OperationPlan } from "../contracts/plan.ts";
 import { inspect } from "../discovery/index.ts";
 import {
+  BUN_LOCK,
   bunMonorepo,
   customHonoApp,
   json,
+  makeProject,
   pnpmWorkspace,
   SECRET_VALUES,
+  V1_MANIFEST,
   v1Workspace,
 } from "../discovery/test-projects.ts";
 import { GrootV2Error } from "../errors.ts";
 import { sha256Of } from "../fs/hash.ts";
 import { createContext } from "../runtime.ts";
 import { blueprintFixture } from "../test-fixtures.ts";
+import { defaultContracts, registerBuiltInCheckers } from "../verify/checkers.ts";
+import { runVerification } from "../verify/engine.ts";
 import { planAdopt } from "./adopt.ts";
+import { planMigrate } from "./migrate.ts";
 
 const TIMEOUT = 60_000;
 const NOW = new Date("2026-10-08T12:00:00.000Z");
@@ -162,6 +169,363 @@ describe("planAdopt — bun monorepo (b)", () => {
   );
 });
 
+describe("planAdopt — ports", () => {
+  test(
+    "a tool's port (database studio, storybook) is never recorded as the app's port",
+    async () => {
+      // Arrange: the API's port is in its entry; the web app's dev port is next's default.
+      const api = makeProject({
+        "package.json": json({
+          name: "api",
+          private: true,
+          packageManager: "bun@1.3.14",
+          scripts: {
+            dev: "bun run --hot src/index.ts",
+            "db:studio": "drizzle-kit studio --port 4983",
+          },
+          dependencies: { hono: "^4.6.0", "drizzle-orm": "^0.45.3" },
+          devDependencies: { "@types/bun": "^1.3.14", "drizzle-kit": "^0.31.0" },
+        }),
+        "bun.lock": BUN_LOCK,
+        "src/index.ts":
+          'import { Hono } from "hono";\n\nconst app = new Hono();\nexport default { port: 3000, fetch: app.fetch };\n',
+      });
+      const web = makeProject({
+        "package.json": json({
+          name: "site",
+          private: true,
+          packageManager: "bun@1.3.14",
+          scripts: { dev: "next dev", build: "next build", storybook: "storybook dev -p 6006" },
+          dependencies: { next: "^16.0.0", react: "^19.0.0" },
+          devDependencies: { storybook: "^9.0.0" },
+        }),
+        "bun.lock": BUN_LOCK,
+        "app/page.tsx": "export default function Page() {\n  return null;\n}\n",
+      });
+
+      // Act
+      const [apiPlan, webPlan] = await Promise.all(
+        [api, web].map((root) => planAdopt(createContext({ cwd: root }), ".", { now: NOW })),
+      );
+      const apiUnit = (await inspect(createContext({ cwd: api }), ".")).units[0];
+
+      // Assert
+      const appOf = (plan: OperationPlan) =>
+        BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}")).apps[0];
+      expect(appOf(apiPlan as OperationPlan)?.port).toBe(3000);
+      expect(appOf(webPlan as OperationPlan)?.port).toBeNull();
+      expect(apiUnit?.ports.map((port) => [port.value, port.confidence, port.source])).toEqual([
+        [3000, "medium", "src/index.ts"],
+        [4983, "low", "package.json#scripts.db:studio"],
+      ]);
+      expect((webPlan as OperationPlan).assumptions.join("\n")).not.toContain("6006");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the app's port comes from the command that runs its entry, not from a tool its dev script starts",
+    async () => {
+      // Arrange: Hono APIs whose entry declares port 3000 (or none), and a Next app with a codegen step.
+      const honoEntry = (port: string) =>
+        `import { Hono } from "hono";\n\nconst app = new Hono();\nexport default ${port};\n`;
+      const hono = (scripts: Record<string, string>, entry: string) =>
+        makeProject({
+          "package.json": json({
+            name: "api",
+            private: true,
+            packageManager: "bun@1.3.14",
+            scripts,
+            dependencies: { hono: "^4.6.0" },
+            devDependencies: { "@types/bun": "^1.3.14", "drizzle-kit": "^0.31.0" },
+          }),
+          "bun.lock": BUN_LOCK,
+          "src/index.ts": entry,
+        });
+      const withPort = honoEntry("{ port: 3000, fetch: app.fetch }");
+      const projects = {
+        studioViaBunRun: hono(
+          {
+            dev: "bun run db:studio & bun --hot src/index.ts",
+            "db:studio": "drizzle-kit studio --port 4983",
+          },
+          withPort,
+        ),
+        studioInDev: hono(
+          { dev: "drizzle-kit studio --port 4983 & bun --hot src/index.ts" },
+          withPort,
+        ),
+        unknownSidecar: hono({ dev: "mock-api --port 4010 & bun --hot src/index.ts" }, withPort),
+        entryFromDevApi: hono(
+          { "dev:api": "PORT=4000 bun --watch src/index.ts" },
+          honoEntry("app"),
+        ),
+        codegenThenNext: makeProject({
+          "package.json": json({
+            name: "site",
+            private: true,
+            packageManager: "bun@1.3.14",
+            scripts: { dev: "bun scripts/gen.ts && next dev -p 3001" },
+            dependencies: { next: "^16.0.0", react: "^19.0.0" },
+          }),
+          "bun.lock": BUN_LOCK,
+          "scripts/gen.ts": 'await Bun.write("src/routes.gen.ts", "export {};\\n");\n',
+          "app/page.tsx": "export default function Page() {\n  return null;\n}\n",
+        }),
+      };
+
+      // Act
+      const results = Object.fromEntries(
+        await Promise.all(
+          Object.entries(projects).map(async ([label, root]) => {
+            const ctx = createContext({ cwd: root });
+            const plan = await planAdopt(ctx, ".", { now: NOW });
+            const unit = (await inspect(ctx, ".")).units[0];
+            const recorded = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}"))
+              .apps[0];
+            const ports = unit?.ports.map((port) => [port.value, port.confidence, port.source]);
+            return [label, { port: recorded?.port, ports }] as const;
+          }),
+        ),
+      );
+
+      // Assert
+      expect(results).toEqual({
+        studioViaBunRun: {
+          port: 3000,
+          ports: [
+            [3000, "medium", "src/index.ts"],
+            [4983, "low", "package.json#scripts.db:studio"],
+          ],
+        },
+        studioInDev: {
+          port: 3000,
+          ports: [
+            [3000, "medium", "src/index.ts"],
+            [4983, "low", "package.json#scripts.dev"],
+          ],
+        },
+        unknownSidecar: {
+          port: 3000,
+          ports: [
+            [3000, "medium", "src/index.ts"],
+            [4010, "medium", "package.json#scripts.dev"],
+          ],
+        },
+        entryFromDevApi: { port: 4000, ports: [[4000, "high", "package.json#scripts.dev:api"]] },
+        codegenThenNext: { port: 3001, ports: [[3001, "medium", "package.json#scripts.dev"]] },
+      });
+    },
+    TIMEOUT,
+  );
+});
+
+/**
+ * Apply the plan's two writes by hand, then run the structural checks
+ * `groot verify` runs: the summary of each failing check, by check id.
+ */
+async function failuresAfterApply(
+  root: string,
+  plan: OperationPlan,
+): Promise<Record<string, string>> {
+  for (const action of writes(plan)) writeFileSync(join(root, action.path), action.content);
+  const blueprint = BlueprintV2.parse(JSON.parse(readFileSync(join(root, "groot.json"), "utf8")));
+  const lock = GrootLock.parse(JSON.parse(readFileSync(join(root, "groot.lock.json"), "utf8")));
+  const report = await runVerification(createContext({ cwd: root }), {
+    root,
+    blueprint,
+    observation: null,
+    lock,
+    profiles: ["structural"],
+    extra: defaultContracts(blueprint),
+  });
+  return Object.fromEntries(
+    report.evidence
+      .filter((entry) => entry.status === "fail")
+      .map((entry) => [entry.check, entry.summary]),
+  );
+}
+
+async function structuralFailuresAfterApply(root: string, plan: OperationPlan): Promise<string[]> {
+  return Object.keys(await failuresAfterApply(root, plan)).sort();
+}
+
+/**
+ * Checks the plan announces as known gaps: noted on the check, stated as an
+ * assumption, and recorded with the same note in the groot.json it writes —
+ * which is where `groot verify` reads the description from after apply.
+ */
+function announcedGaps(plan: OperationPlan): string[] {
+  const noted = plan.verification
+    .filter((contract) => contract.description.includes("known gap"))
+    .map((contract) => contract.id)
+    .sort();
+  const recorded = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}")).verification;
+  for (const id of noted) {
+    expect(plan.assumptions.join("\n")).toContain(`Known gap: ${id} `);
+    expect(recorded.find((contract) => contract.id === id)).toEqual(
+      plan.verification.find((contract) => contract.id === id),
+    );
+  }
+  return noted;
+}
+
+describe("planAdopt — structural checks it already knows will fail", () => {
+  registerBuiltInCheckers();
+
+  test(
+    "a project as discovered passes every structural check its adoption plan declares",
+    async () => {
+      // Arrange
+      const root = bunMonorepo();
+      const plan = await planAdopt(createContext({ cwd: root }), ".", { now: NOW });
+
+      // Act
+      const failed = await structuralFailuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual([]);
+      expect(failed).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a nameless package and a shared dev port: the plan announces exactly the checks that fail",
+    async () => {
+      // Arrange
+      const root = bunMonorepo({
+        "apps/web/package.json": json({
+          name: "web",
+          private: true,
+          scripts: { dev: "next dev --port 3000" },
+          dependencies: { next: "^16.0.0", react: "^19.0.0" },
+        }),
+        "apps/admin/package.json": json({
+          private: true,
+          scripts: { dev: "next dev --port 3000" },
+          dependencies: { next: "^16.0.0", react: "^19.0.0" },
+        }),
+        "apps/admin/app/page.tsx": "export default function Page() {\n  return null;\n}\n",
+      });
+
+      // Act
+      const plan = await planAdopt(createContext({ cwd: root }), ".", { now: NOW });
+      const blueprint = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}"));
+      const failed = await structuralFailuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual(["structural.blueprint", "structural.package.admin"]);
+      expect(failed).toEqual(["structural.blueprint", "structural.package.admin"]);
+      const assumptions = plan.assumptions.join("\n");
+      expect(assumptions).toContain("dev port 3000 is declared by apps/admin and apps/web");
+      expect(assumptions).toContain("no package name was observed in apps/admin/package.json");
+      for (const id of ["structural.blueprint", "structural.package.admin"]) {
+        const recorded = blueprint.verification.find((contract) => contract.id === id);
+        expect(recorded?.description).toContain("known gap when recorded");
+        expect(recorded).toEqual(plan.verification.find((contract) => contract.id === id));
+      }
+      expect(
+        blueprint.verification.find((contract) => contract.id === "structural.blueprint")
+          ?.description,
+      ).toBe(
+        "groot.json is valid and its apps exist — known gap when recorded: dev port 3000 is declared by apps/admin and apps/web",
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a project with no known gap records no structural.blueprint entry — the default applies",
+    async () => {
+      // Arrange
+      const root = bunMonorepo();
+
+      // Act
+      const plan = await planAdopt(createContext({ cwd: root }), ".", { now: NOW });
+      const blueprint = BlueprintV2.parse(JSON.parse(writes(plan)[0]?.content ?? "{}"));
+
+      // Assert
+      expect(blueprint.verification.map((contract) => contract.id)).toEqual([
+        "structural.package.api",
+        "structural.package.web",
+        "structural.package.ui",
+      ]);
+      expect(plan.verification.find((c) => c.id === "structural.blueprint")?.description).toBe(
+        "groot.json is valid and its apps exist",
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "migration: a scaffold whose directory is missing — every check that fails is announced, with its reason",
+    async () => {
+      // Arrange
+      const root = v1Workspace({
+        ...V1_MANIFEST,
+        scaffolds: [
+          ...V1_MANIFEST.scaffolds,
+          {
+            slot: "mobile",
+            framework: "expo",
+            path: "apps/mobile",
+            generator: "create-expo-app@4",
+            port: 8081,
+          },
+        ],
+      });
+
+      // Act
+      const plan = await planMigrate(createContext({ cwd: root }), ".", { now: NOW });
+      const failures = await failuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual(["structural.blueprint", "structural.package.mobile"]);
+      expect(Object.keys(failures).sort()).toEqual([
+        "structural.blueprint",
+        "structural.package.mobile",
+      ]);
+      expect(failures["structural.blueprint"]).toBe("mobile: apps/mobile is missing");
+      const assumptions = plan.assumptions.join("\n");
+      expect(assumptions).toContain(
+        "groot.json records scaffold 3 (expo) at apps/mobile, but apps/mobile is missing",
+      );
+      expect(assumptions).toContain(
+        "Known gap: structural.blueprint will fail right after apply — mobile: apps/mobile is missing.",
+      );
+      expect(assumptions).toContain(
+        "Known gap: structural.package.mobile will fail right after apply — apps/mobile is missing.",
+      );
+      expect(assumptions).not.toContain("no package name was observed in apps/mobile");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "migration: a scaffold directory without its package.json — announced with that reason",
+    async () => {
+      // Arrange
+      const root = v1Workspace();
+      rmSync(join(root, "packages/backend/package.json"));
+
+      // Act
+      const plan = await planMigrate(createContext({ cwd: root }), ".", { now: NOW });
+      const failures = await failuresAfterApply(root, plan);
+
+      // Assert
+      expect(announcedGaps(plan)).toEqual(["structural.package.backend"]);
+      expect(failures).toEqual({
+        "structural.package.backend": "packages/backend/package.json is missing or unparseable",
+      });
+      expect(plan.assumptions.join("\n")).toContain(
+        "Known gap: structural.package.backend will fail right after apply — packages/backend/package.json is missing.",
+      );
+    },
+    TIMEOUT,
+  );
+});
+
 describe("planAdopt — refusals", () => {
   test(
     "already registered (v2) → GROOT_E_CONFLICT pointing at groot status",
@@ -209,6 +573,31 @@ describe("planAdopt — refusals", () => {
       // Assert
       expect(invalidError.id).toBe("GROOT_E_INVALID_DOCUMENT");
       expect(newerError.id).toBe("GROOT_E_UNSUPPORTED_SCHEMA");
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a groot.json symlink that loops or leads nowhere is refused with the reader's next step — never planned as absent",
+    async () => {
+      // Arrange
+      const looping = bunMonorepo();
+      symlinkSync("groot.json", join(looping, "groot.json"));
+      const throughFile = bunMonorepo();
+      symlinkSync("package.json/x", join(throughFile, "groot.json"));
+
+      // Act
+      const loopError = await errorOf(planAdopt(createContext({ cwd: looping }), "."));
+      const linkError = await errorOf(planAdopt(createContext({ cwd: throughFile }), "."));
+
+      // Assert
+      expect(loopError.id).toBe("GROOT_E_PATH_OUTSIDE_PROJECT");
+      expect(linkError.id).toBe("GROOT_E_INVALID_DOCUMENT");
+      expect(linkError.message).toContain("is a symlink whose target does not exist (ENOTDIR)");
+      for (const error of [loopError, linkError]) {
+        expect(error.hint).toContain("Make groot.json a readable regular file inside the project");
+        expect(error.hint).not.toContain("only writes");
+      }
     },
     TIMEOUT,
   );

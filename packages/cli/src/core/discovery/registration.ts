@@ -1,15 +1,20 @@
 /**
  * Registration: whether (and how) the project is registered with Groot, read
  * through core/blueprint readManifest — so discovery and every planner agree
- * on what counts as a valid groot.json. A broken or too-new groot.json is a
- * registration *state* here (invalid / unsupported-version), not a crash:
- * `groot inspect` must keep working on exactly the projects that need help.
+ * on what counts as a valid groot.json. A broken, unreadable, looping, or
+ * too-new groot.json — or a symlink there that leads nowhere — is a
+ * registration *state* here (invalid / unsupported-version) whose error
+ * states the reason and the next step, not a crash: `groot inspect` must keep
+ * working on exactly the projects that need help.
  *
  * Contradictions between desired state (groot.json) and the disk are
- * reported, never reconciled: a recorded scaffold/app whose package.json is
- * missing, or whose framework dependency is absent.
+ * reported, never reconciled: a recorded scaffold/app whose directory or
+ * package.json is missing (in the shape core/blueprint/presence.ts defines,
+ * which registration plans read back), or whose framework dependency is
+ * absent.
  */
 import { type ManifestRead, readManifest } from "../blueprint/manifest.ts";
+import { missingRecordedApp } from "../blueprint/presence.ts";
 import { UnitPath } from "../contracts/common.ts";
 import type { ProjectUnit, Registration } from "../contracts/project.ts";
 import { GrootV2Error } from "../errors.ts";
@@ -25,6 +30,16 @@ export interface RegistrationFindings {
 }
 
 const MANIFEST_PATH = "groot.json";
+
+/**
+ * Why groot.json is unusable, followed by what to do about it (the reader's
+ * next step — readManifest gives a symlink that loops or leaves the project
+ * the reader's hint, not the boundary's write-side one).
+ */
+function registrationError(error: GrootV2Error): string {
+  const next = error.hint;
+  return next === undefined || next === "" ? error.message : `${error.message} ${next}`;
+}
 
 export async function observeRegistration(root: string): Promise<RegistrationFindings> {
   try {
@@ -54,7 +69,7 @@ export async function observeRegistration(root: string): Promise<RegistrationFin
         status,
         manifestPath: MANIFEST_PATH,
         version: typeof version === "number" && Number.isInteger(version) ? version : null,
-        error: error.message,
+        error: registrationError(error),
       },
       manifest: null,
     };
@@ -117,11 +132,9 @@ export async function manifestContradictions(
     const packageJson = joinProjectPath(parsed.data, "package.json");
     const deps = await declaredDependencies(fs, parsed.data, units);
     if (deps === null) {
-      contradictions.push({
-        topic: "blueprint",
-        explanation: `groot.json records ${entry.what} at ${parsed.data}, but ${packageJson} is missing`,
-        sources: [MANIFEST_PATH, packageJson],
-      });
+      // Name what is missing: the whole directory, or only its package.json.
+      const missing = (await fs.kind(parsed.data)) === null ? parsed.data : packageJson;
+      contradictions.push(missingRecordedApp(entry.what, parsed.data, missing));
       continue;
     }
     const packages = entry.framework === null ? undefined : FRAMEWORK_PACKAGES[entry.framework];

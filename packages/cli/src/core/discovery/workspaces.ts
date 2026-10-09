@@ -48,8 +48,10 @@ function stripYamlComment(line: string): string {
 
 /**
  * The `packages:` list of a pnpm-workspace.yaml (block or flow style) via a
- * tiny line parser — no YAML engine, no anchors, no evaluation. null when
- * the file has no `packages` key.
+ * tiny line parser — no YAML engine, no anchors, no evaluation. Block items
+ * may be indented or sit at the key's own column (`packages:\n- apps/*`); the
+ * list ends at the next top-level key or a document marker. null when the
+ * file has no `packages` key.
  */
 export function parsePnpmWorkspace(text: string): string[] | null {
   const lines = text.split(/\r?\n/).map(stripYamlComment);
@@ -66,7 +68,8 @@ export function parsePnpmWorkspace(text: string): string[] | null {
   const patterns: string[] = [];
   for (const line of lines.slice(start + 1)) {
     if (line.trim() === "") continue;
-    const item = /^\s+-\s*(.+)$/.exec(line);
+    if (/^(?:---|\.\.\.)\s*$/.test(line)) break;
+    const item = /^\s*-\s*(.+)$/.exec(line);
     if (item === null) {
       if (/^\S/.test(line)) break;
       continue;

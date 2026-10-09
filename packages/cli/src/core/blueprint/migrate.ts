@@ -27,8 +27,8 @@ import {
   allocateIds,
   assertBlueprint,
   decisionId,
+  recordedStructuralContracts,
   slugify,
-  structuralPackageContracts,
 } from "./apps.ts";
 import { MANIFEST_FILE } from "./manifest.ts";
 
@@ -121,7 +121,7 @@ export function migrateV1ToV2(
     policy: { ...DEFAULT_POLICY, allow: [...DEFAULT_POLICY.allow] },
   };
   return assertBlueprint(
-    { ...draft, verification: structuralPackageContracts(draft, apps) },
+    { ...draft, verification: recordedStructuralContracts(draft, observation) },
     "groot migrate",
   );
 }

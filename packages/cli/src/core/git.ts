@@ -12,9 +12,11 @@
  * neither external drivers nor textconv. Clean/smudge/process filter drivers
  * in the repository's own .git/config cannot be disabled by flags — an
  * untrusted `.git` (e.g. from an extracted archive) is unsafe to inspect in
- * place.
+ * place. Untracked paths are fingerprinted without following links and with
+ * bounded reads (see untrackedDigest).
  */
-import { readFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { lstat, open, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { RevisionInfo, Sha256 } from "./contracts/common.ts";
 import type { GitState } from "./contracts/project.ts";
@@ -45,6 +47,16 @@ const SAFE_DIFF = ["--binary", "--no-ext-diff", "--no-textconv"] as const;
 
 /** git's empty tree in the sha1 object format (fallback when it can't be computed). */
 const EMPTY_TREE_SHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** Untracked files larger than this count by size and mtime instead of being read. */
+const MAX_HASHED_UNTRACKED_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Opening an untracked file never follows a symlink swapped in after lstat
+ * and never waits on a FIFO (a flag the platform lacks is 0).
+ */
+const UNTRACKED_OPEN_FLAGS =
+  constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
 /**
  * GIT_* variables passed through: they only fence off repository discovery
@@ -176,6 +188,43 @@ async function emptyTree(dir: string): Promise<string> {
   return result.exitCode === 0 && id !== "" ? id : EMPTY_TREE_SHA1;
 }
 
+/** The kind of a file that is neither regular nor a symlink. */
+function specialKind(info: Stats): string {
+  if (info.isDirectory()) return "directory";
+  if (info.isFIFO()) return "fifo";
+  if (info.isSocket()) return "socket";
+  return "device";
+}
+
+/**
+ * What an untracked path contributes to the fingerprint. A symlink counts by
+ * its link text — its target, which may be outside the project, a FIFO, or a
+ * device, is never opened. A regular file counts by its content, or by its
+ * size and mtime above MAX_HASHED_UNTRACKED_BYTES. Anything else (a FIFO,
+ * socket, or device swapped in after `git status`, or the directory of a
+ * nested repository) is recorded by its kind, never opened.
+ */
+async function untrackedDigest(absolute: string): Promise<string> {
+  try {
+    const info = await lstat(absolute);
+    if (info.isSymbolicLink()) return `symlink\0${await readlink(absolute)}`;
+    if (!info.isFile()) return `${specialKind(info)}\0not read`;
+    const handle = await open(absolute, UNTRACKED_OPEN_FLAGS);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile()) return `${specialKind(opened)}\0not read`;
+      if (opened.size > MAX_HASHED_UNTRACKED_BYTES) {
+        return `large\0${opened.size}\0${opened.mtimeMs}`;
+      }
+      return sha256Of(await handle.readFile());
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "unreadable";
+  }
+}
+
 async function worktreeFingerprint(
   dir: string,
   head: string | null,
@@ -187,11 +236,7 @@ async function worktreeFingerprint(
   const diff = await git(dir, ["diff", base, ...SAFE_DIFF, "--", "."]);
   const parts: string[] = [diff.stdout];
   for (const path of [...untracked].sort()) {
-    try {
-      parts.push(`${path}\0${sha256Of(await readFile(join(dir, path)))}`);
-    } catch {
-      parts.push(`${path}\0unreadable`);
-    }
+    parts.push(`${path}\0${await untrackedDigest(join(dir, path))}`);
   }
   return sha256Of(parts.join("\n"));
 }

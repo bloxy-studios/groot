@@ -6,7 +6,9 @@
  * failures reported as GROOT_E_INVALID_DOCUMENT carrying JSON-pointer issue
  * paths, so agents can point at the broken field instead of parsing prose.
  */
+import { lstatSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { z } from "zod";
 import type { Sha256 } from "../contracts/common.ts";
 import { GrootV2Error } from "../errors.ts";
@@ -58,10 +60,57 @@ export function invalidDocument(
   });
 }
 
+/** What to do about a root document that exists but is not a readable regular file in the project. */
+export function unreadableHint(file: string): string {
+  return `Make ${file} a readable regular file inside the project (check its permissions, owner, and symlinks), or restore it from version control.`;
+}
+
+/** errno codes meaning nothing is found at a path: it is missing, or a component is not a directory. */
+const NOT_FOUND_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
+
+/** Is the entry named `file` in `root` itself a symlink (lstat: the link, not where it leads)? */
+function isSymlink(root: string, file: string): boolean {
+  try {
+    return lstatSync(join(root, file)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Read and parse a project-root JSON document. Returns null when the file is
- * absent; throws GROOT_E_INVALID_DOCUMENT for non-files and unparseable JSON
- * and GROOT_E_PATH_OUTSIDE_PROJECT for a symlink leaving the project.
+ * A failed read. Null only when nothing is there: a missing root, a root that
+ * is not a directory, no entry named `file`. A symlink there that leads
+ * nowhere (dangling, or through a regular file) is not absent — the executor
+ * never replaces it, so a plan creating the document could only go stale — and
+ * becomes GROOT_E_INVALID_DOCUMENT, like any other filesystem failure
+ * (permissions, an I/O error), naming its errno code: callers report a state
+ * instead of crashing. A boundary violation (a link that loops or leaves the
+ * project) stays GROOT_E_PATH_OUTSIDE_PROJECT but gets the reader's next step
+ * — its own hint is about writes. Other GrootV2Errors pass through unchanged.
+ */
+function readFailure(root: string, file: string, error: unknown): null {
+  if (error instanceof GrootV2Error) {
+    if (error.id !== "GROOT_E_PATH_OUTSIDE_PROJECT") throw error;
+    throw new GrootV2Error(error.id, error.message, {
+      hint: unreadableHint(file),
+      details: error.details ?? undefined,
+    });
+  }
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (typeof code !== "string") throw error;
+  const notFound = NOT_FOUND_CODES.has(code);
+  if (notFound && !isSymlink(root, file)) return null;
+  const message = notFound
+    ? `is a symlink whose target does not exist (${code})`
+    : `could not be read (${code})`;
+  throw invalidDocument(file, [{ path: "", message }], { hint: unreadableHint(file) });
+}
+
+/**
+ * Read and parse a project-root JSON document. Returns null when nothing is
+ * at `file`; throws GROOT_E_INVALID_DOCUMENT for non-files (a symlink leading
+ * nowhere included), unreadable files, and unparseable JSON, and
+ * GROOT_E_PATH_OUTSIDE_PROJECT for a symlink leaving the project (or looping).
  */
 export async function readRootDocument(
   root: string,
@@ -73,19 +122,19 @@ export async function readRootDocument(
     absolute = resolveInProject(root, file);
   } catch (error) {
     // A missing root has no documents; boundary violations stay errors.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
+    return readFailure(root, file, error);
   }
   let bytes: Buffer;
   try {
     const info = await stat(absolute);
     if (!info.isFile()) {
-      throw invalidDocument(file, [{ path: "", message: "expected a regular file" }], { hint });
+      throw invalidDocument(file, [{ path: "", message: "expected a regular file" }], {
+        hint: unreadableHint(file),
+      });
     }
     bytes = await readFile(absolute);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
+    return readFailure(root, file, error);
   }
   const raw = bytes.toString("utf8");
   let value: unknown;

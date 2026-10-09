@@ -24,8 +24,8 @@ import {
   assertBlueprint,
   decisionId,
   packageBaseName,
+  recordedStructuralContracts,
   slugify,
-  structuralPackageContracts,
 } from "./apps.ts";
 
 export const ADOPTION_TOPIC = "adoption.layout";
@@ -34,6 +34,15 @@ export const ADOPTION_TOPIC = "adoption.layout";
 export const DEFAULT_NAMESPACE = "@repo";
 
 const CONFIDENCE_RANK: Record<Confidence, number> = { certain: 3, high: 2, medium: 1, low: 0 };
+
+/**
+ * The least confidence a port needs to be recorded as the app's: the commands
+ * that run the app (high), its entry source (medium), and another command of
+ * the app's scripts when they also run the entry (medium, ranked after the
+ * entry's own) qualify; a port only a tool declares (low — a database studio,
+ * storybook, wherever it is started) never does.
+ */
+const MIN_APP_PORT_CONFIDENCE: Confidence = "medium";
 
 export interface AdoptionOptions {
   /** Clock for the adoption decision (defaults to now). */
@@ -45,13 +54,16 @@ function appIdBase(unit: ProjectUnit): string {
   return slugify(basename(unit.path)) || "app";
 }
 
-/** The most confident observed port; ties keep discovery's order (dev script first). */
+/**
+ * The most confident observed app port; ties keep discovery's order (dev
+ * script first). null when only tools declare ports.
+ */
 export function preferredPort(unit: ProjectUnit): number | null {
   let best: ProjectUnit["ports"][number] | null = null;
   for (const port of unit.ports) {
-    if (best === null || CONFIDENCE_RANK[port.confidence] > CONFIDENCE_RANK[best.confidence]) {
-      best = port;
-    }
+    const rank = CONFIDENCE_RANK[port.confidence];
+    if (rank < CONFIDENCE_RANK[MIN_APP_PORT_CONFIDENCE]) continue;
+    if (best === null || rank > CONFIDENCE_RANK[best.confidence]) best = port;
   }
   return best?.value ?? null;
 }
@@ -139,7 +151,7 @@ export function blueprintFromObservation(
     policy: { ...DEFAULT_POLICY, allow: [...DEFAULT_POLICY.allow] },
   };
   return assertBlueprint(
-    { ...draft, verification: structuralPackageContracts(draft, apps) },
+    { ...draft, verification: recordedStructuralContracts(draft, observation) },
     "groot adopt",
   );
 }

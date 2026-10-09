@@ -1,12 +1,17 @@
 /**
  * core/discovery — read-only, static project inspection (`groot inspect`).
  *
- * Discovery NEVER imports or executes repository code or configuration: it
- * reads manifests, lockfile names, scripts (as text), entry sources (as
- * text), and agent files through a project-bounded reader. The only
- * processes it starts are git (core/git.ts) and toolchain version probes
- * (toolchains.ts). Skipped everywhere: node_modules, .git, .groot,
- * .claude/worktrees, dist, build, .turbo, .next, .svelte-kit, .output.
+ * Discovery never imports or executes repository code: it reads manifests,
+ * lockfile names, scripts (as text), entry sources (as text), and agent
+ * files through a project-bounded reader. The only processes it starts are
+ * git (core/git.ts) and toolchain version probes (toolchains.ts). The git
+ * probes are hardened against repository configuration (no hooks, fsmonitor,
+ * external diff, or textconv) with one exception flags cannot switch off:
+ * clean/smudge/process filter drivers configured in the repository's own
+ * .git/config may run during `git status`/`git diff` — so an untrusted
+ * `.git` should be cloned (`git clone --no-local`) before it is inspected.
+ * Skipped everywhere: node_modules, .git, .groot, .claude/worktrees, dist,
+ * build, .turbo, .next, .svelte-kit, .output.
  *
  * The result is a ProjectObservation — observed state with provenance — that
  * is validated against its contract before it is returned. Observations

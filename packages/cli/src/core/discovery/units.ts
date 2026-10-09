@@ -10,7 +10,11 @@
  * - entry: the file the dev/start scripts run, then module/main, then the
  *   conventional server entries — always relative to the unit directory and
  *   only when the file exists inside the project.
- * - ports: scripts (high) and the entry source (medium).
+ * - ports, most likely the app's first: the commands that run the app (high;
+ *   medium when the scripts run the entry and another command declares the
+ *   port, ranked after the entry's), the entry source (medium), then ports
+ *   tools declare for themselves — a database studio, storybook, a preview
+ *   server, wherever they are started (low).
  */
 import type { Confidence, PackageManager, Sha256 } from "../contracts/common.ts";
 import type { ProjectUnit } from "../contracts/project.ts";
@@ -29,6 +33,7 @@ import {
   entryCandidates,
   normalizeSourcePath,
   runtimeSignals,
+  type ScriptPort,
   scriptPorts,
   sourcePorts,
 } from "./scripts.ts";
@@ -182,33 +187,63 @@ async function detectLanguage(
   return hasTsconfig ? "typescript" : "javascript";
 }
 
+/**
+ * Ports, most likely the app's first. When the scripts run the detected entry,
+ * a port another of the app's commands declares — a framework CLI, or a
+ * sidecar the dev script also starts — is medium and ranks after the entry
+ * source's own ports: the entry is the app, and states its port.
+ */
 function unitPorts(
   ctx: UnitContext,
   manifest: UnitManifest,
-  entry: EntrySource | null,
+  entry: string | null,
+  entrySource: EntrySource | null,
 ): ObservedFact<number>[] {
-  const ports = scriptPorts(manifest.fields.scripts).map(({ port, script }) =>
-    ctx.fact({
-      value: port,
-      source: `${manifest.path}#scripts.${script}`,
-      method: "manifest",
-      confidence: "high",
-      fingerprint: manifest.sha256,
-    }),
+  const { scripts } = manifest.fields;
+  const declared = scriptPorts(scripts);
+  // The entry the scripts run (null when they run no detected entry).
+  const ran = entryCandidates(scripts).some((c) => c.file === entry) ? entry : null;
+  const besideEntry = (port: ScriptPort): boolean => ran !== null && !port.runs.includes(ran);
+  const ports: ObservedFact<number>[] = [];
+  const add = (port: ObservedFact<number>): void => {
+    if (!ports.some((existing) => existing.value === port.value)) ports.push(port);
+  };
+  const fromScripts = (found: readonly ScriptPort[], confidence: Confidence): void => {
+    for (const { port, script } of found) {
+      add(
+        ctx.fact({
+          value: port,
+          source: `${manifest.path}#scripts.${script}`,
+          method: "manifest",
+          confidence,
+          fingerprint: manifest.sha256,
+        }),
+      );
+    }
+  };
+  const app = declared.filter((port) => port.app);
+  fromScripts(
+    app.filter((port) => !besideEntry(port)),
+    "high",
   );
-  if (entry === null) return ports;
-  for (const port of sourcePorts(entry.file.text)) {
-    if (ports.some((existing) => existing.value === port)) continue;
-    ports.push(
-      ctx.fact({
-        value: port,
-        source: entry.path,
-        method: "source-scan",
-        confidence: "medium",
-        fingerprint: entry.file.sha256,
-      }),
-    );
+  if (entrySource !== null) {
+    for (const port of sourcePorts(entrySource.file.text)) {
+      add(
+        ctx.fact({
+          value: port,
+          source: entrySource.path,
+          method: "source-scan",
+          confidence: "medium",
+          fingerprint: entrySource.file.sha256,
+        }),
+      );
+    }
   }
+  fromScripts(app.filter(besideEntry), "medium");
+  fromScripts(
+    declared.filter((port) => !port.app),
+    "low",
+  );
   return ports;
 }
 
@@ -312,7 +347,7 @@ export async function analyzePackageUnit(
       scripts: manifest.fields.scripts,
       dependencies: manifest.fields.dependencies,
       devDependencies: manifest.fields.devDependencies,
-      ports: unitPorts(ctx, manifest, entrySource),
+      ports: unitPorts(ctx, manifest, entry.value, entrySource),
       envFiles: env.files,
       envVariables: env.variables,
     },
