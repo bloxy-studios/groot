@@ -19,8 +19,9 @@
  *   app would load as empty.
  */
 import { readFileSync } from "node:fs";
-import { isAbsolute, posix } from "node:path";
+import { posix } from "node:path";
 import { dotenvValues } from "../dotenv.ts";
+import { ignoredByRepository } from "../env.ts";
 import { GrootV2Error } from "../errors.ts";
 import { hasEnvAssignment } from "../executor/secrets.ts";
 import { joinRel, resolveInProject } from "../fs/paths.ts";
@@ -59,28 +60,6 @@ export function dataDirTarget(layout: RecipeLayout): IgnoreTarget {
     probes: SQLITE_FILES.map((suffix) => `${database}${suffix}`),
     line: (gitignoreDir) => `/${gitignoreLiteral(posix.relative(gitignoreDir, dataDir))}/`,
   };
-}
-
-/**
- * Is `path` ignored by the repository's own .gitignore files? The deciding
- * rule must come from a .gitignore inside the repository: git reports
- * core.excludesFile by absolute path (whatever its name) and
- * .git/info/exclude by name, and neither travels with a clone. A negated
- * rule (`!x`) decides "not ignored" even though --verbose exits 0. Output
- * that can't be read (e.g. a quoted exotic path) counts as not ignored, so
- * the line gets added. null = not a git repository.
- */
-export async function ignoredByRepository(root: string, path: string): Promise<boolean | null> {
-  const result = await git(root, ["check-ignore", "--verbose", "--", path]);
-  if (result.exitCode === 1) return false;
-  if (result.exitCode !== 0) return null;
-  // <source>:<line>:<pattern><TAB><path>
-  const match = /^(.*?):\d+:(.*)\t/.exec(result.stdout);
-  if (match === null) return false;
-  const [, source = "", pattern = ""] = match;
-  const repositoryFile =
-    !isAbsolute(source) && !source.startsWith("/") && posix.basename(source) === ".gitignore";
-  return repositoryFile && !pattern.startsWith("!");
 }
 
 const IGNORE_HEADER = "# Groot: local env files and SQLite data — never commit";

@@ -88,6 +88,50 @@ describe("verification engine", () => {
     }
   });
 
+  test("secret storage must be ignored by the repository itself, not a machine-local exclude", async () => {
+    // Arrange — a git repository whose secret file is ignored only through
+    // .git/info/exclude, which a clone does not carry.
+    const root = project();
+    Bun.spawnSync(["git", "init", "-q"], { cwd: root });
+    writeFileSync(join(root, ".git/info/exclude"), "apps/api/.env.local\n");
+    writeFileSync(join(root, "apps/api/.env.local"), "SESSION_SECRET=set\n");
+    const blueprint = blueprintFixture({
+      environment: [
+        {
+          name: "SESSION_SECRET",
+          consumer: "apps/api",
+          scope: "server",
+          sensitivity: "secret",
+          required: true,
+          description: "signs sessions",
+          storage: "apps/api/.env.local",
+          example: "",
+          generate: "random-secret",
+          declaredBy: "test",
+        },
+      ],
+    });
+    const structuralEnv = async () =>
+      (
+        await runVerification(ctx(), {
+          root,
+          blueprint,
+          observation: null,
+          lock: null,
+          profiles: ["structural"],
+          extra: defaultContracts(blueprint),
+        })
+      ).evidence.find((entry) => entry.check === "structural.env");
+
+    // Act + Assert — the machine-local exclude does not count…
+    const local = await structuralEnv();
+    expect(local?.status).toBe("fail");
+    expect(local?.summary).toContain("SESSION_SECRET → apps/api/.env.local");
+    // …the repository's own .gitignore does.
+    writeFileSync(join(root, ".gitignore"), "apps/api/.env.local\n");
+    expect((await structuralEnv())?.status).toBe("pass");
+  });
+
   test("a missing required secret is blocked with the exact next step, never a pass", async () => {
     const root = project();
     const blueprint = blueprintFixture({

@@ -6,6 +6,7 @@
  * variables present by NAME in their storage file).
  */
 import { readFileSync } from "node:fs";
+import { isAbsolute, posix } from "node:path";
 import { type EnvVarContract, PUBLIC_ENV_PREFIXES } from "./contracts/common.ts";
 import { dotenvValues } from "./dotenv.ts";
 import { GrootV2Error } from "./errors.ts";
@@ -51,12 +52,26 @@ export function assertEnvContracts(contracts: readonly EnvVarContract[]): void {
   }
 }
 
-/** Is a project-relative path ignored by git? (null when not a git repository) */
-export async function isGitIgnored(root: string, relPath: string): Promise<boolean | null> {
-  const result = await git(root, ["check-ignore", "-q", "--", relPath]);
-  if (result.exitCode === 0) return true;
+/**
+ * Is `path` ignored by the repository's own .gitignore files? The deciding
+ * rule must come from a .gitignore inside the repository: git reports
+ * core.excludesFile by absolute path (whatever its name) and
+ * .git/info/exclude by name, and neither travels with a clone — a teammate
+ * could still commit the file. A negated rule (`!x`) decides "not ignored"
+ * even though --verbose exits 0. Output that can't be read (e.g. a quoted
+ * exotic path) counts as not ignored. null = not a git repository.
+ */
+export async function ignoredByRepository(root: string, path: string): Promise<boolean | null> {
+  const result = await git(root, ["check-ignore", "--verbose", "--", path]);
   if (result.exitCode === 1) return false;
-  return null;
+  if (result.exitCode !== 0) return null;
+  // <source>:<line>:<pattern><TAB><path>
+  const match = /^(.*?):\d+:(.*)\t/.exec(result.stdout);
+  if (match === null) return false;
+  const [, source = "", pattern = ""] = match;
+  const repositoryFile =
+    !isAbsolute(source) && !source.startsWith("/") && posix.basename(source) === ".gitignore";
+  return repositoryFile && !pattern.startsWith("!");
 }
 
 /**
