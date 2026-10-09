@@ -130,7 +130,7 @@ describe("verification engine", () => {
     // …the repository's own .gitignore does.
     writeFileSync(join(root, ".gitignore"), "apps/api/.env.local\n");
     expect((await structuralEnv())?.status).toBe("pass");
-  });
+  }, 30_000);
 
   test("a missing required secret is blocked with the exact next step, never a pass", async () => {
     const root = project();

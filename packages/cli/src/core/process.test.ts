@@ -4,11 +4,11 @@
  * survive nor keep runProcess waiting on their open output pipes.
  * POSIX only (process groups); skipped on Windows.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isProcessGroupAlive, runProcess, sweepProcessGroup } from "./process.ts";
+import { isProcessGroupAlive, killTree, runProcess, sweepProcessGroup } from "./process.ts";
 
 const posix = process.platform !== "win32";
 
@@ -206,5 +206,28 @@ describe("runProcess timeouts", () => {
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("done");
+  });
+});
+
+describe.skipIf(!posix)("killTree", () => {
+  test("never signals a bare pid once its process group is gone (pid reuse)", async () => {
+    // Arrange — a detached child that has already exited and been reaped.
+    const child = Bun.spawn(["true"], { detached: true });
+    await child.exited;
+    const calls: number[] = [];
+    const kill = spyOn(process, "kill").mockImplementation(((pid: number) => {
+      calls.push(pid);
+      throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+    }) as typeof process.kill);
+
+    // Act
+    try {
+      killTree(child.pid, "SIGKILL");
+    } finally {
+      kill.mockRestore();
+    }
+
+    // Assert — only the group was addressed; the freed pid was left alone.
+    expect(calls).toEqual([-child.pid]);
   });
 });

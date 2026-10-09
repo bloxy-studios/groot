@@ -63,17 +63,18 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Send a signal to the child's whole process group (POSIX) or the child (Windows). */
+/**
+ * Send a signal to the child's whole process group (POSIX) or the child
+ * (Windows). Groot starts every POSIX child detached, as its group's leader,
+ * so a failed group signal means nothing is left to signal: the leader's pid
+ * is free (or already reused by an unrelated process) and is never addressed
+ * on its own.
+ */
 export function killTree(pid: number, signal: NodeJS.Signals): void {
   try {
-    if (isPosix) process.kill(-pid, signal);
-    else process.kill(pid, signal);
+    process.kill(isPosix ? -pid : pid, signal);
   } catch {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // already gone
-    }
+    // already gone
   }
 }
 
