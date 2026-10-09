@@ -272,6 +272,152 @@ describe("dotenv names", () => {
     // Act / Assert
     expect(envNames(text)).toEqual(["AFTER"]);
   });
+
+  test("a `KEY: value` (colon) assignment is a name, and its quoted value spanning lines is skipped", () => {
+    // Arrange: Bun's .env loader accepts a colon followed by whitespace as the separator.
+    const text = [
+      "DATABASE_URL=postgres://localhost/db",
+      'SIGNING_KEY: "MIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAq7BFUpkGp3XQjHxm',
+      'k3Yz8N4fQ2v1Rk5h9wq7aVxk3dLkmZ0yQcK9pWQIDAQABAkBYsecretTail="',
+      'export COLON_ML : "first',
+      "INSIDE_COLON=1",
+      'last"',
+      "TABBED:\t'a",
+      "tSECRET=1",
+      "'",
+      "PEM: -----BEGIN PRIVATE KEY-----",
+      "kSECRETfragment=",
+      "-----END PRIVATE KEY-----",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act
+    const names = envNames(text);
+
+    // Assert
+    expect(names).toEqual(["DATABASE_URL", "SIGNING_KEY", "COLON_ML", "TABBED", "PEM", "AFTER"]);
+    expect(names.join("\n")).not.toMatch(/SECRET|secret|INSIDE/);
+  });
+
+  test("`KEY:` ending a line takes the next line as its value; a colon needs whitespace after it", () => {
+    // Arrange: as in Bun's loader — after `KEY:` and \n (or a lone \r) the next line is the value;
+    // after \r\n the value is empty; `KEY:"…"`, or `KEY:` ending the text, is no assignment at all.
+    const text = [
+      "NEXT_LINE:",
+      "vSECRET=1",
+      "QUOTED_NEXT:",
+      "'first",
+      "qSECRET=1",
+      "'",
+      "ARMORED:",
+      "-----BEGIN PRIVATE KEY-----",
+      "aSECRET=",
+      "-----END PRIVATE KEY-----",
+      "LONE_CR:\rcSECRET=1",
+      "CRLF_EMPTY:\r\nREAL=1\r",
+      'NOSPACE:"not a value',
+      "SEEN=1",
+      "AFTER=1",
+      "AT_END:",
+    ].join("\n");
+
+    // Act
+    const names = envNames(text);
+
+    // Assert
+    expect(names).toEqual([
+      "NEXT_LINE",
+      "QUOTED_NEXT",
+      "ARMORED",
+      "LONE_CR",
+      "CRLF_EMPTY",
+      "REAL",
+      "SEEN",
+      "AFTER",
+    ]);
+    expect(names.join("\n")).not.toContain("SECRET");
+  });
+
+  test("a backslash escapes the next character inside every kind of quote", () => {
+    // Arrange: `\'` and `` \` `` do not close their quotes (Bun's loader); `\\` before a quote does.
+    const text = [
+      "WIN_PATH='C:\\Users\\'",
+      "secretLine=abc",
+      "'",
+      "TPL=`a \\` b",
+      "bSECRET=1",
+      "last`",
+      'DQ="a \\" b',
+      "dSECRET=1",
+      'last"',
+      "DOUBLE_BACKSLASH='C:\\\\'",
+      "NEXT=1",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act
+    const names = envNames(text);
+
+    // Assert
+    expect(names).toEqual(["WIN_PATH", "TPL", "DQ", "DOUBLE_BACKSLASH", "NEXT", "AFTER"]);
+    expect(names.join("\n")).not.toMatch(/SECRET|secret/);
+  });
+
+  test("an empty value takes a quoted value opening on the next non-blank line", () => {
+    // Arrange: Bun's loader skips blank lines after `KEY=` / `KEY: ` looking for an opening quote.
+    const text = [
+      "EMPTY_THEN_QUOTE=",
+      "",
+      "   ",
+      '  "first',
+      "eSECRET=1",
+      'last"',
+      "SPACED_COLON: ",
+      "'a",
+      "cSECRET=1",
+      "'",
+      "CRLF_COLON:\r",
+      "`x",
+      "rSECRET=1",
+      "`",
+      "BLANK_THEN_LINE:",
+      "",
+      "  'b",
+      "lSECRET=1",
+      "'",
+      "EMPTY_THEN_PLAIN=",
+      "PLAIN=1",
+      "EMPTY_THEN_COMMENT=",
+      "# 'not a value",
+      "SEEN=1",
+      "AFTER=1",
+    ].join("\n");
+
+    // Act
+    const names = envNames(text);
+
+    // Assert
+    expect(names).toEqual([
+      "EMPTY_THEN_QUOTE",
+      "SPACED_COLON",
+      "CRLF_COLON",
+      "BLANK_THEN_LINE",
+      "EMPTY_THEN_PLAIN",
+      "PLAIN",
+      "EMPTY_THEN_COMMENT",
+      "SEEN",
+      "AFTER",
+    ]);
+    expect(names.join("\n")).not.toContain("SECRET");
+  });
+
+  test("a lone carriage return ends a line, so the quote it precedes is tracked", () => {
+    // Arrange
+    const text = 'A=x\rB="abc\nlSECRET=1\n"\nAFTER=1';
+
+    // Act / Assert
+    expect(envNames(text)).toEqual(["A", "B", "AFTER"]);
+  });
 });
 
 describe("pnpm-workspace.yaml", () => {
