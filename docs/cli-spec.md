@@ -20,7 +20,7 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 
 | Flag | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `--name <name>` | string | dir basename | Workspace/root package name |
+| `--name <name>` | string | dir basename | Workspace/root package name — must be non-empty (an empty or blank value is a usage error, exit 2) |
 | `--web <choice>` | `next` \| `sveltekit` \| `tanstack-start` \| `astro` \| `react-router` \| `nuxt` \| `vite` \| `none` | prompt | Web app in `apps/web` |
 | `--mobile <choice>` | `expo` \| `react-native` \| `none` | prompt | Mobile app in `apps/mobile` |
 | `--desktop <choice>` | `tauri` \| `electron` \| `none` | prompt | Desktop app in `apps/desktop` (v1.1) |
@@ -35,13 +35,18 @@ Plant a new workspace. Interactive by default; fully scriptable with flags.
 | `--github` | — | off | After the initial commit: create + push a GitHub repository via `gh` (see [GitHub publishing](#github-publishing)) |
 | `--public` | — | off | With `--github`: make the created repository public (private otherwise) |
 | `--dir-conflict <policy>` | `error` \| `merge` \| `increment` | `error` | Non-empty target directory policy |
-| `--keep-failed` | — | off | Don't delete the target dir if a generator fails |
+| `--topology <shape>` | `monorepo` \| `single` | `monorepo` | `single` plants exactly one app at the project root (no trunk, workspaces, or backend package) — see [Topology](#topology) (v2) |
+| `--keep-failed` | — | off | Don't delete the target dir if a generator fails. With `--topology single`, the failed generator's partial output is moved into the target (or, when the target already existed, kept in the named staging directory — never merged into an existing target) |
 | `--verbose` | — | off | Stream generator output instead of spinners |
 | `--version`, `-v` / `--help`, `-h` | — | — | Standard |
 
 ### Defaults (`--yes` with no selection flags)
 
 `--web next --mobile none --api none --backend convex` — a Next.js app wired to a Convex backend: groot's flagship pairing.
+
+### Topology
+
+`--topology monorepo` (default) plants the Turborepo trunk with apps under `apps/*` and packages under `packages/*`. `--topology single` plants **one** app at the project root: the chosen generator runs in a disposable sibling directory and its output moves into the target (so `--dir-conflict` behaves as for the trunk), then a root-level stitch renames the package, applies the app's port, tops up `.gitignore`, and writes a v2 `groot.json` with `project.topology: "single"`. Exactly one of `--web`/`--mobile`/`--desktop`/`--api` is required (`--yes` alone picks the default web app); `--backend` other than `none` is a usage error (exit 2). Slots without a flag are `none`, and single-topology runs never prompt for slots. `groot add` refuses single-app projects (use `groot plan add <capability>`). Certified end to end (real generator E2E): `--api hono`; other app frameworks use the same adapters but are not yet E2E-certified in single topology.
 
 ### GitHub publishing
 
@@ -102,7 +107,7 @@ Runs the same grow → stitch → verify stages as `init` for just the new scaff
 
 - Requires a `groot.json` manifest (written by `init`) — `add` walks up from the current directory to find the workspace root. Relative `--path` values resolve against that root, not the current directory.
 - **Occupancy**: a scaffold whose slot is already filled is refused (exit 2) unless `--path` targets a fresh directory. Path equality with any existing scaffold is always refused. The backend slot is single-occupancy — its package name (`@repo/backend`) is fixed by the workspace conventions, so `--path` is no escape hatch there.
-- **Ports**: a dev-port collision with an existing scaffold (e.g. growing Hono next to Elysia — both default to 3001) is a **warning**, not an error; `groot doctor` flags it persistently until one port is changed.
+- **Ports**: in a **v1** workspace, a dev-port collision with an existing scaffold (e.g. growing Hono next to Elysia — both default to 3001) is a **warning**, not an error; `groot doctor` flags it persistently until one port is changed. In a **v2** workspace (`groot.json` version 2), the new scaffold instead gets the next free port above its framework default — every port the workspace's scaffolds and blueprint apps declare counts as taken — and the stitch applies it (`--port <n>` in a web scaffold's `dev` script; written into source for Elysia/Hono/Fastify); the output prints the allocation (`● dev port 3000 is taken by apps/web → apps/admin gets 3002`) and `groot.json` records the allocated port. Frameworks whose template couples the port elsewhere (Expo/React Native's Metro, Tauri) keep the default and the warning. See [architecture.md#port-allocation](./architecture.md#port-allocation).
 - **Provenance**: `groot.json`'s `createdWith` keeps its original value — it records which CLI planted the workspace, not which one last grew it.
 - **Git**: `add` never runs `git init` — the workspace keeps whatever git state it has, including none. Any `.git` a generator initializes *inside* the new scaffold is removed after the grow (the workspace root owns git history); a `.git` that pre-existed the grow is preserved. `init` applies the same rule to every scaffold it grows.
 - **Targeted rollback**: if the generator fails, only the new scaffold directory is removed (`--keep-failed` keeps it for inspection); the rest of the workspace is never touched. Stitch/verify failures leave the tree in place, as in `init`.
@@ -118,7 +123,7 @@ Verify workspace health: workspace globs valid, single lockfile, no port collisi
 
 ## `groot.json` manifest
 
-Written to the workspace root by `init`, updated by `add`. The manifest is groot's memory — never required by the apps themselves at runtime.
+Written to the workspace root by `init`, updated by `add`. The manifest is groot's memory — never required by the apps themselves at runtime. **Groot v2:** `init` writes version 2 — the blueprint, a strict superset of the version 1 shape below (`createdWith`, `conventions`, and `scaffolds` keep their meaning; see [v2-cli-spec.md](./v2-cli-spec.md#compatibility-with-v1)); `add` keeps whichever version a workspace already has, and `groot migrate` converts v1 to v2 explicitly.
 
 ```jsonc
 {

@@ -15,6 +15,7 @@ import { ADAPTERS } from "../adapters/index.ts";
 import { TRUNK_EXAMPLE_PATHS, trunkCommand } from "../adapters/trunk.ts";
 import type { FileSpec, GeneratorCommand } from "./adapter.ts";
 import { EXIT, GrootError } from "./errors.ts";
+import { exactArgv } from "./locks.ts";
 import { runCommand } from "./run.ts";
 import type { Plan, PlannedScaffold } from "./types.ts";
 
@@ -159,7 +160,10 @@ export async function growScaffold(
   // Snapshot BEFORE any step runs, so only generator-created .git is scrubbed.
   const hadNestedGit = existsSync(join(scaffoldDir, ".git"));
 
-  const command = adapter.command(ctx);
+  const declared = adapter.command(ctx);
+  // Locked exact versions replace the adapter's series pin (engine/locks.ts).
+  const command =
+    declared === null ? null : { ...declared, argv: exactArgv(declared.argv, plan.generatorLocks) };
   if (command !== null) {
     report(command.label);
     if (adapter.stagedGeneration) {
@@ -177,7 +181,10 @@ export async function growScaffold(
 
   for (const post of adapter.postCommands?.(ctx) ?? []) {
     report(post.label);
-    await runCommand(post, { verbose: options.verbose });
+    await runCommand(
+      { ...post, argv: exactArgv(post.argv, plan.generatorLocks) },
+      { verbose: options.verbose },
+    );
   }
 
   if (await scrubGeneratorGit(scaffoldDir, hadNestedGit)) {
@@ -198,7 +205,8 @@ export async function generate(plan: Plan, options: GenerateOptions): Promise<vo
     // from the directory basename and rejects invalid package names.
     const tmpDir = join(parent, `groot-trunk-${crypto.randomUUID().slice(0, 8)}`);
     try {
-      const trunk = trunkCommand(tmpDir, parent);
+      const declaredTrunk = trunkCommand(tmpDir, parent);
+      const trunk = { ...declaredTrunk, argv: exactArgv(declaredTrunk.argv, plan.generatorLocks) };
       report(trunk.label);
       await runCommand(trunk, { verbose: options.verbose });
       await moveDirContents(tmpDir, plan.targetDir);

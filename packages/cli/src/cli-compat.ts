@@ -5,7 +5,32 @@
  * the first bare word as the target directory. Route those invocations to `init`.
  */
 
-const KNOWN_COMMANDS = new Set(["init", "add", "doctor"]);
+/**
+ * Every groot command name — never treated as a bun-create destination. The
+ * stability tripwire (contract.test.ts) snapshots this set.
+ */
+export const KNOWN_COMMANDS: ReadonlySet<string> = new Set([
+  // v1
+  "init",
+  "add",
+  "doctor",
+  // v2 (docs/v2-cli-spec.md#bare-word-routing — these words are reserved)
+  "inspect",
+  "adopt",
+  "migrate",
+  "plan",
+  "apply",
+  "status",
+  "resume",
+  "rollback",
+  "verify",
+  "evidence",
+  "context",
+  "mcp",
+  "schema",
+  "task",
+  "review",
+]);
 
 /**
  * Rewrite raw CLI args so a leading bare word that isn't a known subcommand is

@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "groot.runner"
+    },
+    "runner": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex"
+      ]
+    },
+    "available": {
+      "type": "boolean"
+    },
+    "executable": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "interface": {
+      "type": "string"
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "authenticated",
+            "unauthenticated",
+            "unknown"
+          ]
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "method",
+        "detail"
+      ],
+      "additionalProperties": false
+    },
+    "features": {
+      "type": "object",
+      "properties": {
+        "structuredEvents": {
+          "type": "boolean"
+        },
+        "cancellation": {
+          "type": "string",
+          "enum": [
+            "signal",
+            "none"
+          ]
+        },
+        "resume": {
+          "type": "boolean"
+        },
+        "permissionModes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "usage": {
+          "type": "string",
+          "enum": [
+            "observed-cost",
+            "tokens",
+            "none"
+          ]
+        },
+        "budgetLimit": {
+          "type": "boolean"
+        },
+        "turnLimit": {
+          "type": "boolean"
+        },
+        "sandbox": {
+          "type": "string",
+          "enum": [
+            "os",
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "structuredEvents",
+        "cancellation",
+        "resume",
+        "permissionModes",
+        "usage",
+        "budgetLimit",
+        "turnLimit",
+        "sandbox"
+      ],
+      "additionalProperties": false
+    },
+    "checkedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "kind",
+    "runner",
+    "available",
+    "executable",
+    "version",
+    "interface",
+    "auth",
+    "features",
+    "checkedAt",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/runner.schema.json",
+  "title": "Runner capabilities",
+  "description": "Installed agent discovery: executable, version, auth, supported features."
+}

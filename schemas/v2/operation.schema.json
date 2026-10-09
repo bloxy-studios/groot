@@ -1,0 +1,366 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "groot.operation"
+    },
+    "operationId": {
+      "type": "string",
+      "pattern": "^op_[0-9a-z]{8,40}$"
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^plan_[0-9a-z]{8,40}$"
+    },
+    "planFingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "intent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "init"
+            },
+            "name": {
+              "type": "string"
+            },
+            "topology": {
+              "type": "string",
+              "enum": [
+                "single",
+                "monorepo"
+              ]
+            },
+            "selections": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "topology",
+            "selections",
+            "capabilities"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "adopt"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "migrate"
+            },
+            "from": {
+              "type": "number",
+              "const": 1
+            },
+            "to": {
+              "type": "number",
+              "const": 2
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "add-capability"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "recipe": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "capabilities",
+            "target",
+            "recipe",
+            "options"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "context-sync"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "interrupted",
+        "conflicted",
+        "rolling-back",
+        "rolled-back",
+        "rollback-conflicted"
+      ]
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "failed",
+              "rolled-back"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reversible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "description",
+          "status",
+          "outcome",
+          "reversible"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "currentStep": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "enum": [
+                "GROOT_E_INTERNAL",
+                "GROOT_E_USAGE",
+                "GROOT_E_PREFLIGHT",
+                "GROOT_E_GENERATOR",
+                "GROOT_E_COMMAND_FAILED",
+                "GROOT_E_VERIFY_FAILED",
+                "GROOT_E_NOT_A_PROJECT",
+                "GROOT_E_NOT_REGISTERED",
+                "GROOT_E_MIGRATION_REQUIRED",
+                "GROOT_E_UNSUPPORTED_SCHEMA",
+                "GROOT_E_INVALID_DOCUMENT",
+                "GROOT_E_UNSUPPORTED_PROJECT",
+                "GROOT_E_INCOMPATIBLE",
+                "GROOT_E_UNKNOWN_CAPABILITY",
+                "GROOT_E_STALE_PLAN",
+                "GROOT_E_CONFLICT",
+                "GROOT_E_OWNERSHIP_CONFLICT",
+                "GROOT_E_ROLLBACK_CONFLICT",
+                "GROOT_E_PATH_OUTSIDE_PROJECT",
+                "GROOT_E_POLICY_DENIED",
+                "GROOT_E_BLOCKED",
+                "GROOT_E_LOCKED",
+                "GROOT_E_INTERRUPTED",
+                "GROOT_E_NOT_FOUND",
+                "GROOT_E_NOT_RESUMABLE",
+                "GROOT_E_RUNNER_UNAVAILABLE",
+                "GROOT_E_TASK_STATE"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "hint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "details": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "hint",
+            "exitCode",
+            "details"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "resumable": {
+      "type": "boolean"
+    },
+    "journal": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:)(?!\\.\\.(?:\\/|$))[^/\\\\\\x00-\\x1f\\x7f]+(?:\\/(?!\\.\\.(?:\\/|$))[^/\\\\\\x00-\\x1f\\x7f]+)*$"
+    }
+  },
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "planId",
+    "planFingerprint",
+    "intent",
+    "summary",
+    "status",
+    "startedAt",
+    "updatedAt",
+    "steps",
+    "currentStep",
+    "error",
+    "evidence",
+    "resumable",
+    "journal"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/operation.schema.json",
+  "title": "Operation state",
+  "description": "Derived snapshot of an operation (status, steps, resumability)."
+}

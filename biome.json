@@ -6,7 +6,16 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!**/.turbo", "!bun.lock"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/.turbo",
+      "!bun.lock",
+      "!schemas/v2",
+      "!schemas/groot.schema.json",
+      "!.claude/worktrees"
+    ]
   },
   "formatter": {
     "enabled": true,

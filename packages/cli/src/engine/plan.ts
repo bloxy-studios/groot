@@ -2,6 +2,8 @@
  * Resolve stage: merge slot selections + options into an immutable Plan, and
  * project plans into the groot.json manifest shape (docs/cli-spec.md#grootjson-manifest).
  */
+import type { BlueprintV2 } from "../core/contracts/blueprint.ts";
+import { planToBlueprint } from "./blueprint.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { choiceIdsFor, findChoice, SLOT_ORDER, YES_DEFAULTS } from "./matrix.ts";
 import {
@@ -92,8 +94,13 @@ export function buildPlan(input: BuildPlanInput): Plan {
   };
 }
 
-/** Project a Plan into the groot.json manifest (also the `--dry-run --json` output). */
-export function planToManifest(plan: Plan): Manifest {
+/**
+ * Project a Plan into groot.json (also the `--dry-run --json` output): the v2
+ * blueprint for fresh and v2 workspaces, the v1 manifest for v1 workspaces —
+ * Groot never migrates a manifest implicitly.
+ */
+export function planToManifest(plan: Plan): Manifest | BlueprintV2 {
+  if ((plan.manifestVersion ?? 2) === 2) return planToBlueprint(plan);
   return {
     $schema: MANIFEST_SCHEMA_URL,
     version: MANIFEST_VERSION,

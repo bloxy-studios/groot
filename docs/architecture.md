@@ -88,14 +88,24 @@ Next.js, Elysia, and Hono all default to port 3000 — the #1 papercut of multi-
 | `apps/web` (React Router) | 5173 | Vite default (kept) — shared with SvelteKit, like elysia/hono on 3001 |
 | `apps/web` (Nuxt) | 3000 | `nuxt dev` built-in default (kept) — shared with Next/TanStack |
 | `apps/web` (Vite) | 5173 | Vite default (kept) — shared with SvelteKit/React Router |
-| `apps/api` (Elysia / Hono) | 3001 | Written into source (`.listen(3001)` / `export default { port: 3001, fetch }`) — these templates have no port flag |
-| `apps/api` (Fastify) | 3001 | Written into groot's `src/server.ts` overlay (`listen({ port: 3001 })`) — shared with Elysia/Hono per the same-slot rule |
+| `apps/api` (Elysia / Hono) | 3001 | Written into source as `Number(process.env.PORT ?? 3001)` (`.listen(…)` / `export default { port: …, fetch }`) — these templates have no port flag; `PORT` overrides it, which is how `groot verify` runs the app on an ephemeral port |
+| `apps/api` (Fastify) | 3001 | Written into groot's `src/server.ts` overlay (`listen({ port: Number(process.env.PORT ?? 3001) })`) — shared with Elysia/Hono per the same-slot rule; `PORT` overrides it |
 | `apps/mobile` (Expo / Metro) | 8081 | Metro default (kept) |
 | `apps/mobile` (React Native bare) | 8081 | Metro default (kept) — shared with Expo per the same-slot rule; the stitch adds monorepo watchFolders/module resolution |
 | `apps/desktop` (Tauri) | 1420 | Template's Vite `strictPort` default, coupled to `tauri.conf.json`'s `devUrl` (kept — unique in the matrix) |
 | `apps/desktop` (Electron) | — | electron-vite's renderer dev server is non-strict and self-wiring (it launches Electron with whatever port it resolved); groot declares none |
 | `packages/backend` (Convex) | — | Cloud dev deployment; no local port |
 | `packages/backend` (Supabase) | — | Local stack is Docker-managed on config.toml's 54321+ block, never started by groot — no declared port |
+
+The table is collision-free per slot, so `init` never needs to move a port. Same-slot alternatives share a default, so collisions arise when `groot add --path` grows a second scaffold. A **v1** workspace keeps the v1 rule: warn, and `groot doctor` flags it until someone changes a port. In a **v2** workspace (groot.json version 2), `add` allocates instead:
+
+- Every port the workspace's scaffolds and blueprint apps declare counts as claimed, including adopted apps without a scaffold entry.
+- The new scaffold keeps its framework default when that port is free; otherwise it gets the next free port above it (`core/ports.ts` `allocatePort`).
+- The stitch applies the result through the adapter's `portAssignment`. **dev-script** adapters get `--port <n>` in their `dev` script, replacing a template's own flag; this applies to Next.js, SvelteKit, TanStack Start, Astro, React Router, Nuxt and Vite, whose dev CLIs all take `--port` ([scaffold-flows.md](./scaffold-flows.md#dev-port-flags)). **source** adapters write `scaffold.port` into their listener (Elysia, Hono, Fastify).
+- A scaffold on its default port is left byte-identical. Adapters without a `portAssignment` keep the default and the warning. That covers Expo and bare React Native (Metro's port is coupled to the native app) and Tauri (its template couples Vite's `strictPort`, `tauri.conf.json`'s `devUrl` and the HMR port).
+- `groot.json` records the allocated port, so doctor's per-adapter port checks follow it.
+
+Runtime occupancy is a separate question from blueprint collisions. Verification never uses the declared ports: runtime and product-flow checks start apps on an OS-assigned ephemeral port. Doctor's "dev ports" check only compares declarations.
 
 ## Workspace conventions (what groot outputs)
 

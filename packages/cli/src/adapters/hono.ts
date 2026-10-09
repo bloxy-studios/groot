@@ -7,7 +7,7 @@
  * It also interactively confirms on a non-empty target with no bypass flag,
  * so the generate stage guarantees a fresh directory (trunk examples are
  * removed first). Bun serves the template's default-export app on port 3000;
- * the stitch stage rewrites it to the plan's port.
+ * the stitch stage rewrites it to read PORT, defaulting to the plan's port.
  */
 import type {
   AdapterContext,
@@ -16,11 +16,12 @@ import type {
   GeneratorCommand,
   ScaffoldAdapter,
 } from "../engine/adapter.ts";
-import { apiPortCheck } from "./elysia.ts";
+import { apiPortCheck, portPattern } from "./elysia.ts";
 
 export const honoAdapter: ScaffoldAdapter = {
   id: "hono",
   slot: "api",
+  portAssignment: "source",
   command(ctx: AdapterContext): GeneratorCommand {
     return {
       argv: ["bunx", "create-hono@0.19", ctx.scaffold.path, "--template", "bun", "--pm", "bun"],
@@ -30,6 +31,6 @@ export const honoAdapter: ScaffoldAdapter = {
     };
   },
   async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
-    return [await apiPortCheck(ctx, `port: ${ctx.scaffold.port}`)];
+    return [await apiPortCheck(ctx, portPattern(String.raw`\bport:`))];
   },
 };

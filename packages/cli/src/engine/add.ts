@@ -8,6 +8,9 @@
 import { readFile, rm } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ADAPTERS } from "../adapters/index.ts";
+import type { BlueprintV2 } from "../core/contracts/blueprint.ts";
+import { allocatePort, claimedPorts } from "../core/ports.ts";
+import { BUN_DEFAULT_PORT } from "../core/recipes/layout.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import { growScaffold } from "./generate.ts";
 import type { LoadedManifest } from "./manifest.ts";
@@ -68,6 +71,8 @@ export interface AddResolution {
   readonly scaffold: PlannedScaffold;
   /** Non-fatal findings to surface (port collisions — `groot doctor` flags them persistently). */
   readonly warnings: readonly string[];
+  /** What groot decided on the user's behalf (a dev port allocated in a v2 workspace). */
+  readonly notes: readonly string[];
 }
 
 /**
@@ -85,12 +90,15 @@ export interface AddResolution {
  * - the destination must be fresh — absent or an empty directory
  * - a dev-port collision with an existing scaffold is a **warning**, not an
  *   error — `groot doctor` keeps flagging it until one port changes
+ *   (v1 workspaces and template-coupled ports); in a v2 workspace the new
+ *   scaffold gets the next free port instead (see assignDevPort)
  */
 export async function resolveAddScaffold(
   manifest: Manifest,
   workspaceRoot: string,
   framework: string,
   pathOverride: string | undefined,
+  blueprint: BlueprintV2 | null = null,
 ): Promise<AddResolution> {
   const choice = frameworkChoice(framework);
   if (choice === undefined) {
@@ -152,19 +160,73 @@ export async function resolveAddScaffold(
     );
   }
 
-  const warnings: string[] = [];
-  if (meta.port !== null) {
-    const portOwner = manifest.scaffolds.find((scaffold) => scaffold.port === meta.port);
-    if (portOwner !== undefined) {
-      warnings.push(
-        `dev port ${meta.port} is already used by ${portOwner.path} — change one scaffold's port afterwards (\`groot doctor\` flags this until it's fixed).`,
-      );
+  const { port, warnings, notes } = assignDevPort(manifest, blueprint, meta, path);
+  return {
+    scaffold: { slot, framework: meta.id, path, generator: meta.generator, port },
+    warnings,
+    notes,
+  };
+}
+
+/**
+ * The port an app that declares none serves on: its framework's default. For
+ * frameworks groot leaves on their dev CLI's default that is the matrix port
+ * (an adopted `next dev` serves on 3000). Elysia/Hono/Fastify's matrix port is
+ * groot's own, written into the servers it generates; a server groot did not
+ * write is taken to serve on Bun's default — as the recipes assume.
+ */
+function impliedPort(framework: string): number | null {
+  const choice = frameworkChoice(framework);
+  if (choice === undefined || choice.meta.port === null) return null;
+  return ADAPTERS[choice.meta.id].portAssignment === "source" ? BUN_DEFAULT_PORT : choice.meta.port;
+}
+
+/**
+ * The new scaffold's dev port (docs/architecture.md#port-allocation). The
+ * framework default wins when nobody claims it. On a collision, a v2
+ * workspace allocates the next free port — counting every port its
+ * scaffolds and blueprint apps (adopted ones included) declare, and the
+ * implied default of an app that declares none — when the adapter can apply
+ * it; v1 workspaces and template-coupled ports keep the default with a
+ * warning, as v1 always did.
+ */
+function assignDevPort(
+  manifest: Manifest,
+  blueprint: BlueprintV2 | null,
+  meta: FrameworkMeta,
+  path: string,
+): { port: number | null; warnings: string[]; notes: string[] } {
+  if (meta.port === null) return { port: null, warnings: [], notes: [] };
+  const claimed = new Map<number, string>();
+  for (const scaffold of manifest.scaffolds) {
+    if (scaffold.port !== null && !claimed.has(scaffold.port)) {
+      claimed.set(scaffold.port, scaffold.path);
     }
   }
-
+  for (const [port, owner] of claimedPorts(blueprint, null)) {
+    if (!claimed.has(port)) claimed.set(port, owner);
+  }
+  for (const app of blueprint?.apps ?? []) {
+    if (app.port !== null || app.framework === null) continue;
+    const implied = impliedPort(app.framework);
+    if (implied !== null && !claimed.has(implied)) claimed.set(implied, app.path);
+  }
+  const owner = claimed.get(meta.port);
+  if (owner === undefined) return { port: meta.port, warnings: [], notes: [] };
+  if (manifest.version === 2 && ADAPTERS[meta.id].portAssignment !== undefined) {
+    const port = allocatePort(meta.port, claimed);
+    return {
+      port,
+      warnings: [],
+      notes: [`dev port ${meta.port} is taken by ${owner} → ${path} gets ${port}`],
+    };
+  }
   return {
-    scaffold: { slot, framework: meta.id, path, generator: meta.generator, port: meta.port },
-    warnings,
+    port: meta.port,
+    warnings: [
+      `dev port ${meta.port} is already used by ${owner} — change one scaffold's port afterwards (\`groot doctor\` flags this until it's fixed).`,
+    ],
+    notes: [],
   };
 }
 
@@ -216,6 +278,10 @@ export function buildAddPlan(
     createdWith: loaded.manifest.createdWith,
     conventions: loaded.manifest.conventions,
     scaffolds: [...loaded.manifest.scaffolds, scaffold],
+    // Keep the manifest version the workspace already has — never migrate implicitly.
+    manifestVersion: loaded.manifest.version,
+    blueprint: loaded.blueprint,
+    topology: loaded.blueprint?.project.topology ?? "monorepo",
     options: {
       install: options.install,
       // add never initializes git: init-created workspaces already have .git

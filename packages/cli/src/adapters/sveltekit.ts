@@ -18,6 +18,7 @@ import type {
 export const sveltekitAdapter: ScaffoldAdapter = {
   id: "sveltekit",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     return {
       argv: [

@@ -47,6 +47,14 @@ Do this **early** — unclaimed names can be squatted.
 3. Merging that PR triggers: `changeset publish` → npm publish (provenance) → git tag `create-groot@X.Y.Z` → GitHub Release → the `binaries` job compiles `groot` for linux-x64/arm64, darwin-x64/arm64, windows-x64, generates `SHA256SUMS.txt` and an SPDX SBOM (`groot-sbom.spdx.json`), signs build-provenance attestations for every artifact (Sigstore, GitHub attestation store), and uploads everything to the release.
 4. Verify: release page shows **7 assets** (5 binaries + checksums + SBOM; releases before 2026-07-11 have 6); `bun info create-groot version` matches; `gh attestation verify <downloaded asset> --repo bloxy-studios/groot` passes; run the installer end-to-end on one platform.
 
+### The v2 prerelease line (`next`)
+
+Groot v2 is a major release (`init` writes a version 2 `groot.json`; see [stability.md](./stability.md#version-2)), so the repository is in changesets **pre mode** with the tag `next` (`.changeset/pre.json`). While it stays there:
+
+- Version PRs produce `2.0.0-next.N`, and `changeset publish` publishes them under the npm dist-tag **`next`** — `bun create groot` / `bunx create-groot` keep resolving the 1.x `latest`; early adopters opt in with `bunx create-groot@next`.
+- changesets/action marks those GitHub releases as **prereleases**, so `install.sh` / `install.ps1` without a version keep installing the latest stable 1.x binary (`releases/latest` skips prereleases); `GROOT_VERSION=2.0.0-next.N` pins a prerelease.
+- Promote to stable with `bunx changeset pre exit` in a PR; the next version PR then produces `2.0.0` on `latest`. To abandon the prerelease line instead, delete `.changeset/pre.json` before any `next` version has been published.
+
 > **macOS notarization is the one signing step that stays manual-gated:** it requires an Apple Developer account (certificates + notarytool credentials as repo secrets). Until the owner provisions those, macOS users rely on checksum + attestation verification; Gatekeeper prompts on first run are expected.
 
 ## Greptile review loop (policy)

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { BLUEPRINT_VERSION, BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { EXIT, GrootError } from "./errors.ts";
 import {
   applyYesDefaults,
@@ -136,15 +137,28 @@ describe("plan → manifest", () => {
     expect(plan.scaffolds).toHaveLength(2);
   });
 
-  test("manifest matches the groot.json contract", () => {
+  test("fresh plans project to the v2 blueprint — a strict superset of the v1 manifest", () => {
     const manifest = planToManifest(plan);
     expect(manifest.$schema).toBe(MANIFEST_SCHEMA_URL);
-    expect(manifest.version).toBe(MANIFEST_VERSION);
+    expect(manifest.version).toBe(BLUEPRINT_VERSION);
+    expect(BlueprintV2.safeParse(manifest).success).toBe(true);
+    // The v1 fields keep their exact v1 meaning.
     expect(manifest.createdWith).toBe("create-groot@0.1.0");
     expect(manifest.scaffolds).toEqual(plan.scaffolds);
     // The manifest must not leak machine-local or run-specific state.
     expect(manifest).not.toHaveProperty("targetDir");
     expect(manifest).not.toHaveProperty("options");
+  });
+
+  test("v1 workspaces still project to the v1 manifest (no implicit migration)", () => {
+    const manifest = planToManifest({ ...plan, manifestVersion: 1 });
+    expect(manifest).toEqual({
+      $schema: MANIFEST_SCHEMA_URL,
+      version: MANIFEST_VERSION,
+      createdWith: "create-groot@0.1.0",
+      conventions: plan.conventions,
+      scaffolds: plan.scaffolds,
+    });
   });
 
   test("manifest is JSON-round-trippable", () => {

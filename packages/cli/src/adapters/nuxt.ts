@@ -34,6 +34,7 @@ export const NUXT_TEMPLATE = "minimal";
 export const nuxtAdapter: ScaffoldAdapter = {
   id: "nuxt",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {

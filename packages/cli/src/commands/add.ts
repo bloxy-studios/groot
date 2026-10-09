@@ -17,6 +17,7 @@ import {
   resolveAddScaffold,
 } from "../engine/add.ts";
 import { EXIT, GrootError } from "../engine/errors.ts";
+import { assertLockReadable, resolveGenerators } from "../engine/locks.ts";
 import { loadManifest } from "../engine/manifest.ts";
 import { describeScaffold, planToManifest } from "../engine/plan.ts";
 import type { Plan, PlannedScaffold } from "../engine/types.ts";
@@ -34,11 +35,19 @@ async function runAdd(args: {
     throw new GrootError("--json currently requires --dry-run", EXIT.USAGE);
   }
   const loaded = await loadManifest(process.cwd());
-  const { scaffold, warnings } = await resolveAddScaffold(
+  if (loaded.blueprint?.project.topology === "single") {
+    throw new GrootError(
+      `${loaded.workspaceRoot} is a single-app project; groot add grows monorepo workspaces.`,
+      EXIT.USAGE,
+      "Add capabilities with `groot plan add <capability>`, or create a monorepo with `groot init <dir>`.",
+    );
+  }
+  const { scaffold, warnings, notes } = await resolveAddScaffold(
     loaded.manifest,
     loaded.workspaceRoot,
     args.framework,
     args.path,
+    loaded.blueprint,
   );
   const rootName = await readRootPackageName(loaded.workspaceRoot);
   const plan = buildAddPlan(loaded, scaffold, rootName, {
@@ -46,6 +55,8 @@ async function runAdd(args: {
     keepFailed: args.keepFailed,
     verbose: args.verbose,
   });
+  // Stitch updates groot.lock.json last — refuse an unreadable one now, before anything grows.
+  await assertLockReadable(plan);
 
   // In --json mode all diagnostics go to stderr so stdout stays pure
   // machine-readable output (docs/cli-spec.md#output-contract).
@@ -54,6 +65,9 @@ async function runAdd(args: {
   write(`${pc.dim("workspace")}  ${loaded.workspaceRoot}`);
   write(`${pc.dim("growing")}    ${describeScaffold(scaffold)}`);
   write();
+  for (const note of notes) {
+    write(`${pc.green("●")} ${note}`);
+  }
   for (const warning of warnings) {
     write(`${pc.yellow("●")} ${warning}`);
   }
@@ -80,7 +94,13 @@ async function runAdd(args: {
   const step = (label: string): void => {
     console.log(`${pc.green("◇")} ${label}…`);
   };
-  await executeAdd(plan, scaffold, { verbose: args.verbose, onStep: step });
+  // v2 workspaces record the exact generator version in groot.lock.json; v1
+  // workspaces stay exactly as v1 wrote them (no lock, no migration).
+  const generatorLocks =
+    plan.manifestVersion === 2
+      ? await resolveGenerators({ ...plan, scaffolds: [scaffold] }, { includeTrunk: false })
+      : undefined;
+  await executeAdd({ ...plan, generatorLocks }, scaffold, { verbose: args.verbose, onStep: step });
   printNextSteps(plan, scaffold);
 }
 

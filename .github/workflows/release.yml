@@ -91,9 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/release
+          # Hardening (docs/v2-research.md#bun): compiled binaries would otherwise
+          # auto-load the user's .env/bunfig.toml from the working directory, and
+          # --no-orphans sweeps any child process tree when groot exits.
           for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
             echo "→ bun-${target}"
-            bun build --compile --minify --sourcemap src/index.ts \
+            bun build --compile --minify --sourcemap \
+              --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+              --compile-exec-argv="--no-orphans" src/index.ts \
               --target="bun-${target}" --outfile "dist/release/groot-${target}"
           done
           # --sourcemap embeds the map inside each binary; drop the stray external

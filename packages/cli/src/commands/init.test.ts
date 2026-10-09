@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BLUEPRINT_VERSION, BlueprintV2 } from "../core/contracts/blueprint.ts";
 import { MANIFEST_SCHEMA_URL, MANIFEST_VERSION } from "../engine/types.ts";
 
 const CLI_ENTRY = join(import.meta.dir, "../index.ts");
@@ -74,6 +75,25 @@ describe("groot init (process-level, non-TTY)", () => {
     expect(stderr).toContain("--github needs the initial commit");
   });
 
+  test("an empty or blank --name → exit 2 with a usage error, never a raw ZodError", async () => {
+    const cwd = await scratch();
+    for (const name of ["", "   "]) {
+      const { stdout, stderr, exitCode } = await runCli(cwd, [
+        "init",
+        "demo",
+        "--name",
+        name,
+        "--yes",
+        "--dry-run",
+        "--json",
+      ]);
+      expect(exitCode).toBe(2);
+      expect(stderr).toContain("--name cannot be empty");
+      expect(stderr).not.toContain("ZodError");
+      expect(stdout).toBe("");
+    }
+  }, 60_000);
+
   test("--github shows in the dry-run plan summary (private by default, public opt-in)", async () => {
     const cwd = await scratch();
     // The identity precondition runs even on dry runs (truthful preview) —
@@ -92,6 +112,27 @@ describe("groot init (process-level, non-TTY)", () => {
     );
     expect(pub.stdout).toContain("github     create public repo + push");
   });
+
+  test("--dir-conflict merge into a directory with an unreadable groot.lock.json → exit 2 up front, even on a dry run", async () => {
+    const cwd = await scratch();
+    await mkdir(join(cwd, "app"));
+    await writeFile(
+      join(cwd, "app", "groot.lock.json"),
+      "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n",
+    );
+    const { stdout, stderr, exitCode } = await runCli(cwd, [
+      "init",
+      "app",
+      "--yes",
+      "--dir-conflict",
+      "merge",
+      "--dry-run",
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("groot.lock.json");
+    expect(stderr).not.toContain("SyntaxError");
+    expect(stdout).not.toContain("dry run — nothing was written");
+  }, 60_000);
 
   test("--github without a git identity → exit 2 up front, even on a dry run", async () => {
     const cwd = await scratch();
@@ -206,7 +247,11 @@ describe("groot init (process-level, non-TTY)", () => {
     ]);
     expect(exitCode).toBe(0);
     const plan = JSON.parse(stdout); // throws if stdout isn't pure JSON
-    expect(plan.version).toBe(MANIFEST_VERSION);
+    // Deliberate v2 change: init writes (and previews) the v2 blueprint, a
+    // superset of the v1 manifest (docs/v2-cli-spec.md#compatibility-with-v1).
+    expect(plan.version).toBe(BLUEPRINT_VERSION);
+    expect(BlueprintV2.safeParse(plan).success).toBe(true);
+    expect(plan.project).toMatchObject({ topology: "monorepo", origin: "created" });
     expect(plan.scaffolds).toHaveLength(1);
     expect(plan.scaffolds.at(0)?.framework).toBe("next");
     // Preflight check lines land on stderr in --json mode.

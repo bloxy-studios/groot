@@ -4,6 +4,9 @@
  * adapter contract) and docs/cli-spec.md (flags, exit codes, manifest schema).
  */
 
+import type { BlueprintV2 } from "../core/contracts/blueprint.ts";
+import type { GeneratorLock } from "../core/contracts/lock.ts";
+
 /** The five scaffold slots a groot workspace can fill. */
 export type Slot = "web" | "mobile" | "desktop" | "api" | "backend";
 
@@ -82,6 +85,23 @@ export interface Plan {
   readonly conventions: { readonly packagesNamespace: string };
   readonly scaffolds: readonly PlannedScaffold[];
   readonly options: PlanOptions;
+  /**
+   * Workspace shape. "monorepo" (default) is the v1 Turborepo trunk; "single"
+   * is one app at the project root (groot init --topology single).
+   */
+  readonly topology?: "monorepo" | "single";
+  /**
+   * groot.json version to write. Groot keeps the version it found (no silent
+   * migration); fresh workspaces get the newest (2). Default: 2.
+   */
+  readonly manifestVersion?: 1 | 2;
+  /** The existing v2 blueprint being grown (groot add on a v2 workspace). */
+  readonly blueprint?: BlueprintV2 | null;
+  /**
+   * Exact generator resolutions (engine/locks.ts). When present, generators
+   * run as `bunx <pkg>@<exact>` and stitch records them in groot.lock.json.
+   */
+  readonly generatorLocks?: readonly GeneratorLock[];
 }
 
 /** Current groot.json manifest schema version. */
@@ -91,10 +111,14 @@ export const MANIFEST_VERSION = 1 as const;
 export const MANIFEST_SCHEMA_URL =
   "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/groot.schema.json";
 
-/** The groot.json manifest — written by init, consumed by add/doctor (and `--dry-run --json`). */
+/**
+ * The v1-compatible view of groot.json that add/doctor/presets consume. A v2
+ * blueprint is a superset, so it is read through the same fields (with
+ * `version: 2`); the full v2 document travels separately as `blueprint`.
+ */
 export interface Manifest {
   readonly $schema: string;
-  readonly version: typeof MANIFEST_VERSION;
+  readonly version: typeof MANIFEST_VERSION | 2;
   readonly createdWith: string;
   readonly conventions: { readonly packagesNamespace: string };
   readonly scaffolds: readonly PlannedScaffold[];

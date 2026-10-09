@@ -89,6 +89,10 @@ Add-ons patch *existing* scaffolds instead of owning slots — validated by the 
 - [ ] Better Auth add-on (direct-write + `@better-auth/cli generate --yes`; layers on Drizzle).
 - [ ] tRPC add-on for Hono/Elysia apis (oRPC as a second flavor later).
 
+## v2 — Build it. Grow it. Prove it works. 🌲 (in progress, branch `refactor/groot-v2-core`)
+
+Groot becomes a lifecycle CLI for developers and their coding agents: create **or adopt** a project, change it through previewable journaled plans, verify it with evidence, keep agent context current, and delegate bounded work to installed agents. Design: [v2-architecture.md](./v2-architecture.md) · contract: [v2-cli-spec.md](./v2-cli-spec.md) · research: [v2-research.md](./v2-research.md) · progress: [v2-execution.md](./v2-execution.md) · the full prioritized catalogue with dependencies and acceptance plans: **[v2-ledger.md](./v2-ledger.md)** (it supersedes the unscheduled ideas below where they overlap — e.g. add-ons became capabilities and recipes, `groot mcp` and agent instructions are part of v2).
+
 ## Ideas beyond (unscheduled)
 
 - Community template registry (curated, verified adapters).

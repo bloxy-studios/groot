@@ -22,6 +22,7 @@ import {
   gitIdentityPresent,
   publishToGitHub,
 } from "../engine/github.ts";
+import { assertLockReadable, resolveGenerators } from "../engine/locks.ts";
 import { MATRIX, SLOT_ORDER, YES_DEFAULTS } from "../engine/matrix.ts";
 import {
   applyYesDefaults,
@@ -34,6 +35,13 @@ import {
 } from "../engine/plan.ts";
 import { resolveDirConflict, runPreflight } from "../engine/preflight.ts";
 import { applyPresetSelections, loadPreset } from "../engine/preset.ts";
+import {
+  generateSingle,
+  SINGLE_APP_SLOTS,
+  singleRootPlan,
+  stitchSingle,
+  validateSingleSelection,
+} from "../engine/single.ts";
 import { stitch } from "../engine/stitch.ts";
 import type { DirConflictPolicy, Plan, PreflightCheck, Slot } from "../engine/types.ts";
 import { verify } from "../engine/verify.ts";
@@ -49,6 +57,37 @@ function parseDirConflict(value: string): DirConflictPolicy {
     EXIT.USAGE,
     `Valid policies: ${DIR_CONFLICT_POLICIES.join(" | ")}`,
   );
+}
+
+function parseTopology(value: string): "monorepo" | "single" {
+  if (value === "monorepo" || value === "single") return value;
+  throw new GrootError(
+    `Invalid value for --topology: "${value}"`,
+    EXIT.USAGE,
+    "Valid topologies: monorepo | single",
+  );
+}
+
+/**
+ * Single-app selections: slots without a flag are "none" (not the monorepo
+ * --yes defaults, which include a backend package). With no app chosen at
+ * all, --yes picks the default web app; otherwise an app flag is required.
+ */
+function singleSelections(selections: SlotSelections, yes: boolean): Record<Slot, string> {
+  const resolved = {} as Record<Slot, string>;
+  for (const slot of SLOT_ORDER) resolved[slot] = selections[slot] ?? "none";
+  const hasApp = SINGLE_APP_SLOTS.some((slot) => resolved[slot] !== "none");
+  if (!hasApp) {
+    if (!yes) {
+      throw new GrootError(
+        "--topology single needs one app: pass --web, --mobile, --desktop, or --api.",
+        EXIT.USAGE,
+        "Example: groot init my-api --topology single --api hono (or --yes for the default web app).",
+      );
+    }
+    resolved.web = YES_DEFAULTS.web;
+  }
+  return resolved;
 }
 
 /** Prompt for every undecided slot. Exits 130 on cancel (nothing written). */
@@ -98,6 +137,7 @@ async function runInit(args: {
   github: boolean;
   public: boolean;
   dirConflict: string;
+  topology: string;
   keepFailed: boolean;
   verbose: boolean;
 }): Promise<void> {
@@ -118,7 +158,15 @@ async function runInit(args: {
       "Drop --no-git (gh repo create --push hard-errors on a repo with no commits).",
     );
   }
+  if (args.name !== undefined && args.name.trim() === "") {
+    throw new GrootError(
+      "--name cannot be empty.",
+      EXIT.USAGE,
+      "Pass a workspace name (--name my-app), or omit --name to use the directory name.",
+    );
+  }
   const dirConflict = parseDirConflict(args.dirConflict);
+  const topology = parseTopology(args.topology);
 
   const selections: SlotSelections = {
     web: args.web,
@@ -147,7 +195,9 @@ async function runInit(args: {
   }
 
   const undecided = undecidedSlots(selections);
-  const wantsPrompts = (undecided.length > 0 || args.dir === undefined) && !args.yes;
+  // A single-app project is fully described by its one app flag — no slot prompts.
+  const wantsPrompts =
+    topology === "monorepo" && (undecided.length > 0 || args.dir === undefined) && !args.yes;
   const isTTY = Boolean(process.stdout.isTTY && process.stdin.isTTY);
 
   if (wantsPrompts && !isTTY) {
@@ -182,15 +232,18 @@ async function runInit(args: {
       throw new GrootError(
         "Target directory required.",
         EXIT.USAGE,
-        "Example: groot init my-app --yes",
+        topology === "single"
+          ? "Example: groot init my-api --topology single --api hono"
+          : "Example: groot init my-app --yes",
       );
     }
-    resolvedSelections = applyYesDefaults(selections);
+    resolvedSelections =
+      topology === "single" ? singleSelections(selections, args.yes) : applyYesDefaults(selections);
   }
 
   const requestedDir = resolve(process.cwd(), dir);
   const targetDir = await resolveDirConflict(requestedDir, dirConflict);
-  const plan: Plan = buildPlan({
+  const basePlan: Plan = buildPlan({
     name: args.name ?? basename(targetDir),
     targetDir,
     cliVersion: pkg.version,
@@ -203,6 +256,10 @@ async function runInit(args: {
       verbose: args.verbose,
     },
   });
+  const plan: Plan =
+    topology === "single"
+      ? singleRootPlan(basePlan, validateSingleSelection(basePlan.scaffolds, targetDir))
+      : basePlan;
 
   // Preflight (read-only in dry runs). In --json mode all diagnostics go to stderr
   // so stdout stays pure machine-readable output (docs/cli-spec.md#output-contract).
@@ -212,6 +269,9 @@ async function runInit(args: {
     const note = `directory conflict: using ${targetDir} (increment policy)`;
     (args.json ? console.error : console.log)(`${pc.yellow("●")} ${note}`);
   }
+  // Stitch updates groot.lock.json last, so an unreadable one in a merge target
+  // is refused now — before anything is generated, dry runs included.
+  await assertLockReadable(plan);
 
   // Composed once so every summary (dry-run, prompt confirm, plain) shows it.
   const githubSummaryLine = args.github
@@ -283,9 +343,24 @@ async function runInit(args: {
   const step = (label: string): void => {
     console.log(`${pc.green("◇")} ${label}…`);
   };
-  await generate(plan, { verbose: args.verbose, onStep: step });
-  await stitch(plan, { onStep: step });
-  const verifyNotes = await verify(plan, { verbose: args.verbose, onStep: step });
+  // Exact generator versions (groot.lock.json): series pins resolve once, here,
+  // and generators run at exactly those versions. Offline → recorded as unresolved.
+  step("Resolving exact generator versions");
+  const generatorLocks = await resolveGenerators(plan, { includeTrunk: topology === "monorepo" });
+  for (const lock of generatorLocks) {
+    console.log(
+      `  ${pc.dim(`${lock.package}@${lock.range} → ${lock.version ?? "unresolved (registry unreachable; using the series)"}`)}`,
+    );
+  }
+  const run: Plan = { ...plan, generatorLocks };
+  if (topology === "single") {
+    await generateSingle(run, { verbose: args.verbose, onStep: step });
+    await stitchSingle(run, { onStep: step });
+  } else {
+    await generate(run, { verbose: args.verbose, onStep: step });
+    await stitch(run, { onStep: step });
+  }
+  const verifyNotes = await verify(run, { verbose: args.verbose, onStep: step });
 
   // After the initial commit: detect gh → auth → create + push. Degrades to
   // printed fallback steps, never a failure — the workspace itself is valid.
@@ -402,6 +477,12 @@ export const init = defineCommand({
       default: "error",
       description: "Non-empty target policy: error | merge | increment",
     },
+    topology: {
+      type: "string",
+      default: "monorepo",
+      description:
+        "Workspace shape: monorepo (Turborepo trunk) | single (one app at the project root)",
+    },
     "keep-failed": {
       type: "boolean",
       default: false,
@@ -432,6 +513,7 @@ export const init = defineCommand({
         github: args.github,
         public: args.public,
         dirConflict: args["dir-conflict"],
+        topology: args.topology,
         keepFailed: args["keep-failed"],
         verbose: args.verbose,
       });

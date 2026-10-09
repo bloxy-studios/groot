@@ -16,10 +16,27 @@ import type {
   ScaffoldAdapter,
 } from "../engine/adapter.ts";
 
+/**
+ * The port value groot writes into API sources: PORT wins — `groot verify`
+ * starts apps on ephemeral ports through it, and so do hosting platforms —
+ * and the workspace's assigned port is the default.
+ */
+export function apiPortSource(port: number): string {
+  return `Number(process.env.PORT ?? ${port})`;
+}
+
+/** A port value groot writes: `apiPortSource`'s form or a bare literal (older scaffolds). */
+const PORT_VALUE = String.raw`(?:Number\(\s*process\.env\.PORT\s*\?\?\s*(\d+)\s*\)|(\d+))(?!\d)`;
+
+/** Match `<before> <port value> <after>`, capturing the port number (group 1 or 2). */
+export function portPattern(before: string, after = ""): RegExp {
+  return new RegExp(`${before}\\s*${PORT_VALUE}\\s*${after}`);
+}
+
 export function elysiaIndexTs(port: number): string {
   return `import { Elysia } from "elysia";
 
-const app = new Elysia().get("/", () => "Hello from groot 🌱").listen(${port});
+const app = new Elysia().get("/", () => "Hello from groot 🌱").listen(${apiPortSource(port)});
 
 console.log(\`🦊 Elysia is running at http://\${app.server?.hostname}:\${app.server?.port}\`);
 
@@ -89,6 +106,7 @@ bun run start  # run the production bundle
 export const elysiaAdapter: ScaffoldAdapter = {
   id: "elysia",
   slot: "api",
+  portAssignment: "source",
   command(): null {
     return null;
   },
@@ -104,24 +122,27 @@ export const elysiaAdapter: ScaffoldAdapter = {
     ];
   },
   async doctor(ctx: DoctorContext): Promise<DoctorCheck[]> {
-    return [await apiPortCheck(ctx, `.listen(${ctx.scaffold.port})`)];
+    return [await apiPortCheck(ctx, portPattern(String.raw`\.listen\(`, String.raw`\)`))];
   },
 };
 
 /**
  * Shared port-drift check for API scaffolds: warn (not fail) — drift may be
  * intentional. `file` is the scaffold-relative entry that carries the port
- * (elysia/hono serve from src/index.ts; fastify from groot's src/server.ts).
+ * (elysia/hono serve from src/index.ts; fastify from groot's src/server.ts);
+ * `pattern` (see portPattern) finds the configured number, which is compared
+ * as a number — 30011 never passes for 3001.
  */
 export async function apiPortCheck(
   ctx: DoctorContext,
-  marker: string,
+  pattern: RegExp,
   file = "src/index.ts",
 ): Promise<DoctorCheck> {
   const name = `${ctx.scaffold.path} dev port`;
   try {
     const source = await readFile(join(ctx.workspaceRoot, ctx.scaffold.path, file), "utf8");
-    const matches = source.includes(marker);
+    const match = pattern.exec(source);
+    const matches = match !== null && Number(match[1] ?? match[2]) === ctx.scaffold.port;
     return {
       name,
       status: matches ? "pass" : "warn",

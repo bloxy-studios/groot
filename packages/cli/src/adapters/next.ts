@@ -18,6 +18,7 @@ import type {
 export const nextAdapter: ScaffoldAdapter = {
   id: "next",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     return {
       argv: [

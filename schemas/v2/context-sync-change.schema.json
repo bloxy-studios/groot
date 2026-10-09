@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "create",
+        "update-region",
+        "unchanged",
+        "conflict"
+      ]
+    },
+    "regions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reason": {
+      "type": "string"
+    },
+    "diff": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "path",
+    "action",
+    "regions",
+    "reason",
+    "diff"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/context-sync-change.schema.json",
+  "title": "Context sync change",
+  "description": "One managed-instruction file change previewed by `groot context sync`."
+}

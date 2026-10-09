@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BlueprintV2 } from "../core/contracts/blueprint.ts";
+import { EXIT, GrootError } from "./errors.ts";
 import { buildPlan } from "./plan.ts";
-import { stitch, stitchBackendLinks, stitchTrustedDependencies } from "./stitch.ts";
+import { stitch, stitchBackendLinks, stitchDevPorts, stitchTrustedDependencies } from "./stitch.ts";
 import type { Plan, Slot } from "./types.ts";
 
 /** Build a fixture tree simulating raw post-generate output, then stitch it. */
@@ -194,7 +196,7 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
 
     // Hono port rewritten to the plan's assignment.
     const honoIndex = await readFile(join(root, "apps/api/src/index.ts"), "utf8");
-    expect(honoIndex).toContain("port: 3001");
+    expect(honoIndex).toContain("port: Number(process.env.PORT ?? 3001)");
     expect(honoIndex).toContain("fetch: app.fetch");
     expect(honoIndex).not.toContain("export default app\n");
 
@@ -215,9 +217,15 @@ describe("stitch (docs/architecture.md#4-stitch)", () => {
     expect(rootPkg.name).toBe("demo");
     const gitignore = await readFile(join(root, ".gitignore"), "utf8");
     expect(gitignore).toContain("!.env.example");
-    const manifest = JSON.parse(await readFile(join(root, "groot.json"), "utf8"));
-    expect(manifest.version).toBe(1);
+    // Fresh workspaces get the v2 blueprint (superset of v1): scaffolds plus
+    // the general app model and the backend env contracts the stitch implies.
+    const manifest = BlueprintV2.parse(
+      JSON.parse(await readFile(join(root, "groot.json"), "utf8")),
+    );
+    expect(manifest.version).toBe(2);
     expect(manifest.scaffolds).toHaveLength(3);
+    expect(manifest.apps.map((app) => app.path)).toEqual(manifest.scaffolds.map((s) => s.path));
+    expect(manifest.environment.every((contract) => contract.sensitivity === "config")).toBe(true);
 
     expect(notes.length).toBeGreaterThanOrEqual(6);
   });
@@ -333,6 +341,186 @@ describe("stitchFastifyScripts (bun-first scripts — scaffold-flows.md#15)", ()
     expect(untouched.scripts.dev).toBe("node --watch dist/server.js");
     expect(untouched.scripts.deploy).toBe("flyctl deploy");
   });
+});
+
+describe("stitchDevPorts (allocated ports — architecture.md#port-allocation)", () => {
+  /** Scaffolds as `groot add` leaves them in a v2 workspace after allocation. */
+  async function grown(): Promise<{ plan: Plan; root: string }> {
+    const root = await mkdtemp(join(tmpdir(), "groot-devports-"));
+    const pkg = async (path: string, scripts: Record<string, string>): Promise<void> => {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(
+        join(root, path, "package.json"),
+        `${JSON.stringify({ name: path.split("/")[1], private: true, scripts }, null, 2)}\n`,
+      );
+    };
+    await pkg("apps/web", { dev: "next dev --turbopack" });
+    await pkg("apps/admin", { dev: "next dev --turbopack", build: "next build" });
+    await pkg("apps/shop", { dev: "vite dev --port 3000" });
+    await pkg("apps/docs", { dev: "astro dev" });
+    await pkg("apps/lab", { build: "vite build" });
+    const plan: Plan = {
+      name: "grown",
+      targetDir: root,
+      createdWith: "create-groot@0.0.0-test",
+      conventions: { packagesNamespace: "@repo" },
+      scaffolds: [
+        {
+          slot: "web",
+          framework: "next",
+          path: "apps/web",
+          generator: "create-next-app@16",
+          port: 3000,
+        },
+        {
+          slot: "web",
+          framework: "next",
+          path: "apps/admin",
+          generator: "create-next-app@16",
+          port: 3002,
+        },
+        {
+          slot: "web",
+          framework: "tanstack-start",
+          path: "apps/shop",
+          generator: "@tanstack/cli@0.69",
+          port: 3003,
+        },
+        {
+          slot: "web",
+          framework: "astro",
+          path: "apps/docs",
+          generator: "create-astro@5",
+          port: 4321,
+        },
+        {
+          slot: "web",
+          framework: "vite",
+          path: "apps/lab",
+          generator: "create-vite@9",
+          port: 5174,
+        },
+      ],
+      options: {
+        install: false,
+        git: false,
+        dirConflict: "error",
+        keepFailed: false,
+        verbose: false,
+      },
+    };
+    return { plan, root };
+  }
+  const devOf = async (root: string, path: string): Promise<string | undefined> =>
+    JSON.parse(await readFile(join(root, path, "package.json"), "utf8")).scripts.dev;
+
+  test("an allocated port reaches the dev script; framework defaults stay untouched", async () => {
+    const { plan, root } = await grown();
+    const notes = await stitchDevPorts(plan);
+    expect(notes).toEqual([
+      "apps/admin/package.json → dev script serves on :3002",
+      "apps/shop/package.json → dev script serves on :3003",
+      "apps/lab/package.json: no dev script — dev port 5174 not applied",
+    ]);
+    expect(await devOf(root, "apps/admin")).toBe("next dev --turbopack --port 3002");
+    expect(await devOf(root, "apps/shop")).toBe("vite dev --port 3003");
+    expect(await devOf(root, "apps/web")).toBe("next dev --turbopack");
+    expect(await devOf(root, "apps/docs")).toBe("astro dev");
+    // Other scripts survive the rewrite.
+    const admin = JSON.parse(await readFile(join(root, "apps/admin/package.json"), "utf8"));
+    expect(admin.scripts.build).toBe("next build");
+  });
+
+  test("is idempotent — a second pass changes nothing", async () => {
+    const { plan, root } = await grown();
+    await stitchDevPorts(plan);
+    const before = await readFile(join(root, "apps/admin/package.json"), "utf8");
+    const again = await stitchDevPorts(plan);
+    expect(await readFile(join(root, "apps/admin/package.json"), "utf8")).toBe(before);
+    expect(again.filter((note) => note.includes("serves on"))).toEqual([]);
+  });
+
+  test("v1 workspaces keep the v1 rule: no dev script is ever rewritten", async () => {
+    const { plan, root } = await grown();
+    const paths = plan.scaffolds.map((scaffold) => join(root, scaffold.path, "package.json"));
+    const before = await Promise.all(paths.map((path) => readFile(path, "utf8")));
+    const notes = await stitchDevPorts({ ...plan, manifestVersion: 1 });
+    expect(notes).toEqual([]);
+    expect(await Promise.all(paths.map((path) => readFile(path, "utf8")))).toEqual(before);
+  });
+
+  test("Next.js and Nuxt's own -p flag is the port flag: kept when right, replaced when not", async () => {
+    const { plan, root } = await grown();
+    const pkg = async (path: string, dev: string): Promise<void> => {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(
+        join(root, path, "package.json"),
+        `${JSON.stringify({ name: path.split("/")[1], scripts: { dev } }, null, 2)}\n`,
+      );
+    };
+    await pkg("apps/admin", "next dev --turbopack -p 3002");
+    await pkg("apps/blog", "nuxt dev -p=3000");
+    await pkg("apps/shop", "vite dev --port=3003");
+    const notes = await stitchDevPorts({
+      ...plan,
+      scaffolds: [
+        ...plan.scaffolds.filter((scaffold) => scaffold.path !== "apps/lab"),
+        {
+          slot: "web",
+          framework: "nuxt",
+          path: "apps/blog",
+          generator: "create-nuxt@3",
+          port: 3004,
+        },
+      ],
+    });
+    expect(await devOf(root, "apps/admin")).toBe("next dev --turbopack -p 3002");
+    expect(await devOf(root, "apps/blog")).toBe("nuxt dev --port 3004");
+    expect(await devOf(root, "apps/shop")).toBe("vite dev --port=3003");
+    expect(notes).toEqual(["apps/blog/package.json → dev script serves on :3004"]);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a scaffold path or symlink leading outside the workspace is refused — nothing is written there",
+    async () => {
+      const base = await mkdtemp(join(tmpdir(), "groot-devports-escape-"));
+      const root = join(base, "ws");
+      const outside = join(base, "outside-app", "package.json");
+      await mkdir(join(root, "apps"), { recursive: true });
+      await mkdir(join(base, "outside-app"));
+      const original = `${JSON.stringify({ name: "outside", scripts: { dev: "next dev" } }, null, 2)}\n`;
+      await writeFile(outside, original);
+      symlinkSync("../../outside-app", join(root, "apps/web"));
+      const escaping = (path: string): Plan => ({
+        name: "ws",
+        targetDir: root,
+        createdWith: "create-groot@0.0.0-test",
+        conventions: { packagesNamespace: "@repo" },
+        scaffolds: [
+          { slot: "web", framework: "next", path, generator: "create-next-app@16", port: 3005 },
+        ],
+        options: {
+          install: false,
+          git: false,
+          dirConflict: "error",
+          keepFailed: false,
+          verbose: false,
+        },
+      });
+      // A `..` escape, a symlinked scaffold directory, and an absolute path from groot.json.
+      for (const path of ["../outside-app", "apps/web", join(base, "outside-app")]) {
+        let error: unknown;
+        try {
+          await stitchDevPorts(escaping(path));
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toBeInstanceOf(GrootError);
+        expect((error as GrootError).exitCode).toBe(EXIT.STITCH);
+      }
+      expect(await readFile(outside, "utf8")).toBe(original);
+    },
+  );
 });
 
 describe("stitchMetroMonorepo (bare RN workspaces — scaffold-flows.md#16)", () => {

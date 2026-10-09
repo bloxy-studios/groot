@@ -8,9 +8,16 @@
 import { existsSync } from "node:fs";
 import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { apiPortSource } from "../adapters/elysia.ts";
+import { ADAPTERS } from "../adapters/index.ts";
+import { writeFileAtomic } from "../core/fs/atomic.ts";
+import { resolveInProject } from "../core/fs/paths.ts";
+import { backendEnvLines } from "./env-names.ts";
 import { EXIT, GrootError } from "./errors.ts";
+import { stitchLock } from "./locks.ts";
+import { findChoice } from "./matrix.ts";
 import { planToManifest } from "./plan.ts";
-import type { FrameworkId, Plan, PlannedScaffold } from "./types.ts";
+import type { FrameworkId, Plan } from "./types.ts";
 
 /** Lockfiles a generator may have left inside its scaffold directory. */
 const NESTED_LOCKFILES = [
@@ -91,7 +98,8 @@ export async function stitchLockfileHygiene(plan: Plan): Promise<string[]> {
 
 /**
  * Hono's bun template exports the app directly, which Bun serves on port 3000 —
- * colliding with Next.js. Rewrite each hono scaffold to its assigned port —
+ * colliding with Next.js. Rewrite each hono scaffold to read PORT (how verify
+ * runs it on an ephemeral port), defaulting to its assigned port —
  * `groot add --path` can grow a second one. (Elysia's port is written correctly
  * at generation time; Next/Vite/Metro keep their defaults.)
  */
@@ -113,10 +121,74 @@ export async function stitchHonoPort(plan: Plan): Promise<string[]> {
     }
     const rewritten = source.replace(
       marker,
-      `export default {\n  port: ${hono.port},\n  fetch: app.fetch,\n}`,
+      `export default {\n  port: ${apiPortSource(hono.port)},\n  fetch: app.fetch,\n}`,
     );
     await writeFile(path, rewritten, "utf8");
     notes.push(`${hono.path}/src/index.ts → dev port ${hono.port}`);
+  }
+  return notes;
+}
+
+/** Dev CLIs whose `-p` short flag is also the port flag (docs/scaffold-flows.md#dev-port-flags). */
+const SHORT_PORT_FLAG: ReadonlySet<FrameworkId> = new Set(["next", "nuxt"]);
+
+/** The port flag in a dev script (`--port <n>` / `--port=<n>`, and `-p` where documented); group 1 is the port. */
+function devPortFlag(framework: FrameworkId): RegExp {
+  const short = SHORT_PORT_FLAG.has(framework) ? String.raw`|(?<=^|\s)-p` : "";
+  return new RegExp(String.raw`(?:--port${short})(?:=|\s+)(\d+)(?!\d)`);
+}
+
+/** A stitch write target inside the workspace — a path or link leading out of it is a stitch failure. */
+function stitchTarget(plan: Plan, relPath: string): string {
+  try {
+    return resolveInProject(plan.targetDir, relPath);
+  } catch (error) {
+    throw new GrootError(
+      `Stitch failed: ${error instanceof Error ? error.message : String(error)}`,
+      EXIT.STITCH,
+      error instanceof GrootError ? error.hint : undefined,
+    );
+  }
+}
+
+/**
+ * Apply allocated dev ports (docs/architecture.md#port-allocation): in a v2
+ * workspace, a web scaffold whose port differs from its framework's default —
+ * `groot add` moved it off a claimed port — gets `--port <n>` in its `dev`
+ * script, replacing the script's own port flag unless that already names the
+ * port. Scaffolds on their default port are left byte-identical, so init
+ * output is unchanged; v1 workspaces keep the v1 rule (warn, never rewrite).
+ * Source-assigned ports (Elysia/Hono/Fastify) are written by their own steps.
+ * A scaffold path or link leading out of the workspace is never written through.
+ */
+export async function stitchDevPorts(plan: Plan): Promise<string[]> {
+  if ((plan.manifestVersion ?? 2) !== 2) return [];
+  const notes: string[] = [];
+  for (const scaffold of plan.scaffolds) {
+    if (scaffold.port === null) continue;
+    if (ADAPTERS[scaffold.framework].portAssignment !== "dev-script") continue;
+    if (scaffold.port === findChoice(scaffold.slot, scaffold.framework)?.port) continue;
+    const path = stitchTarget(plan, `${scaffold.path}/package.json`);
+    if (!existsSync(path)) continue;
+    const pkg = await readJson(path);
+    const scripts = (pkg.scripts ?? {}) as Record<string, string>;
+    const dev = scripts.dev;
+    if (dev === undefined) {
+      notes.push(
+        `${scaffold.path}/package.json: no dev script — dev port ${scaffold.port} not applied`,
+      );
+      continue;
+    }
+    const flag = devPortFlag(scaffold.framework);
+    const current = flag.exec(dev);
+    if (current !== null && Number(current[1]) === scaffold.port) continue; // already applied
+    const desired =
+      current === null
+        ? `${dev} --port ${scaffold.port}`
+        : dev.replace(flag, `--port ${scaffold.port}`);
+    const next = { ...pkg, scripts: { ...scripts, dev: desired } };
+    writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
+    notes.push(`${scaffold.path}/package.json → dev script serves on :${scaffold.port}`);
   }
   return notes;
 }
@@ -255,73 +327,6 @@ export async function stitchSupabaseProjectId(plan: Plan): Promise<string[]> {
     notes.push(`${scaffold.path}/supabase/config.toml → project_id "${projectId}"`);
   }
   return notes;
-}
-
-/**
- * The client-exposed env var each web framework actually reads — Next.js only
- * exposes NEXT_PUBLIC_*, SvelteKit's $env/static/public requires PUBLIC_*, and
- * Vite-based frameworks (TanStack Start) expose VITE_*. Matches each
- * framework's Convex quickstart naming.
- */
-const CONVEX_URL_ENV_BY_WEB_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
-  next: "NEXT_PUBLIC_CONVEX_URL=",
-  sveltekit: "PUBLIC_CONVEX_URL=",
-  "tanstack-start": "VITE_CONVEX_URL=",
-  astro: "PUBLIC_CONVEX_URL=", // import.meta.env.PUBLIC_* — Astro's client prefix
-  "react-router": "VITE_CONVEX_URL=", // framework mode is Vite-based
-  nuxt: "NUXT_PUBLIC_CONVEX_URL=", // runtimeConfig.public via NUXT_PUBLIC_*
-  vite: "VITE_CONVEX_URL=",
-};
-
-/**
- * Mobile counterpart: Expo exposes EXPO_PUBLIC_* to the app at build time;
- * bare React Native ships no public-env mechanism, so it gets the plain
- * CONVEX_URL= placeholder (users wire it via their env lib of choice).
- * Exact-line membership below keeps it from being swallowed by the longer
- * *_CONVEX_URL= names it is a substring of.
- */
-const CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
-  expo: "EXPO_PUBLIC_CONVEX_URL=",
-  "react-native": "CONVEX_URL=",
-};
-
-/**
- * Supabase clients need TWO values (URL + anon key) and every quickstart
- * prefixes both with the same client-exposure mechanism — so this maps
- * framework → prefix rather than full lines. Same sources as the Convex
- * naming above (Next exposes NEXT_PUBLIC_*, SvelteKit/Astro PUBLIC_*,
- * Vite-based frameworks VITE_*, Nuxt runtimeConfig.public via NUXT_PUBLIC_*,
- * Expo EXPO_PUBLIC_*; bare React Native has no public-env mechanism → no
- * prefix, like its CONVEX_URL= line).
- */
-const SUPABASE_ENV_PREFIX_BY_FRAMEWORK: Partial<Record<FrameworkId, string>> = {
-  next: "NEXT_PUBLIC_",
-  sveltekit: "PUBLIC_",
-  "tanstack-start": "VITE_",
-  astro: "PUBLIC_",
-  "react-router": "VITE_",
-  nuxt: "NUXT_PUBLIC_",
-  vite: "VITE_",
-  expo: "EXPO_PUBLIC_",
-  "react-native": "",
-};
-
-/** The `.env.example` lines a frontend needs for the workspace's backend. */
-export function backendEnvLines(
-  backendFramework: FrameworkId,
-  scaffold: Pick<PlannedScaffold, "slot" | "framework">,
-): string[] {
-  if (backendFramework === "supabase") {
-    const prefix =
-      SUPABASE_ENV_PREFIX_BY_FRAMEWORK[scaffold.framework] ??
-      (scaffold.slot === "web" ? "VITE_" : "EXPO_PUBLIC_");
-    return [`${prefix}SUPABASE_URL=`, `${prefix}SUPABASE_ANON_KEY=`];
-  }
-  return [
-    scaffold.slot === "web"
-      ? (CONVEX_URL_ENV_BY_WEB_FRAMEWORK[scaffold.framework] ?? "VITE_CONVEX_URL=")
-      : (CONVEX_URL_ENV_BY_MOBILE_FRAMEWORK[scaffold.framework] ?? "EXPO_PUBLIC_CONVEX_URL="),
-  ];
 }
 
 /** The one-line provenance header written when `.env.example` is first created. */
@@ -491,6 +496,7 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchAppNames(plan));
   push(await stitchLockfileHygiene(plan));
   push(await stitchHonoPort(plan));
+  push(await stitchDevPorts(plan));
   push(await stitchFastifyScripts(plan));
   push(await stitchMetroMonorepo(plan));
   push(await stitchSupabaseProjectId(plan));
@@ -500,5 +506,8 @@ export async function stitch(plan: Plan, options: StitchOptions = {}): Promise<s
   push(await stitchTrustedDependencies(plan));
   push(await stitchRootGitignore(plan));
   push(await stitchManifest(plan));
+  push(stitchLock(plan));
   return notes;
 }
+
+export { backendEnvLines } from "./env-names.ts";

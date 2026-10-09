@@ -1,0 +1,150 @@
+{
+  "description": "Groot v2 machine contracts. Every v2 command's --json output is a result envelope whose data matches one of these.",
+  "baseUrl": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2",
+  "contracts": [
+    {
+      "name": "blueprint",
+      "title": "groot.json v2 (blueprint)",
+      "description": "Portable desired state: apps, capabilities, decisions, environment, verification, context, policy.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/blueprint.schema.json"
+    },
+    {
+      "name": "manifest-v1",
+      "title": "groot.json v1 (manifest)",
+      "description": "The v1 manifest — still read by add/doctor; migrated explicitly by `groot migrate`.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/manifest-v1.schema.json"
+    },
+    {
+      "name": "lock",
+      "title": "groot.lock.json",
+      "description": "Exact generator/recipe resolution and Groot-owned artifacts.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/lock.schema.json"
+    },
+    {
+      "name": "project",
+      "title": "Project observation",
+      "description": "Read-only discovery output (`groot inspect`): facts with provenance, confidence, and freshness.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/project.schema.json"
+    },
+    {
+      "name": "capability",
+      "title": "Capability descriptor",
+      "description": "A product or operational result and its recipes.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/capability.schema.json"
+    },
+    {
+      "name": "recipe",
+      "title": "Recipe descriptor",
+      "description": "Requirements, conflicts, exact versions, env contracts, verification, recovery.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/recipe.schema.json"
+    },
+    {
+      "name": "solver-result",
+      "title": "Compatibility resolution",
+      "description": "Selected recipes in application order, or refusals with alternatives.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/solver-result.schema.json"
+    },
+    {
+      "name": "plan-intent",
+      "title": "Plan intent",
+      "description": "What a plan was asked to do (init, adopt, migrate, add-capability, context-sync).",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/plan-intent.schema.json"
+    },
+    {
+      "name": "plan",
+      "title": "Operation plan",
+      "description": "Concrete actions, preconditions, ownership, environment, verification, recovery limits.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/plan.schema.json"
+    },
+    {
+      "name": "journal-record",
+      "title": "Journal record",
+      "description": "One append-only line of an operation journal.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/journal-record.schema.json"
+    },
+    {
+      "name": "operation",
+      "title": "Operation state",
+      "description": "Derived snapshot of an operation (status, steps, resumability).",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/operation.schema.json"
+    },
+    {
+      "name": "operation-result",
+      "title": "Operation result",
+      "description": "Outcome of apply/resume/rollback.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/operation-result.schema.json"
+    },
+    {
+      "name": "rollback",
+      "title": "Rollback preview",
+      "description": "Per-step recovery actions, conflicts, and irreversible effects.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/rollback.schema.json"
+    },
+    {
+      "name": "evidence",
+      "title": "Evidence",
+      "description": "One check outcome tied to revision, environment, timing, and artifacts.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/evidence.schema.json"
+    },
+    {
+      "name": "verification",
+      "title": "Verification report",
+      "description": "Structural/build/runtime/product-flow summaries plus evidence.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/verification.schema.json"
+    },
+    {
+      "name": "context",
+      "title": "Task context",
+      "description": "Concise task-scoped project knowledge (names only, never secret values).",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/context.schema.json"
+    },
+    {
+      "name": "context-sync-change",
+      "title": "Context sync change",
+      "description": "One managed-instruction file change previewed by `groot context sync`.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/context-sync-change.schema.json"
+    },
+    {
+      "name": "task",
+      "title": "Agent task",
+      "description": "Bounded work for an installed coding agent, with attempts, usage, evidence, review, integration.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/task.schema.json"
+    },
+    {
+      "name": "review",
+      "title": "Task review",
+      "description": "Diff summary, acceptance results, ownership violations, verdict.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/review.schema.json"
+    },
+    {
+      "name": "runner",
+      "title": "Runner capabilities",
+      "description": "Installed agent discovery: executable, version, auth, supported features.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/runner.schema.json"
+    },
+    {
+      "name": "result",
+      "title": "Result envelope",
+      "description": "The single stdout document of every v2 command with --json.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/result.schema.json"
+    },
+    {
+      "name": "error",
+      "title": "Error",
+      "description": "Structured error with a stable GROOT_E_* identifier and exit code.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/error.schema.json"
+    },
+    {
+      "name": "blocked-decision",
+      "title": "Blocked decision",
+      "description": "A choice or prerequisite returned instead of prompting.",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/blocked-decision.schema.json"
+    },
+    {
+      "name": "event",
+      "title": "Progress event",
+      "description": "One stderr JSONL progress event (--events).",
+      "url": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/event.schema.json"
+    }
+  ]
+}

@@ -37,6 +37,7 @@ export const ASTRO_TEMPLATE = "minimal";
 export const astroAdapter: ScaffoldAdapter = {
   id: "astro",
   slot: "web",
+  portAssignment: "dev-script",
   command(ctx: AdapterContext): GeneratorCommand {
     const name = basename(ctx.scaffold.path);
     return {

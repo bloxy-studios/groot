@@ -31,6 +31,9 @@ async function readJsonSafe(path: string): Promise<Record<string, unknown> | nul
 /** Run every health check for a loaded workspace. Never throws for unhealthy state. */
 export async function runDoctor(loaded: LoadedManifest): Promise<DoctorCheck[]> {
   const { manifest, workspaceRoot } = loaded;
+  // A v2 single-app project has no workspaces, no turbo.json, and its one
+  // lockfile sits at the root (which is also the app).
+  const single = loaded.blueprint?.project.topology === "single";
   const checks: DoctorCheck[] = [];
 
   // Bun version.
@@ -50,6 +53,12 @@ export async function runDoctor(loaded: LoadedManifest): Promise<DoctorCheck[]> 
       status: "fail",
       detail: "missing or unparseable",
       fix: "Restore the root package.json (name, private, workspaces).",
+    });
+  } else if (single) {
+    checks.push({
+      name: "workspace layout",
+      status: "pass",
+      detail: "single-app project (no workspaces)",
     });
   } else {
     const workspaces = Array.isArray(rootPkg.workspaces) ? (rootPkg.workspaces as string[]) : [];
@@ -113,6 +122,7 @@ export async function runDoctor(loaded: LoadedManifest): Promise<DoctorCheck[]> 
   });
   const nested: string[] = [];
   for (const scaffold of manifest.scaffolds) {
+    if (scaffold.path === ".") continue; // single-app: the root lockfile IS the app's
     for (const lockfile of NESTED_LOCKFILES) {
       if (existsSync(join(workspaceRoot, scaffold.path, lockfile))) {
         nested.push(`${scaffold.path}/${lockfile}`);
@@ -160,21 +170,49 @@ export async function runDoctor(loaded: LoadedManifest): Promise<DoctorCheck[]> 
       ? (turbo.tasks as Record<string, unknown>)
       : null;
   const REQUIRED_TASKS = ["build", "dev"];
-  const missingTasks =
-    tasks === null ? REQUIRED_TASKS : REQUIRED_TASKS.filter((task) => !(task in tasks));
-  checks.push({
-    name: "turbo config",
-    status: tasks !== null && missingTasks.length === 0 ? "pass" : "fail",
-    detail:
-      tasks === null
-        ? "turbo.json missing, unparseable, or tasks is not a map"
-        : missingTasks.length === 0
-          ? `${Object.keys(tasks).length} tasks (${Object.keys(tasks).join(", ")})`
-          : `tasks map is missing ${missingTasks.join(" and ")}`,
-    ...(tasks !== null && missingTasks.length === 0
-      ? {}
-      : { fix: "Restore turbo.json with a v2 `tasks` map including at least `build` and `dev`." }),
-  });
+  if (single && turbo === null) {
+    checks.push({
+      name: "turbo config",
+      status: "pass",
+      detail: "single-app project (turbo.json not required)",
+    });
+  } else {
+    const missingTasks =
+      tasks === null ? REQUIRED_TASKS : REQUIRED_TASKS.filter((task) => !(task in tasks));
+    checks.push({
+      name: "turbo config",
+      status: tasks !== null && missingTasks.length === 0 ? "pass" : "fail",
+      detail:
+        tasks === null
+          ? "turbo.json missing, unparseable, or tasks is not a map"
+          : missingTasks.length === 0
+            ? `${Object.keys(tasks).length} tasks (${Object.keys(tasks).join(", ")})`
+            : `tasks map is missing ${missingTasks.join(" and ")}`,
+      ...(tasks !== null && missingTasks.length === 0
+        ? {}
+        : {
+            fix: "Restore turbo.json with a v2 `tasks` map including at least `build` and `dev`.",
+          }),
+    });
+  }
+
+  // v2 blueprint: every app it records exists (adopted apps included).
+  if (loaded.blueprint !== null) {
+    const missingApps = loaded.blueprint.apps.filter(
+      (app) => !existsSync(join(workspaceRoot, app.path === "." ? "package.json" : app.path)),
+    );
+    checks.push({
+      name: "blueprint apps",
+      status: missingApps.length === 0 ? "pass" : "fail",
+      detail:
+        missingApps.length === 0
+          ? `${loaded.blueprint.apps.length} app(s) recorded in groot.json v2`
+          : `missing ${missingApps.map((app) => app.path).join(", ")}`,
+      ...(missingApps.length === 0
+        ? {}
+        : { fix: "Restore the app directories, or change groot.json through a groot plan." }),
+    });
+  }
 
   // Per-scaffold adapter checks.
   for (const scaffold of manifest.scaffolds) {

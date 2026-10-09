@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "decision",
+        "prerequisite",
+        "credential",
+        "policy"
+      ]
+    },
+    "question": {
+      "type": "string"
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "effect": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "effect",
+          "recommended"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "resolveWith": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "question",
+    "options",
+    "resolveWith"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/blocked-decision.schema.json",
+  "title": "Blocked decision",
+  "description": "A choice or prerequisite returned instead of prompting."
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "groot.rollback"
+    },
+    "operationId": {
+      "type": "string",
+      "pattern": "^op_[0-9a-z]{8,40}$"
+    },
+    "possible": {
+      "type": "boolean"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stepId": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "restore",
+              "delete",
+              "nothing-to-do",
+              "irreversible",
+              "conflict"
+            ]
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:)(?!\\.\\.(?:\\/|$))[^/\\\\\\x00-\\x1f\\x7f]+(?:\\/(?!\\.\\.(?:\\/|$))[^/\\\\\\x00-\\x1f\\x7f]+)*$"
+            }
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stepId",
+          "description",
+          "action",
+          "paths",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?![A-Za-z]:)(?!\\.\\.(?:\\/|$))[^/\\\\\\x00-\\x1f\\x7f]+(?:\\/(?!\\.\\.(?:\\/|$))[^/\\\\\\x00-\\x1f\\x7f]+)*$"
+      }
+    },
+    "irreversible": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "possible",
+    "steps",
+    "conflicts",
+    "irreversible",
+    "limits"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/bloxy-studios/groot/main/schemas/v2/rollback.schema.json",
+  "title": "Rollback preview",
+  "description": "Per-step recovery actions, conflicts, and irreversible effects."
+}

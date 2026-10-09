@@ -64,6 +64,19 @@ export interface ScaffoldAdapter {
    */
   readonly stagedGeneration?: boolean;
   /**
+   * How a dev port other than the framework default reaches the dev server
+   * (docs/architecture.md#port-allocation) — what lets `groot add` allocate a
+   * free port in a v2 workspace instead of only warning about a collision:
+   * - "source": groot writes `scaffold.port` into source it owns (Elysia's
+   *   listener, Hono's default export, Fastify's server overlay);
+   * - "dev-script": the stitch appends/replaces `--port <n>` in the scaffold's
+   *   `dev` script (every web framework's dev CLI accepts it).
+   * Absent: the template couples its port elsewhere (Metro and the native
+   * app, Tauri's strictPort + devUrl + HMR port) — the default is kept and
+   * collisions stay a warning.
+   */
+  readonly portAssignment?: "source" | "dev-script";
+  /**
    * Veto a proposed scaffold path before any planning or generation happens
    * (`groot add --path`). Some generators derive identifiers from the path's
    * last segment and reject names their rules don't allow — bare React

@@ -1,0 +1,151 @@
+/**
+ * Shared reading of Groot's committed JSON documents (groot.json,
+ * groot.lock.json): bytes are read through the project boundary (a symlink
+ * that leaves the project is refused), fingerprinted over the exact bytes —
+ * the same hash the PlanBuilder records as a precondition — and parsed with
+ * failures reported as GROOT_E_INVALID_DOCUMENT carrying JSON-pointer issue
+ * paths, so agents can point at the broken field instead of parsing prose.
+ */
+import { lstatSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
+import type { z } from "zod";
+import type { Sha256 } from "../contracts/common.ts";
+import { GrootV2Error } from "../errors.ts";
+import { sha256Of } from "../fs/hash.ts";
+import { resolveInProject } from "../fs/paths.ts";
+
+export interface DocumentIssue {
+  /** RFC 6901 pointer into the document ("" = the whole document). */
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface RawDocument {
+  readonly raw: string;
+  readonly sha256: Sha256;
+  readonly value: unknown;
+}
+
+const MAX_ISSUES_IN_MESSAGE = 5;
+
+function escapePointerSegment(segment: PropertyKey): string {
+  return String(segment).replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
+/** zod issues → pointer-addressed issues. */
+export function zodIssues(error: z.ZodError): DocumentIssue[] {
+  return error.issues.map((issue) => ({
+    path: issue.path.length === 0 ? "" : `/${issue.path.map(escapePointerSegment).join("/")}`,
+    message: issue.message,
+  }));
+}
+
+export function invalidDocument(
+  file: string,
+  issues: readonly DocumentIssue[],
+  options: { readonly hint: string; readonly version?: number | null },
+): GrootV2Error {
+  const listed = issues
+    .slice(0, MAX_ISSUES_IN_MESSAGE)
+    .map((issue) => `${issue.path === "" ? "(document)" : issue.path}: ${issue.message}`)
+    .join("; ");
+  const more =
+    issues.length > MAX_ISSUES_IN_MESSAGE
+      ? ` (+${issues.length - MAX_ISSUES_IN_MESSAGE} more)`
+      : "";
+  return new GrootV2Error("GROOT_E_INVALID_DOCUMENT", `${file} is invalid — ${listed}${more}.`, {
+    hint: options.hint,
+    details: { path: file, version: options.version ?? null, issues },
+  });
+}
+
+/** What to do about a root document that exists but is not a readable regular file in the project. */
+export function unreadableHint(file: string): string {
+  return `Make ${file} a readable regular file inside the project (check its permissions, owner, and symlinks), or restore it from version control.`;
+}
+
+/** errno codes meaning nothing is found at a path: it is missing, or a component is not a directory. */
+const NOT_FOUND_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
+
+/** Is the entry named `file` in `root` itself a symlink (lstat: the link, not where it leads)? */
+function isSymlink(root: string, file: string): boolean {
+  try {
+    return lstatSync(join(root, file)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A failed read. Null only when nothing is there: a missing root, a root that
+ * is not a directory, no entry named `file`. A symlink there that leads
+ * nowhere (dangling, or through a regular file) is not absent — the executor
+ * never replaces it, so a plan creating the document could only go stale — and
+ * becomes GROOT_E_INVALID_DOCUMENT, like any other filesystem failure
+ * (permissions, an I/O error), naming its errno code: callers report a state
+ * instead of crashing. A boundary violation (a link that loops or leaves the
+ * project) stays GROOT_E_PATH_OUTSIDE_PROJECT but gets the reader's next step
+ * — its own hint is about writes. Other GrootV2Errors pass through unchanged.
+ */
+function readFailure(root: string, file: string, error: unknown): null {
+  if (error instanceof GrootV2Error) {
+    if (error.id !== "GROOT_E_PATH_OUTSIDE_PROJECT") throw error;
+    throw new GrootV2Error(error.id, error.message, {
+      hint: unreadableHint(file),
+      details: error.details ?? undefined,
+    });
+  }
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (typeof code !== "string") throw error;
+  const notFound = NOT_FOUND_CODES.has(code);
+  if (notFound && !isSymlink(root, file)) return null;
+  const message = notFound
+    ? `is a symlink whose target does not exist (${code})`
+    : `could not be read (${code})`;
+  throw invalidDocument(file, [{ path: "", message }], { hint: unreadableHint(file) });
+}
+
+/**
+ * Read and parse a project-root JSON document. Returns null when nothing is
+ * at `file`; throws GROOT_E_INVALID_DOCUMENT for non-files (a symlink leading
+ * nowhere included), unreadable files, and unparseable JSON, and
+ * GROOT_E_PATH_OUTSIDE_PROJECT for a symlink leaving the project (or looping).
+ */
+export async function readRootDocument(
+  root: string,
+  file: string,
+  hint: string,
+): Promise<RawDocument | null> {
+  let absolute: string;
+  try {
+    absolute = resolveInProject(root, file);
+  } catch (error) {
+    // A missing root has no documents; boundary violations stay errors.
+    return readFailure(root, file, error);
+  }
+  let bytes: Buffer;
+  try {
+    const info = await stat(absolute);
+    if (!info.isFile()) {
+      throw invalidDocument(file, [{ path: "", message: "expected a regular file" }], {
+        hint: unreadableHint(file),
+      });
+    }
+    bytes = await readFile(absolute);
+  } catch (error) {
+    return readFailure(root, file, error);
+  }
+  const raw = bytes.toString("utf8");
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw invalidDocument(file, [{ path: "", message: `not valid JSON (${message})` }], { hint });
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidDocument(file, [{ path: "", message: "expected a JSON object" }], { hint });
+  }
+  return { raw, sha256: sha256Of(bytes), value };
+}
