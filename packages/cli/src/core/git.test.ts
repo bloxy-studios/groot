@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitState, revisionInfo } from "./git.ts";
+import { GIT_TIMED_OUT, git, gitState, revisionInfo } from "./git.ts";
 
 const posix = process.platform !== "win32";
 
@@ -278,6 +278,43 @@ describe("worktree fingerprint", () => {
       expect(two).not.toBe(three);
       expect(clean.dirty).toBe(false);
       expect(clean.worktreeFingerprint).toBeNull();
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe.skipIf(!posix)("git probes are bounded in time", () => {
+  test(
+    "a clean filter that hangs is killed with its process group at the timeout",
+    async () => {
+      // Arrange — the repository's own .git/config assigns a filter that never
+      // returns (flags can't disable filter drivers; a timeout bounds them).
+      const repo = committedRepo();
+      const marker = join(scratch(), "filter-pid");
+      setupGit(repo, "config", "filter.hang.clean", `sh -c 'echo $$ > ${marker}; sleep 60'`);
+      writeFileSync(join(repo, ".gitattributes"), "*.txt filter=hang\n");
+      // Same size as the committed content, so only hashing it (through the
+      // filter) can tell whether it changed.
+      writeFileSync(join(repo, "tracked.txt"), "two\n");
+      const started = Date.now();
+
+      // Act
+      const result = await git(repo, ["status", "--porcelain=v1"], 1500);
+
+      // Assert — bounded, reported as a timeout, and nothing left running.
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(result.exitCode).toBe(GIT_TIMED_OUT);
+      expect(result.stderr).toContain("timed out");
+      if (existsSync(marker)) {
+        const pid = Number(readFileSync(marker, "utf8").trim());
+        let alive = true;
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+        }
+        expect(alive).toBe(false);
+      }
     },
     TIMEOUT_MS,
   );

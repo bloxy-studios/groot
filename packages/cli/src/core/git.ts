@@ -21,6 +21,7 @@ import { join } from "node:path";
 import type { RevisionInfo, Sha256 } from "./contracts/common.ts";
 import type { GitState } from "./contracts/project.ts";
 import { sha256Of } from "./fs/hash.ts";
+import { killTree, trackProcessGroup } from "./process.ts";
 
 export interface GitResult {
   readonly exitCode: number;
@@ -74,7 +75,23 @@ function childEnv(): Record<string, string | undefined> {
   return { ...Object.fromEntries(inherited), GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" };
 }
 
-export async function git(cwd: string, args: readonly string[]): Promise<GitResult> {
+/** How long one git probe may run. */
+const GIT_TIMEOUT_MS = 30_000;
+
+/** Exit code reported for a probe stopped at its timeout (timeout(1)'s convention). */
+export const GIT_TIMED_OUT = 124;
+
+/**
+ * Run one git probe. Flags cannot disable clean/smudge/process filter drivers
+ * a repository's own .git/config assigns, so every probe is bounded: git runs
+ * as its own process group and the whole group — filter processes included —
+ * is killed at the timeout, which callers see as exit GIT_TIMED_OUT.
+ */
+export async function git(
+  cwd: string,
+  args: readonly string[],
+  timeoutMs: number = GIT_TIMEOUT_MS,
+): Promise<GitResult> {
   try {
     const proc = Bun.spawn(["git", ...SAFE_CONFIG, ...args], {
       cwd,
@@ -82,12 +99,29 @@ export async function git(cwd: string, args: readonly string[]): Promise<GitResu
       stderr: "pipe",
       stdin: "ignore",
       env: childEnv(),
+      detached: process.platform !== "win32",
     });
+    const untrack = trackProcessGroup(proc.pid);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(proc.pid, "SIGKILL");
+    }, timeoutMs);
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
-    ]);
+    ]).finally(() => {
+      clearTimeout(timer);
+      untrack();
+    });
+    if (timedOut) {
+      return {
+        exitCode: GIT_TIMED_OUT,
+        stdout: "",
+        stderr: `git ${args[0] ?? ""} timed out after ${timeoutMs} ms (a filter or hook the repository configures may hang)`,
+      };
+    }
     return { exitCode, stdout, stderr };
   } catch (error) {
     return {
