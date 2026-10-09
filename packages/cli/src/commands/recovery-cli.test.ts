@@ -381,6 +381,13 @@ describe.skipIf(process.platform === "win32")(
           "the command to start",
         );
         const pgid = Number(readFileSync(pidFile, "utf8").trim());
+        // The pid file appears before the shell forks its background `sleep`;
+        // wait for both members rather than sampling the group too early.
+        await waitFor(
+          () => groupMembers(pgid).length >= 2,
+          10_000,
+          "the command's children to start",
+        );
         const membersWhileRunning = groupMembers(pgid);
         cli.proc.kill("SIGINT");
         const interrupted = await cli.done;
